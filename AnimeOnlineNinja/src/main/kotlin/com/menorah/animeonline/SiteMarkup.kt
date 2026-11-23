@@ -31,7 +31,7 @@ internal object SiteMarkup {
 
     /** DooPlay places the actual backdrop in the #dt_contenedor CSS rule. */
     fun backdrop(document: Element): String? {
-        val rule = Regex("(?is)#dt_contenedor\\s*\\{([^}]*)}")
+        val rule = Regex("(?is)#dt_contenedor\\s*\\{([^}]*)\\}")
         val backgroundUrl = Regex("""(?is)background(?:-image)?\s*:[^;}]*?url\(\s*(['"]?)(.*?)\1\s*\)""")
         val inline = document.selectFirst("#dt_contenedor[style]")?.attr("style").orEmpty()
         val declarations = sequenceOf(inline) + document.select("style").asSequence().flatMap { style ->

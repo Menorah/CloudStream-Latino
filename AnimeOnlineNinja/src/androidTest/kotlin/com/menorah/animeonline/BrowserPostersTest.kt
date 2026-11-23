@@ -65,6 +65,18 @@ class BrowserPostersTest {
         assertNotNull("WebView debe poder descargar una portada real", bytes)
         assertNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes!!.size))
     }
+    @Test fun artworkParsingWorksOnAndroidRegexRuntime() {
+        val base = "https://ww4.animeonline.ninja/online/fixture/"
+        val doc = org.jsoup.Jsoup.parse("""
+          <h1>Ver Anime</h1>
+          <style>#dt_contenedor{background-image:url(https://image.tmdb.org/t/p/original/example.jpg);background-size:cover}</style>
+          <div id="single"><div class="sheader"><div class="data"><h1>Black Clover</h1></div></div></div>
+        """, base)
+        assertEquals("Black Clover", SiteMarkup.detailTitle(doc))
+        assertEquals("https://image.tmdb.org/t/p/original/example.jpg", SiteMarkup.backdrop(doc))
+        assertEquals("https://ww4.animeonline.ninja/wp-content/uploads/example.jpg", SiteMarkup.originalPoster("https://ww4.animeonline.ninja/wp-content/uploads/example-185x278.jpg"))
+    }
+
     @Test fun liveDetailArtworkWhenRequested() = runBlocking {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
         val browser = BrowserSiteTransport(context)
