@@ -10,3 +10,7 @@ for path in ['/ver-pelicula/1726-iron-man-online-espanol','/ver-serie/1413-ameri
    except:pass
   print('::notice::'+json.dumps(data,ensure_ascii=False).replace('%','%25')[:4000])
  except Exception as e:print('::notice::'+str(e))
+try:
+ with urllib.request.urlopen(urllib.request.Request('https://repelishd.surf/explorar',headers={'User-Agent':'Mozilla/5.0'}),timeout=20) as r:s=BeautifulSoup(r.read(),'html.parser')
+ print('::notice::'+json.dumps({'genres':[(x.get('value'),x.text) for x in s.select('#f-g option')]},ensure_ascii=False).replace('%','%25'))
+except Exception as e:print('::notice::'+str(e))

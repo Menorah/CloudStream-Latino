@@ -22,7 +22,8 @@ class RePelisHDLiveTest {
         assertTrue(RePelisHDMarkup.cards(a).isNotEmpty()); assertTrue(RePelisHDMarkup.hasNext(a,1)); assertTrue(RePelisHDMarkup.cards(b).any { x -> RePelisHDMarkup.cards(a).none { it.url == x.url } })
         assertTrue(RePelisHDMarkup.cards(doc("/explorar?t=tv")).any { !it.movie })
         assertTrue(RePelisHDMarkup.cards(doc("/buscar?q=iron")).isNotEmpty())
-        assertEquals("tt0371746", RePelisHDMarkup.imdb(doc("/ver-pelicula/1726-iron-man-online-espanol")))
+        val movie = doc("/ver-pelicula/1726-iron-man-online-espanol")
+        assertEquals("tt0371746", RePelisHDMarkup.imdb(movie)); assertNotNull(RePelisHDMarkup.poster(movie)); assertNotNull(RePelisHDMarkup.plot(movie)); assertEquals(2008,RePelisHDMarkup.year(movie))
         val base = "/ver-serie/1413-american-horror-story-online-espanol"
         val state = RePelisHDMarkup.initial(doc(base))!!
         assertEquals(13,RePelisHDMarkup.seasons(state).size); assertEquals(12,RePelisHDMarkup.episodes(state).size)

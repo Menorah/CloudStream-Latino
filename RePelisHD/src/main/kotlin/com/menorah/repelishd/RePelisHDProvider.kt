@@ -49,11 +49,12 @@ class RePelisHDProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = fetch(url)
         val title = doc.selectFirst(".chh-dati h1")?.ownText()?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        val poster = doc.selectFirst(".chh-poster img, .chh-foto img, .chh-cover img")?.absUrl("src")?.takeIf { it.startsWith("https://") }
+        val poster = RePelisHDMarkup.poster(doc)
         val background = doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf { it.startsWith("https://") }
-        val description = doc.selectFirst(".chh-trama, .chh-sinossi, .chh-plot")?.text()?.trim()?.takeIf { it.isNotBlank() }
+        val description = RePelisHDMarkup.plot(doc)
+        val publishedYear = RePelisHDMarkup.year(doc); val genres = RePelisHDMarkup.genres(doc)
         if (URI(doc.location()).path.startsWith("/ver-pelicula/")) return newMovieLoadResponse(title, doc.location(), TvType.Movie, doc.location()) {
-            posterUrl = poster; backgroundPosterUrl = background; plot = description
+            posterUrl = poster; backgroundPosterUrl = background; plot = description; year = publishedYear; tags = genres
         }
         val state = RePelisHDMarkup.initial(doc) ?: return null
         val seasons = RePelisHDMarkup.seasons(state)
@@ -75,7 +76,7 @@ class RePelisHDProvider : MainAPI() {
             }
         }
         if (episodes.isEmpty()) return null
-        return newTvSeriesLoadResponse(title, seriesUrl, TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = background; plot = description }
+        return newTvSeriesLoadResponse(title, seriesUrl, TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = background; plot = description; year = publishedYear; tags = genres }
     }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val doc = fetch(data)
