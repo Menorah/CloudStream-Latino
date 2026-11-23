@@ -120,8 +120,16 @@ class VerAniProvider(context: Context) : MainAPI() {
         val movie = URI(url).path.orEmpty().contains("/pelicula/")
         if (movie) return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) { posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot }
         if (episodes.isEmpty()) return null
-        val list = episodes.map { ep -> newEpisode(ep.url) { name = ep.title; season = ep.season; episode = ep.number; posterUrl = cached[ep.poster] ?: ep.poster } }
-        return newTvSeriesLoadResponse(title, url, TvType.Anime, list) { posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot }
+        val list = episodes.map { ep -> newEpisode(ep.url) {
+            name = if (ep.season == 0 && ep.seasonLabel != null) "${ep.seasonLabel} · ${ep.title}" else ep.title
+            season = ep.season; episode = ep.number; posterUrl = cached[ep.poster] ?: ep.poster
+        } }
+        val labels = episodes.asSequence().filter { it.season > 0 && it.seasonLabel != null }
+            .distinctBy { it.season }.map { SeasonData(it.season, it.seasonLabel, it.season) }.toList()
+        return newTvSeriesLoadResponse(title, url, TvType.Anime, list) {
+            posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot
+            if (labels.isNotEmpty()) seasonNames = labels
+        }
     }
 
     private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
