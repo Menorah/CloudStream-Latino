@@ -9,7 +9,7 @@ url='https://voe.sx/e/y5nrivhkwqwu'
 try:
  text,end,code,ct=get(url,'https://player.poseidonhd2.co/'); html=text.decode('utf8','replace'); redirect=re.search(r"window.location.href\s*=\s*'([^']+)'",html)
  if redirect: text,end,code,ct=get(redirect.group(1),url)
- soup=BeautifulSoup(text,'html.parser'); item=soup.select_one('script[type="application/json"]'); enc=json.loads(item.get_text())[0]
+ soup=BeautifulSoup(text,'html.parser'); item=soup.select_one('script[type="application/json"]'); emit('landing',{'end':end,'html':text.decode('utf8','replace')[:1200], 'json':bool(item)}); enc=json.loads(item.get_text())[0]
  v=codecs.decode(enc,'rot13')
  for pat in ['@$','^^','~@','%?','*~','!!','#&']:v=v.replace(pat,'_')
  v=base64.b64decode(v.replace('_','')).decode('utf8'); v=''.join(chr(ord(c)-3) for c in v)[::-1]; data=json.loads(base64.b64decode(v));
