@@ -1,0 +1,8 @@
+{
+  "name": "CloudStream Latino",
+  "description": "Extensiones de CloudStream en español",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/plugins.json"
+  ]
+}
