@@ -116,4 +116,28 @@ class BrowserSiteTransportTest {
         assertTrue(next.hasNext)
         assertTrue(home.cards.map { it.url }.toSet().intersect(next.cards.map { it.url }.toSet()).isEmpty())
     }
+    @Test fun liveAdditionalSectionsWhenRequested() = runBlocking {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
+        val browser = BrowserSiteTransport(context)
+        val pager = CatalogPager { path ->
+            val response = browser.get(root + path, emptyMap())
+            check(response.isSuccessful) { "HTTP ${response.code}: $path" }
+            org.jsoup.Jsoup.parse(response.text, response.url)
+        }
+        for ((section, label) in CatalogSections.extra) {
+            val count = CatalogSections.initialPageCount(section)
+            val first = pager.get(section, 1, count)
+            val second = pager.get(section, 2, count)
+            val urls = first.cards.map { it.url }.toSet()
+            assertTrue("$label debe contener títulos", urls.isNotEmpty())
+            assertTrue("$label debe continuar", first.hasNext)
+            assertTrue("$label debe aportar títulos nuevos en la siguiente tanda", second.cards.any { it.url !in urls })
+            assertTrue("$label debe tener portadas", first.cards.any { it.poster != null })
+            if (section == "/tendencias/" || section == "/ratings/") {
+                assertTrue("$label debe contener películas", first.cards.any { it.movie })
+                assertTrue("$label debe contener series", first.cards.any { !it.movie })
+            }
+            android.util.Log.i("AOPaging", org.json.JSONObject(mapOf("section" to label, "first" to first.cards.size, "next" to second.cards.size, "hasNext" to second.hasNext)).toString())
+        }
+    }
 }
