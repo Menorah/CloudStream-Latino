@@ -1,0 +1,16 @@
+name: Diagnóstico reproductores PelisPop
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/pelispop_player_probe.py', '.github/workflows/pelispop-player-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/pelispop_player_probe.py
