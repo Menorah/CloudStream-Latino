@@ -11,7 +11,16 @@ p='RePelisHD/build.gradle.kts'
 s=open(p).read().replace('dependencies {','dependencies {\n    compileOnly("androidx.media3:media3-exoplayer:1.9.3")\n    compileOnly("androidx.media3:media3-exoplayer-hls:1.9.3")',1)
 open(p,'w').write(s)
 PY
-./gradlew -PenableRePelisHD=true :RePelisHD:make --stacktrace
+if ! ./gradlew -PenableRePelisHD=true :RePelisHD:make --stacktrace > /tmp/repelishd-playback-build.log 2>&1; then
+  cat /tmp/repelishd-playback-build.log
+  python3 - <<'PYLOG'
+import pathlib
+lines = pathlib.Path('/tmp/repelishd-playback-build.log').read_text(errors='replace').splitlines()
+errors = [line for line in lines if line.startswith('e: ') or 'What went wrong:' in line or 'FAILED' in line]
+print('::error::' + (' | '.join(errors[:10]) or 'Build failed').replace('%', '%25'))
+PYLOG
+  exit 1
+fi
 curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cloudstream.apk
 adb install -r /tmp/cloudstream.apk
 package=com.lagradost.cloudstream3.prerelease
