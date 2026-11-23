@@ -7,7 +7,7 @@ import android.view.Surface
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.*
@@ -45,7 +45,7 @@ object PlaybackProbe {
         Log.i("CSPlaybackProbe", "$label extracted=${found.size} labels=${found.map { it.name }}")
         check(ok && found.isNotEmpty()) { "$label produced no links" }
         var errors = mutableListOf<String>()
-        for (link in found.take(4)) {
+        for (link in found.take(8)) {
             try {
                 play(context, link)
                 Log.i("CSPlaybackProbe", "PASS $label frame and playback")
@@ -63,7 +63,7 @@ object PlaybackProbe {
         val headers = link.headers.toMutableMap()
         if (link.referer.isNotBlank() && headers.keys.none { it.equals("Referer", true) }) headers["Referer"] = link.referer
         val factory = DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers)
-        val media = HlsMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri(link.url))
+        val media = DefaultMediaSourceFactory(factory).createMediaSource(MediaItem.fromUri(link.url))
         val player = ExoPlayer.Builder(context).build()
         try {
             player.setVideoSurface(surface)

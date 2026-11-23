@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set +e
-./gradlew -PenableRepelis24Shop=true :Repelis24Shop:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.live=true --stacktrace > repelis24shop-android.log 2>&1
+./gradlew -PenableRepelis24Shop=true :Repelis24Shop:testDebugUnitTest :Repelis24Shop:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.live=true --stacktrace > repelis24shop-android.log 2>&1
 status=$?
 cat repelis24shop-android.log
 if [ "$status" -ne 0 ]; then

@@ -4,6 +4,7 @@ import android.util.Base64
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
+import java.net.URLDecoder
 
 internal data class Card(val title: String, val url: String, val poster: String?, val movie: Boolean)
 internal data class Season(val number: Int, val url: String)
@@ -18,6 +19,18 @@ internal object Repelis24ShopMarkup {
     fun site(url: String) = host(url, "repelis24.shop")
     fun nupload(url: String) = host(url, "nupload.my")
     private fun image(url: String): String? = url.takeIf { site(it) }
+    /** Nuupload's alternative player carries the actual VOE URL as one query parameter. */
+    fun voeFromWrapper(url: String): String? = runCatching {
+        if (!nupload(url)) return null
+        val uri = URI(url)
+        if (uri.path != "/iframe/" || uri.fragment != null) return null
+        val values = uri.rawQuery.orEmpty().split('&').mapNotNull { part ->
+            val pieces = part.split('=', limit = 2)
+            if (pieces.size != 2 || pieces[0] != "url") null else URLDecoder.decode(pieces[1], "UTF-8")
+        }
+        if (values.size != 1) return null
+        values.single().takeIf { host(it, "voe.sx") && URI(it).path.orEmpty().startsWith("/e/") }
+    }.getOrNull()
     fun cards(doc: Document): List<Card> = doc.select(".movie-item").mapNotNull { e ->
         val a = e.selectFirst("a[href]") ?: return@mapNotNull null
         val url = a.absUrl("href"); if (!site(url)) return@mapNotNull null

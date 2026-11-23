@@ -10,6 +10,7 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Collections
 
 class Repelis24ShopProvider : MainAPI() {
     override var mainUrl = "https://repelis24.shop"
@@ -75,20 +76,30 @@ class Repelis24ShopProvider : MainAPI() {
         return newTvSeriesLoadResponse(title, doc.location(), TvType.TvSeries, episodes) { posterUrl = poster; plot = description; this.year = year; this.tags = tags }
     }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val doc = fetch(data); val players = Repelis24ShopMarkup.players(doc).filter { URI(it.url).path.orEmpty().startsWith("/watch/") }
-        val emitted = AtomicBoolean(false)
+        val doc = fetch(data); val players = Repelis24ShopMarkup.players(doc).take(24)
+        val emitted = AtomicBoolean(false); val lock = Any()
         coroutineScope {
             val semaphore = Semaphore(4)
             players.map { player -> async { semaphore.withPermit {
                 try {
                     withTimeout(18_000) {
-                        val res = app.get(player.url, headers = mapOf("User-Agent" to ua, "Referer" to doc.location()), timeout = 12)
-                        if (!res.isSuccessful || !Repelis24ShopMarkup.nupload(res.url)) return@withTimeout
-                        val media = Repelis24ShopMarkup.media(res.text) ?: return@withTimeout
-                        val link = newExtractorLink(name, "[${player.language}] Nuupload", media, ExtractorLinkType.M3U8) {
-                            referer = res.url; headers = mapOf("User-Agent" to ua)
+                        val voe = Repelis24ShopMarkup.voeFromWrapper(player.url)
+                        if (voe != null) {
+                            val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                            loadExtractor(voe, player.url, subtitleCallback) { links.add(it) }
+                            for (link in synchronized(links) { links.toList() }) {
+                                val labeled = label(link, player.language)
+                                synchronized(lock) { callback(labeled); emitted.set(true) }
+                            }
+                        } else if (URI(player.url).path.orEmpty().startsWith("/watch/")) {
+                            val res = app.get(player.url, headers = mapOf("User-Agent" to ua, "Referer" to doc.location()), timeout = 12)
+                            if (!res.isSuccessful || !Repelis24ShopMarkup.nupload(res.url)) return@withTimeout
+                            val media = Repelis24ShopMarkup.media(res.text) ?: return@withTimeout
+                            val link = newExtractorLink(name, "[${player.language}] Nuupload", media, ExtractorLinkType.M3U8) {
+                                referer = res.url; headers = mapOf("User-Agent" to ua)
+                            }
+                            synchronized(lock) { callback(link); emitted.set(true) }
                         }
-                        callback(link); emitted.set(true)
                     }
                 } catch (e: TimeoutCancellationException) { /* other player options remain */ }
                 catch (e: CancellationException) { throw e }
@@ -96,5 +107,15 @@ class Repelis24ShopProvider : MainAPI() {
             } } }.awaitAll()
         }
         return emitted.get()
+    }
+    private suspend fun label(link: ExtractorLink, language: String): ExtractorLink {
+        val title = "[$language] ${link.name}"
+        if (link is DrmExtractorLink) return newDrmExtractorLink(link.source, title, link.url, link.type, link.uuid) {
+            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
+            kid = link.kid; key = link.key; kty = link.kty; keyRequestParameters = link.keyRequestParameters; licenseUrl = link.licenseUrl
+        }
+        return newExtractorLink(link.source, title, link.url, link.type) {
+            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
+        }
     }
 }
