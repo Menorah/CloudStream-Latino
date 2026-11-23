@@ -4,9 +4,16 @@ args=()
 if [ "${RUN_LIVE_SITE:-}" = "1" ]; then
   args+=("-Pandroid.testInstrumentationRunnerArguments.live=true")
 fi
+if [ "${RUN_HOST_DIAGNOSTICS:-}" = "1" ]; then
+  args+=("-Pandroid.testInstrumentationRunnerArguments.hostdiag=true")
+  adb logcat -c
+fi
 ./gradlew :AnimeOnlineNinja:connectedDebugAndroidTest "${args[@]}" --stacktrace > android-test.log 2>&1
 status=$?
 cat android-test.log
+if [ "${RUN_HOST_DIAGNOSTICS:-}" = "1" ]; then
+  adb logcat -d -v raw -s AOHostProbe:I '*:S' | python3 -c 'import sys; [print("::notice::" + x.strip().replace("%", "%25")) for x in sys.stdin if x.lstrip().startswith("{")]'
+fi
 if [ "$status" -ne 0 ]; then
   python3 - <<'PY'
 import pathlib, xml.etree.ElementTree as ET
