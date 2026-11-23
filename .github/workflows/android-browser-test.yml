@@ -15,6 +15,7 @@ on:
     paths:
       - 'AnimeOnlineNinja/**'
       - 'VerAni/**'
+      - 'Repelis24CZ/**'
       - '.github/workflows/android-browser-test.yml'
 permissions:
   contents: read
@@ -51,4 +52,5 @@ jobs:
           path: |
             AnimeOnlineNinja/build/reports/androidTests/
             VerAni/build/reports/androidTests/
+            Repelis24CZ/build/reports/androidTests/
           if-no-files-found: ignore

@@ -1,0 +1,25 @@
+name: Diagnóstico de catálogos adicionales
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/catalogue_sites_probe.py', 'scripts/poseidon_probe.py', 'scripts/poseidon_js_probe.py', 'scripts/player_research.py', 'scripts/repelis24_probe.py', 'scripts/repelis24_layout_probe.py', 'scripts/repelis24_episode_probe.py', 'scripts/repelis24_dynamic_probe.py', 'scripts/repelis24_images_probe.py', '.github/workflows/catalogue-diagnostics.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/repelis24_images_probe.py
+      - run: python3 scripts/repelis24_dynamic_probe.py
+      - run: python3 scripts/catalogue_sites_probe.py 1
+      - run: python3 scripts/catalogue_sites_probe.py 2
+      - run: python3 scripts/poseidon_probe.py
+      - run: python3 scripts/poseidon_js_probe.py
+      - run: python3 scripts/player_research.py
+      - run: python3 scripts/repelis24_probe.py
+      - run: python3 scripts/repelis24_layout_probe.py
+      - run: python3 scripts/repelis24_episode_probe.py
