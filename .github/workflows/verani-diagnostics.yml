@@ -1,0 +1,16 @@
+name: Diagnóstico VerAni
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/verani_probe.py', '.github/workflows/verani-diagnostics.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4 jsbeautifier
+      - run: python3 scripts/verani_probe.py
