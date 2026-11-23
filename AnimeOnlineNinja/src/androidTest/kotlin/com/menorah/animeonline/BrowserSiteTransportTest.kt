@@ -101,4 +101,19 @@ class BrowserSiteTransportTest {
         assertTrue("Deben poder descargarse portadas del catálogo real", fetched.isNotEmpty())
         android.util.Log.i("AOPaging", org.json.JSONObject(mapOf("group1" to first.cards.size, "group2" to second.cards.size, "fetchMs" to (posterStart - start), "posters" to fetched.size, "posterMs" to (System.currentTimeMillis() - posterStart))).toString())
     }
+    @Test fun liveHomeBatchWhenRequested() = runBlocking {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
+        val browser = BrowserSiteTransport(context)
+        val pager = CatalogPager { path ->
+            val response = browser.get(root + path, emptyMap())
+            check(response.isSuccessful)
+            org.jsoup.Jsoup.parse(response.text, response.url)
+        }
+        val home = pager.get("/inicio/", 1)
+        val next = pager.get("/inicio/", 2)
+        assertTrue("Inicio debe contener títulos", home.cards.isNotEmpty())
+        assertTrue("La siguiente página de Inicio debe aportar títulos nuevos", next.cards.isNotEmpty())
+        assertTrue(next.hasNext)
+        assertTrue(home.cards.map { it.url }.toSet().intersect(next.cards.map { it.url }.toSet()).isEmpty())
+    }
 }
