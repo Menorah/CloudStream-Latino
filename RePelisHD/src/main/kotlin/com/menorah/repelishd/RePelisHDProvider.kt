@@ -71,7 +71,7 @@ class RePelisHDProvider : MainAPI() {
         }
         val episodes = collected.distinctBy { it.season to it.number }.sortedWith(compareBy({ it.season }, { it.number })).map { item ->
             newEpisode("$seriesUrl/temporada-${item.season}/episodio-${item.number}") {
-                name = item.title; season = item.season; episode = item.number; posterUrl = item.poster; description = item.description
+                name = item.title; season = item.season; episode = item.number; posterUrl = item.poster; this.description = item.description
             }
         }
         if (episodes.isEmpty()) return null
