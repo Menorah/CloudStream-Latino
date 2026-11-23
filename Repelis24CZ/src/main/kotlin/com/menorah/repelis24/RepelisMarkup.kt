@@ -66,7 +66,11 @@ internal object RepelisMarkup {
         return (1..12).map { PlayerOption(id, it.toString(), "tv", "Idioma no indicado") }
     }
     fun title(doc: Element): String? = doc.selectFirst("h1.dpu-hero-title, h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-    fun poster(doc: Element): String? = image(doc.selectFirst(".dpu-hero-poster img, .dpu-poster img, .poster img, img[itemprop=image]"))
-        ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.let { resolve(doc.baseUri(), it) }
+    fun poster(doc: Element): String? {
+        val url = image(doc.selectFirst(".dpu-hero-poster img, .dpu-poster img, .poster img, img[itemprop=image]"))
+            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.let { resolve(doc.baseUri(), it) }
+        return url?.replace("https://image.tmdb.org/t/p/w185/", "https://image.tmdb.org/t/p/w500/")
+    }
+    fun backdrop(doc: Element): String? = image(doc.selectFirst(".playbox img.cover"))
     fun plot(doc: Element): String? = doc.selectFirst("meta[property=og:description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
 }
