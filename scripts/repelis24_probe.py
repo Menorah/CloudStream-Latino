@@ -23,3 +23,17 @@ for path in ['/peliculas/','/series/','/?s=iron','/series/game-of-thrones/','/pe
    items=doc.select('a[href*="/peliculas/"], a[href*="/series/"]');items=[x for x in items if x.select_one('img')][:2]
    notice('catalog',{'path':path,'sample':[str(x.parent)[:1700] for x in items], 'next':[(x.get_text(' ',strip=True),x.get('href')) for x in doc.select('a[href*=page]')][-4:]})
  except Exception as e: notice('error',{'path':path,'error':str(e)})
+try:
+ doc=BeautifulSoup(fetch('/series/game-of-thrones/'),'html.parser')
+ for script in doc.select('script[src]'):
+  url=script.get('src','')
+  if not url.startswith(base):continue
+  try:
+   req=urllib.request.Request(url,headers=headers)
+   with urllib.request.urlopen(req,timeout=12) as r: js=r.read().decode('utf8','replace')
+  except Exception: continue
+  import re
+  hits=list(re.finditer(r'data-episode|episode-card|doo_player_ajax|get_episode|load_episode|load-episode',js,re.I))
+  for h in hits[:4]: notice('episode_js',{'url':url,'code':js[max(0,h.start()-200):h.start()+450]})
+ opt=doc.select_one('.dpu-episode-card[data-episode]');notice('episode_ancestors', str(opt.parent)[:300] if opt else 'none')
+except Exception as e: notice('js_error',str(e))
