@@ -14,6 +14,21 @@ class CinecalidadAMLiveTest {
         c.connectTimeout=15000; c.readTimeout=15000; c.setRequestProperty("User-Agent","Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36")
         try { assertEquals("HTTP $path",200,c.responseCode); return Jsoup.parse(c.inputStream.bufferedReader().use { it.readText() },c.url.toString()) } finally {c.disconnect()}
     }
+    @Test fun requestedSectionsAndYears() {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return
+        val featured = CinecalidadAMMarkup.featured(doc("/"))
+        assertTrue("Destacados vacío", featured.isNotEmpty()); assertTrue(featured.all { it.poster != null })
+        val series1 = doc("/ver-serie/"); val series2 = doc("/ver-serie/page/2/")
+        val a = CinecalidadAMMarkup.cards(series1); val b = CinecalidadAMMarkup.cards(series2)
+        assertTrue(a.isNotEmpty() && a.all { !it.movie }); assertTrue(CinecalidadAMMarkup.hasNext(series1,1)); assertTrue(b.any { x -> a.none { it.url == x.url } })
+        val genres = listOf("aventura", "belica", "ciencia-ficcion", "crimen", "documental", "familia", "fantasia", "historia", "musica", "misterio", "terror", "suspense", "romance")
+        for (genre in genres) assertTrue("Género $genre vacío", CinecalidadAMMarkup.cards(doc("/genero-de-la-pelicula/$genre/")).isNotEmpty())
+        val g1=doc("/genero-de-la-pelicula/aventura/"); val g2=doc("/genero-de-la-pelicula/aventura/page/2/")
+        assertTrue(CinecalidadAMMarkup.hasNext(g1,1)); assertTrue(CinecalidadAMMarkup.cards(g2).any { x -> CinecalidadAMMarkup.cards(g1).none { it.url == x.url } })
+        val year1=doc("/release/2025/"); val year2=doc("/release/2025/page/2/")
+        assertTrue(CinecalidadAMMarkup.hasNext(year1,1)); assertTrue(CinecalidadAMMarkup.cards(year2).any { x -> CinecalidadAMMarkup.cards(year1).none { it.url == x.url } })
+        assertTrue(CinecalidadAMMarkup.cards(doc("/release/1915/")).isNotEmpty())
+    }
     @Test fun catalogMovieAndSeries() {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return
         val first=doc("/"); val second=doc("/page/2/"); val a=CinecalidadAMMarkup.cards(first); val b=CinecalidadAMMarkup.cards(second)
