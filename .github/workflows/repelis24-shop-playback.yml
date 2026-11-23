@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['Repelis24Shop/**', 'scripts/playback_probe/Repelis24ShopProbe.kt', 'scripts/playback_probe/run_repelis24shop_app.sh', '.github/workflows/poseidon-playback.yml']
+    paths: ['Repelis24Shop/**', 'scripts/playback_probe/Repelis24ShopProbe.kt', 'scripts/playback_probe/run_repelis24shop_app.sh', '.github/workflows/repelis24-shop-playback.yml']
 permissions:
   contents: read
 jobs:

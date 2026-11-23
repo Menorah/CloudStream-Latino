@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['Repelis24Shop/**', '.github/workflows/poseidon-android-test.yml']
+    paths: ['Repelis24Shop/**', '.github/workflows/repelis24-shop-android.yml']
 permissions:
   contents: read
 jobs:

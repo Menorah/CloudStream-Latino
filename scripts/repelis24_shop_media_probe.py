@@ -37,7 +37,7 @@ try:
     if lines:
         child = urllib.parse.urljoin(target, lines[0]); data, target, status, ctype = media_req(child)
         text = data.decode('utf8','replace')
-        info['child'] = {'status':status, 'm3u':text.startswith('#EXTM3U'), 'type':ctype}
+        info['child'] = {'status':status, 'm3u':text.startswith('#EXTM3U'), 'type':ctype, 'bytes':len(data), 'hex_prefix':data[:64].hex(), 'sync_offset':next((i for i in range(min(188, len(data)-376)) if data[i]==0x47 and data[i+188]==0x47 and data[i+376]==0x47), None)}
         lines = [line.strip() for line in text.splitlines() if line.strip() and not line.startswith('#')]
         if text.startswith('#EXTM3U') and lines:
             data, _, status, ctype = media_req(urllib.parse.urljoin(target, lines[0]))
