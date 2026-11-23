@@ -46,8 +46,18 @@ class SiteMarkupTest {
           <div class="OD OD_ES"><li onclick="go_to_player('https://es.example/e/1')"></li><li onclick="go_to_player('javascript:alert(1)')"></li></div>
         """.trimIndent()
         val servers = SiteMarkup.playerServers(Jsoup.parse(html, "https://player.example/embed/"))
-        assertEquals(listOf("Latino", "Castellano", "Subtitulado", "Latino"), servers.map { it.language })
+        assertEquals(listOf("Latino", "Castellano", "Audio original · Sub español", "Latino"), servers.map { it.language })
         assertEquals("https://player.example/e/2", servers.last().url)
         assertEquals("https://lat.example/e/1", servers.first().url)
+    }
+
+    @Test fun `same server may be present in more than one language`() {
+        val html = """<div class="OD_LAT"><li onclick="go_to_player('https://host.example/same')"></li></div><div class="OD_SUB"><li onclick="go_to_player('https://host.example/same')"></li></div>"""
+        val servers = SiteMarkup.playerServers(Jsoup.parse(html, "https://player.example/"))
+        assertEquals(listOf("Latino / Audio original · Sub español"), servers.map { it.language })
+        assertEquals("[Latino / Audio original · Sub español] Host 720p", sourceLabel(servers[0].language, "Host 720p"))
+        assertEquals("Host", sourceLabel(null, "Host"))
+        assertNull(languageLabel("desconocido"))
+        assertEquals("Castellano", languageLabel("ES"))
     }
 }
