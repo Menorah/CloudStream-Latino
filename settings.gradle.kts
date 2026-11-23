@@ -6,8 +6,7 @@ rootProject.name = "CloudstreamPlugins"
 // Experimental providers are kept out of release builds until playback is verified.
 // The opt-in keeps Poseidon available to its diagnostic workflows.
 val disabled = listOf("CinecalidadMY") +
-    (if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2")) +
-    (if (providers.gradleProperty("enableRePelisHD").orNull == "true") emptyList() else listOf("RePelisHD"))
+    (if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2"))
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
