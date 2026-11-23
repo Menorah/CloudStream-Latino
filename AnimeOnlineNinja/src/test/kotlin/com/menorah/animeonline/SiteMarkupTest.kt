@@ -54,8 +54,8 @@ class SiteMarkupTest {
     @Test fun `same server may be present in more than one language`() {
         val html = """<div class="OD_LAT"><li onclick="go_to_player('https://host.example/same')"></li></div><div class="OD_SUB"><li onclick="go_to_player('https://host.example/same')"></li></div>"""
         val servers = SiteMarkup.playerServers(Jsoup.parse(html, "https://player.example/"))
-        assertEquals(listOf("Latino", "Audio original · Sub español"), servers.map { it.language })
-        assertEquals("[Latino] Host 720p", sourceLabel(servers[0].language, "Host 720p"))
+        assertEquals(listOf("Latino / Audio original · Sub español"), servers.map { it.language })
+        assertEquals("[Latino / Audio original · Sub español] Host 720p", sourceLabel(servers[0].language, "Host 720p"))
         assertEquals("Host", sourceLabel(null, "Host"))
         assertNull(languageLabel("desconocido"))
         assertEquals("Castellano", languageLabel("ES"))

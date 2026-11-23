@@ -28,4 +28,10 @@ class PosterCacheTest {
         assertFalse(PosterCache.isProtectedPoster("https://ww4.animeonline.ninja/episodio/a/"))
         assertTrue(PosterCache.isProtectedPoster(url))
     }
+
+    @Test fun `storage failure leaves the original URL usable`() = runBlocking {
+        val notDirectory = tmp.newFile("not-a-directory")
+        val cache = PosterCache(notDirectory, PosterFetcher { mapOf(url to image) })
+        assertTrue(cache.resolve(listOf(url)).isEmpty())
+    }
 }

@@ -27,17 +27,21 @@ internal class PosterCache(private val directory: File, private val fetcher: Pos
         if (missing.isNotEmpty()) {
             val downloaded = try { fetcher.get(missing) } catch (e: java.util.concurrent.CancellationException) { throw e } catch (_: Exception) { emptyMap() }
             withContext(Dispatchers.IO) {
-                directory.mkdirs()
-                for ((url, bytes) in downloaded) {
-                    if (url !in missing || bytes.size > MAX_IMAGE_BYTES || !isImage(bytes)) continue
-                    val file = fileFor(url)
-                    val temp = File.createTempFile("poster-", ".tmp", directory)
-                    try {
-                        temp.writeBytes(bytes)
-                        if (temp.renameTo(file)) cached[url] = fileUrl(file)
-                    } finally { temp.delete() }
+                if (directory.isDirectory || directory.mkdirs()) {
+                    for ((url, bytes) in downloaded) {
+                        if (url !in missing || bytes.size > MAX_IMAGE_BYTES || !isImage(bytes)) continue
+                        // Failure to write an image must not stop the catalogue.
+                        runCatching {
+                            val file = fileFor(url)
+                            val temp = File.createTempFile("poster-", ".tmp", directory)
+                            try {
+                                temp.writeBytes(bytes)
+                                if (temp.renameTo(file)) cached[url] = fileUrl(file)
+                            } finally { temp.delete() }
+                        }
+                    }
+                    runCatching { prune() }
                 }
-                prune()
             }
         }
         return cached

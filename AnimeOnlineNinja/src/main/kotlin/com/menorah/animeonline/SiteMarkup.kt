@@ -51,9 +51,14 @@ internal object SiteMarkup {
             }
         }
         // Interleave languages so one group of dead hosts does not starve the others.
-        return (0 until (grouped.maxOfOrNull { it.size } ?: 0)).flatMap { i ->
+        val ordered = (0 until (grouped.maxOfOrNull { it.size } ?: 0)).flatMap { i ->
             grouped.mapNotNull { it.getOrNull(i) }
-        }.distinctBy { it.url to it.language }
+        }
+        // CloudStream deduplicates final links by URL. A server listed under more
+        // than one language must retain every label, rather than losing one.
+        return ordered.groupBy { it.url }.map { (url, matches) ->
+            PlayerServer(url, matches.map { it.language }.distinct().joinToString(" / "))
+        }
     }
 
     /** The site's root is an unrelated landing page; only follow its explicit entry. */
