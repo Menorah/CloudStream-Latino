@@ -29,3 +29,11 @@ for path in ['/kiniro-no-corda-primo-passo/','/dragon-ball/','/pelicula/el-nino-
             result['pagination']=[str(x)[:400] for x in s.select('.pagination a, .page-numbers a, a.next')[:6]]
             output(result)
     except Exception as e: output({'path':path,'error':str(e)[:200]})
+try:
+    s=page('/tops/peliculas/')
+    for section in s.select('section.tops-panel'):
+        cards=section.select('a.tops-card[href]')
+        if not cards: continue
+        el=cards[0]
+        output({'group':section.get('data-tops-group'),'id':section.get('class'),'heading':section.select_one('.tops-panel__title').get_text(' ',strip=True),'count':len(cards),'first':{'url':el.get('href'),'title':el.select_one('.tops-card__title').get_text(' ',strip=True) if el.select_one('.tops-card__title') else None,'image':el.select_one('img').get('src') if el.select_one('img') else None},'panelid':section.select_one('[id^=tops-panel-body-]').get('id') if section.select_one('[id^=tops-panel-body-]') else None})
+except Exception as e: output({'error':type(e).__name__})
