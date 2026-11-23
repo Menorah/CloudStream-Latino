@@ -21,11 +21,11 @@ adb shell mkdir -p /sdcard/Cloudstream3/plugins
 adb push CinecalidadAM/build/CinecalidadAM.cs3 /sdcard/Cloudstream3/plugins/CinecalidadAM.cs3
 adb logcat -c
 adb shell monkey -p "$package" 1
-for i in $(seq 1 60); do
+for i in $(seq 1 145); do
   sleep 5
   log=$(adb logcat -d -s CSPlaybackProbe:I '*:S')
-  if echo "$log" | grep -q 'PASS all'; then echo "$log"; echo '::notice::CloudStream ejecutó el proveedor y reprodujo película y episodio con Media3'; exit 0; fi
-  if echo "$log" | grep -q 'FAIL '; then echo "$log"; echo "::error::$(echo "$log" | grep 'FAIL ' | tail -1 | sed 's/%/%25/g')"; exit 1; fi
+  if echo "$log" | grep -q 'PASS all'; then echo "$log"; echo "$log" | grep -E 'series .* episodes=|PASS .* frame' | sed -e 's/%/%25/g' -e 's/^/::notice::/'; echo '::notice::CloudStream comprobó las series reportadas y reprodujo los episodios de muestra con Media3'; exit 0; fi
+  if echo "$log" | grep -q 'FAIL '; then echo "$log"; echo "$log" | grep -E 'series .* episodes=|PASS .* frame|extracted=' | sed -e 's/%/%25/g' -e 's/^/::notice::/'; echo "::error::$(echo "$log" | grep 'FAIL ' | tail -1 | sed 's/%/%25/g')"; exit 1; fi
 done
 adb logcat -d -s CSPlaybackProbe:I PluginManager:D '*:S' | tail -150
 echo '::error::La prueba no terminó; comprobar si CloudStream cargó el plugin local'

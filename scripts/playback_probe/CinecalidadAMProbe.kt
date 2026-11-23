@@ -19,7 +19,7 @@ object PlaybackProbe {
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             try {
                 delay(4000)
-                withTimeout(240_000) {
+                withTimeout(600_000) {
                     val provider = CinecalidadAMProvider()
                     val started = android.os.SystemClock.elapsedRealtime()
                     val sections = withContext(Dispatchers.IO) { coroutineScope {
@@ -39,8 +39,36 @@ object PlaybackProbe {
                     val series = provider.load("https://www.cinecalidad.am/ver-serie/el-espectacular-hombre-arana/") as? TvSeriesLoadResponse
                         ?: error("series load failed")
                     check(series.episodes.size >= 26) { "missing episodes: ${series.episodes.size}" }
+                    val cases = listOf(
+                        Triple("Jeffrey Epstein", "jeffrey-epstein-asquerosamente-rico", 1),
+                        Triple("Vivir 100 años", "vivir-100-anos-los-secretos-de-las-zonas-azules", 1),
+                        Triple("Pinky y Cerebro", "pinky-y-cerebro", 3),
+                        Triple("La Niñera", "la-ninera", 6)
+                    )
+                    val episodePages = mutableListOf<Pair<String, String>>()
+                    for ((label, slug, seasonCount) in cases) {
+                        val result = provider.load("https://www.cinecalidad.am/ver-serie/$slug/") as? TvSeriesLoadResponse
+                            ?: error("$label series failed to load")
+                        check(result.episodes.size >= 4) { "$label missing episodes: ${result.episodes.size}" }
+                        check(result.episodes.mapNotNull { it.season }.distinct().sorted() == (1..seasonCount).toList()) {
+                            "$label seasons incomplete: ${result.episodes.mapNotNull { it.season }.distinct()}"
+                        }
+                        val first = result.episodes.firstOrNull { it.season == 1 && it.episode == 1 }
+                            ?: error("$label missing 1x1")
+                        check(first.data.endsWith("/$slug-1x1/")) { "$label incorrect episode URL: ${first.data}" }
+                        Log.i("CSPlaybackProbe", "series $label episodes=${result.episodes.size} seasons=$seasonCount")
+                        episodePages.add(label to first.data)
+                    }
                     testPlayback(context, provider, "movie", movie)
-                    testPlayback(context, provider, "episode", "https://www.cinecalidad.am/ver-el-episodio/tmdb-3854-s1-e1/")
+                    testPlayback(context, provider, "episode TMDB", "https://www.cinecalidad.am/ver-el-episodio/tmdb-3854-s1-e1/")
+                    val playbackErrors = mutableListOf<String>()
+                    for ((label, episode) in episodePages) {
+                        try { testPlayback(context, provider, label, episode) }
+                        catch (e: TimeoutCancellationException) { playbackErrors.add("$label: timeout") }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Throwable) { playbackErrors.add("$label: ${e.message}") }
+                    }
+                    check(playbackErrors.isEmpty()) { "unplayable samples: $playbackErrors" }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {

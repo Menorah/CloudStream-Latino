@@ -53,7 +53,7 @@ La extensión incluye catálogos paginados de películas, series, tendencias y l
 
 ### Cinecalidad.am y proveedores en investigación
 
-Cinecalidad.am incluye películas, series, búsqueda y catálogo paginado. Una prueba en un emulador con CloudStream pre-release ejecutó el proveedor y decodificó vídeo de una película y un episodio con Media3. Esto no garantiza que todos los títulos o servidores funcionen en todas las redes o dispositivos.
+Cinecalidad.am incluye películas, series, búsqueda y catálogo paginado. La versión 3 admite tanto enlaces de episodios `1x1` como los enlaces `s1-e1`. En CloudStream pre-release se comprobaron las cuatro series reportadas y la reproducción de sus primeros episodios con Media3. Esto no garantiza que todos los títulos o servidores funcionen en todas las redes o dispositivos.
 
 PoseidonHD 2 se mantiene como prototipo fuera del índice y de la release: la prueba en CloudStream reprodujo una película, pero no pudo reproducir un episodio de muestra. Se puede compilar solo para diagnóstico con `./gradlew -PenablePoseidon=true :PoseidonHD2:make`. Cinecalidad.my también sigue deshabilitado mientras no se compruebe un extractor compatible con sus servidores actuales.
 
