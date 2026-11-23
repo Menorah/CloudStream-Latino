@@ -44,6 +44,8 @@ class RepelisLiveTest {
         assertEquals(73, episodes.size); assertEquals((1..8).toList(), episodes.map { it.season }.distinct())
         assertEquals("74111", episodes.first().id)
         val movie = doc("/peliculas/codigo-venganza-2/")
+        assertNotNull(RepelisMarkup.poster(movie)); assertNotNull(RepelisMarkup.backdrop(movie))
+        assertNotNull(RepelisMarkup.poster(series))
         val options = RepelisMarkup.options(movie)
         assertTrue(options.any { it.language == "Latino" }); assertTrue(options.any { it.language == "Inglés" })
         val option = options.first { it.language == "Latino" }

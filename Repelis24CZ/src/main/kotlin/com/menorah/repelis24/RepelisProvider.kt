@@ -55,14 +55,15 @@ class RepelisProvider : MainAPI() {
         val title = RepelisMarkup.title(doc) ?: return null
         val poster = RepelisMarkup.poster(doc)
         val plotText = RepelisMarkup.plot(doc)
+        val backdrop = RepelisMarkup.backdrop(doc)
         if (URI(url).path.orEmpty().startsWith("/peliculas/")) {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) { posterUrl = poster; plot = plotText }
+            return newMovieLoadResponse(title, url, TvType.Movie, url) { posterUrl = poster; backgroundPosterUrl = backdrop; plot = plotText }
         }
         val episodes = RepelisMarkup.episodes(doc).map { item ->
             newEpisode(RepelisMarkup.episodeUrl(item.id)) { name = item.title; season = item.season; episode = item.number; posterUrl = item.image }
         }
         if (episodes.isEmpty()) return null
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) { posterUrl = poster; plot = plotText }
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = backdrop; plot = plotText }
     }
     private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {

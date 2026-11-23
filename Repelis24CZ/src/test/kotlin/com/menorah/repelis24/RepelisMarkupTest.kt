@@ -38,6 +38,11 @@ class RepelisMarkupTest {
         assertEquals(listOf("Inglés", "Latino"), options.map { it.language })
         assertEquals(listOf("1", "2"), options.map { it.number })
     }
+    @Test fun detailImageUsesHigherResolutionAndMovieBackdrop() {
+        val detail = doc("""<img itemprop="image" src="https://image.tmdb.org/t/p/w185/portrait.jpg"><div class="playbox"><img class="cover" src="https://image.tmdb.org/t/p/original/background.jpg"></div>""")
+        assertEquals("https://image.tmdb.org/t/p/w500/portrait.jpg", RepelisMarkup.poster(detail))
+        assertEquals("https://image.tmdb.org/t/p/original/background.jpg", RepelisMarkup.backdrop(detail))
+    }
     @Test fun episodeFallbackDoesNotGuessLanguage() {
         val opts = RepelisMarkup.fallbackEpisodeOptions("https://repelis24.cz/?p=74111")
         assertEquals(12, opts.size); assertTrue(opts.all { it.type == "tv" && it.language == "Idioma no indicado" })
