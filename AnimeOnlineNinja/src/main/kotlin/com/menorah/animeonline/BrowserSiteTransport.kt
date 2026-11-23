@@ -22,7 +22,11 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** A small, off-screen WebView. It returns page data, never cookies, and handles GET only. */
-internal class BrowserSiteTransport(private val context: Context) : SiteTransport {
+internal class BrowserSiteTransport(
+    private val context: Context,
+    // Optional response source for deterministic on-device tests; production leaves it null.
+    private val testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
+) : SiteTransport {
     private val slots = Semaphore(2)
 
     override suspend fun get(url: String, headers: Map<String, String>): SiteResponse {
@@ -111,7 +115,8 @@ internal class BrowserSiteTransport(private val context: Context) : SiteTranspor
                         val host = uri.host.orEmpty().lowercase()
                         val allowed = isSiteUrl(uri.toString()) ||
                             (uri.scheme == "https" && host == "challenges.cloudflare.com")
-                        return if (allowed) null else WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                        return if (allowed) testResponse?.invoke(request)
+                        else WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                     }
 
                     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
