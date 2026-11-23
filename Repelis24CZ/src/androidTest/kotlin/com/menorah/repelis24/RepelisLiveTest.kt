@@ -39,6 +39,19 @@ class RepelisLiveTest {
         val pageOne = RepelisMarkup.cards(first); val pageTwo = RepelisMarkup.cards(second)
         assertTrue(pageOne.isNotEmpty()); assertTrue(pageTwo.any { p -> pageOne.none { it.url == p.url } })
         assertTrue(RepelisMarkup.cards(doc("/?s=iron")).isNotEmpty())
+        for (filter in listOf("movies", "tv")) {
+            val category = "/tendencias/?get=$filter"
+            val a = doc(RepelisMarkup.pageUrl(category, 1)); val b = doc(RepelisMarkup.pageUrl(category, 2))
+            assertTrue(RepelisMarkup.hasNext(a, 1))
+            val one = RepelisMarkup.cards(a); val two = RepelisMarkup.cards(b)
+            assertTrue(one.isNotEmpty() && two.any { x -> one.none { it.url == x.url } })
+            assertTrue((one + two).all { it.movie == (filter == "movies") })
+        }
+        for (genre in listOf("accion", "animacion")) {
+            val category = "/genero/$genre/"; val a = doc(RepelisMarkup.pageUrl(category, 1)); val b = doc(RepelisMarkup.pageUrl(category, 2))
+            val one = RepelisMarkup.cards(a); val two = RepelisMarkup.cards(b)
+            assertTrue(RepelisMarkup.hasNext(a, 1)); assertTrue(one.isNotEmpty() && two.any { x -> one.none { it.url == x.url } })
+        }
         val series = doc("/series/game-of-thrones/")
         val episodes = RepelisMarkup.episodes(series)
         assertEquals(73, episodes.size); assertEquals((1..8).toList(), episodes.map { it.season }.distinct())
@@ -51,7 +64,12 @@ class RepelisLiveTest {
         val option = options.first { it.language == "Latino" }
         val (_, body) = request("https://repelis24.cz/wp-admin/admin-ajax.php", mapOf("action" to "doo_player_ajax", "post" to option.post, "nume" to option.number, "type" to option.type))
         assertTrue(JSONObject(body).optString("embed_url").startsWith("https://"))
-        val episodeOption = RepelisMarkup.fallbackEpisodeOptions(RepelisMarkup.episodeUrl(episodes.first().id)).first()
+        val (_, playerBody) = request("https://repelis24.cz/wp-admin/admin-ajax.php", mapOf("action" to "dpu_get_episode_player", "episode_id" to episodes.first().id))
+        val episodeOptions = RepelisMarkup.episodePlayerOptions(playerBody, episodes.first().id)
+        assertTrue(episodeOptions.any { it.language == "Latino" }); assertTrue(episodeOptions.any { it.language == "Inglés" })
+        assertEquals("Latino", episodeOptions.first { it.number == "1" }.language)
+        assertEquals("Inglés", episodeOptions.first { it.number == "4" }.language)
+        val episodeOption = episodeOptions.first { it.language == "Latino" }
         val (_, episodeBody) = request("https://repelis24.cz/wp-admin/admin-ajax.php", mapOf("action" to "doo_player_ajax", "post" to episodeOption.post, "nume" to episodeOption.number, "type" to episodeOption.type))
         assertTrue(JSONObject(episodeBody).optString("embed_url").startsWith("https://"))
     }
