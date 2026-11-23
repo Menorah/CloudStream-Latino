@@ -23,11 +23,18 @@ class RePelisHDProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "/explorar?t=movie" to "Películas", "/explorar?t=tv" to "Series",
         "/explorar?sort=popular" to "Populares", "/explorar?sort=nuevo" to "Estrenos",
-        "/explorar?ver=latino" to "Latino", "/explorar?ver=castellano" to "Castellano",
-        "/explorar?ver=subtitulado" to "Subtituladas", "/explorar?g=accion" to "Acción",
-        "/explorar?g=animacion" to "Animación", "/explorar?g=aventura" to "Aventura",
-        "/explorar?g=comedia" to "Comedia", "/explorar?g=drama" to "Drama",
-        "/explorar?g=terror" to "Terror", "/explorar?g=ciencia-ficcion" to "Ciencia ficción"
+        "/explorar?sort=valoracion" to "Mejor valoradas", "/explorar?sort=titulo" to "A–Z",
+        "/explorar?ver=latino" to "Latino", "/explorar?ver=castellano" to "Castellano", "/explorar?ver=subtitulado" to "Subtituladas",
+        "/explorar?g=accion" to "Acción", "/explorar?g=accion-y-aventura" to "Acción y aventura",
+        "/explorar?g=animacion" to "Animación", "/explorar?g=aventura" to "Aventura", "/explorar?g=belica" to "Bélica",
+        "/explorar?g=ciencia-ficcion" to "Ciencia ficción", "/explorar?g=ciencia-ficcion-y-fantasia" to "Ciencia ficción y fantasía",
+        "/explorar?g=comedia" to "Comedia", "/explorar?g=crimen" to "Crimen", "/explorar?g=documental" to "Documental",
+        "/explorar?g=drama" to "Drama", "/explorar?g=familia" to "Familia", "/explorar?g=fantasia" to "Fantasía",
+        "/explorar?g=guerra-y-politica" to "Guerra y política", "/explorar?g=historia" to "Historia", "/explorar?g=infantil" to "Infantil",
+        "/explorar?g=misterio" to "Misterio", "/explorar?g=musica" to "Música", "/explorar?g=noticias" to "Noticias",
+        "/explorar?g=pelicula-de-tv" to "Película de TV", "/explorar?g=romance" to "Romance", "/explorar?g=suspense" to "Suspense",
+        "/explorar?g=talk-show" to "Talk show", "/explorar?g=telenovela" to "Telenovela", "/explorar?g=telerrealidad" to "Telerrealidad",
+        "/explorar?g=terror" to "Terror", "/explorar?g=western" to "Western"
     )
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
