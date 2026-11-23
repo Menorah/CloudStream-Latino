@@ -10,6 +10,11 @@ class RePelisHDMarkupTest {
         assertEquals(1, RePelisHDMarkup.cards(d).size); assertFalse(RePelisHDMarkup.cards(d).first().movie)
         assertTrue(RePelisHDMarkup.hasNext(d, 1)); assertFalse(RePelisHDMarkup.hasNext(d, 2))
     }
+    @Test fun details() {
+        val d = doc("""<div class="chh"><img src="https://image.tmdb.org/poster.jpg"><div class="chh-dati"><ul class="chh-badge"><li>2008</li></ul><div class="chh-gen"><a>Acción</a><a>Drama</a></div><p class="sin-t">Sinopsis</p></div></div>""")
+        assertEquals("https://image.tmdb.org/poster.jpg", RePelisHDMarkup.poster(d)); assertEquals("Sinopsis", RePelisHDMarkup.plot(d))
+        assertEquals(2008, RePelisHDMarkup.year(d)); assertEquals(listOf("Acción", "Drama"), RePelisHDMarkup.genres(d))
+    }
     @Test fun seasonState() {
         val data = """[1,"x:\\u007b\"iniziale\":{\"imdb\":\"tt123\",\"stagione\":2,\"stagioni\":[{\"season_number\":1,\"disponibili\":2},{\"season_number\":2,\"disponibili\":1}],\"episodi\":[{\"season_number\":2,\"episode_number\":1,\"name\":\"Piloto\",\"stream_available\":1}]}}"]"""
         val d = doc("<script>self.__next_f.push($data)</script>")

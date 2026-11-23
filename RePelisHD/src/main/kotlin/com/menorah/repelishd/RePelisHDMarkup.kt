@@ -29,6 +29,10 @@ internal object RePelisHDMarkup {
         if (title.isBlank()) return@mapNotNull null
         Card(title, url, link.selectFirst("img")?.absUrl("src")?.takeIf { it.startsWith("https://") }, movie)
     }.distinctBy { it.url }
+    fun poster(doc: Document): String? = doc.selectFirst(".chh img")?.absUrl("src")?.takeIf { it.startsWith("https://") }
+    fun plot(doc: Document): String? = doc.selectFirst(".chh .sin-t")?.text()?.trim()?.takeIf { it.isNotBlank() }
+    fun year(doc: Document): Int? = doc.select(".chh-badge li").firstNotNullOfOrNull { it.text().trim().takeIf { v -> v.matches(Regex("[0-9]{4}")) }?.toIntOrNull() }
+    fun genres(doc: Document): List<String> = doc.select(".chh-gen a").map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
     fun hasNext(doc: Document, page: Int): Boolean = doc.select("a[href]").any { a ->
         val url = a.absUrl("href"); siteUrl(url) && URI(url).rawQuery.orEmpty().split('&').contains("page=${page + 1}")
     }
