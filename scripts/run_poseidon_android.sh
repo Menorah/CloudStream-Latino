@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set +e
-./gradlew :PoseidonHD2:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.live=true --stacktrace > poseidon-android.log 2>&1
+./gradlew -PenablePoseidon=true :PoseidonHD2:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.live=true --stacktrace > poseidon-android.log 2>&1
 status=$?
 cat poseidon-android.log
 if [ "$status" -ne 0 ]; then

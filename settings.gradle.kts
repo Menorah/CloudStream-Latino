@@ -3,8 +3,9 @@ rootProject.name = "CloudstreamPlugins"
 // This file sets what projects are included.
 // All new projects should get automatically included unless specified in the "disabled" variable.
 
-// Cinecalidad.my remains experimental: its current host is not supported yet.
-val disabled = listOf("CinecalidadMY")
+// Experimental providers are kept out of release builds until playback is verified.
+// The opt-in keeps Poseidon available to its diagnostic workflows.
+val disabled = listOf("CinecalidadMY") + if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2")
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
