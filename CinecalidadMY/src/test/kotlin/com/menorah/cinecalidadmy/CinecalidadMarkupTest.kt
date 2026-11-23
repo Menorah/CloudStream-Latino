@@ -10,6 +10,10 @@ class CinecalidadMarkupTest {
         assertEquals(listOf("Iron Man"), CinecalidadMarkup.cards(d).map { it.title }); assertTrue(CinecalidadMarkup.hasNext(d,1)); assertFalse(CinecalidadMarkup.hasNext(d,2))
         val search = doc("""<a href="/page/2/?s=iron">Next</a>""", "https://www.cinecalidad.my/?s=thor")
         assertFalse(CinecalidadMarkup.hasNext(search,1))
+        val category = doc("""<a href="/genero-peliculas/accion/page/2/">Next</a>""", "https://www.cinecalidad.my/genero-peliculas/accion/")
+        assertTrue(CinecalidadMarkup.hasNext(category,1))
+        val searchMatch = doc("""<a href="/page/2/?s=iron">Next</a>""", "https://www.cinecalidad.my/?s=iron")
+        assertTrue(CinecalidadMarkup.hasNext(searchMatch,1))
     }
     @Test fun knownServicesAreMappedWithoutTrailersOrDownloads() {
         val d = doc("""<div id="panel_online" class="pane"><div class="pane_descripcion">Audio latino</div><a class="onlinelink" service="OnlineFilemoon" data="abc123"></a><a class="onlinelink" service="OnlineVoe" data="def456"></a><a class="onlinelink" service="Trailer" data="aaa"></a><a class="onlinelink" service="OnlineVoe" data="../evil"></a></div><div id="panel_descarga"><a class="onlinelink" service="OnlineVoe" data="zzz"></a></div>""")

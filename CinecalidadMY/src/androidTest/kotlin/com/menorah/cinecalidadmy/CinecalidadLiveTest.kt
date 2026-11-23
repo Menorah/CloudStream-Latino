@@ -18,7 +18,12 @@ class CinecalidadLiveTest {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return
         val first=doc("/"); val second=doc("/page/2/"); val a=CinecalidadMarkup.cards(first); val b=CinecalidadMarkup.cards(second)
         assertTrue(a.isNotEmpty()); assertTrue(CinecalidadMarkup.hasNext(first,1)); assertTrue(b.any { x -> a.none { it.url == x.url } })
-        assertTrue(CinecalidadMarkup.cards(doc("/?s=iron")).isNotEmpty())
+        val search1 = doc("/?s=iron"); val search2 = doc("/page/2/?s=iron")
+        assertTrue(CinecalidadMarkup.cards(search1).isNotEmpty()); assertTrue(CinecalidadMarkup.hasNext(search1, 1))
+        assertTrue(CinecalidadMarkup.cards(search2).any { x -> CinecalidadMarkup.cards(search1).none { it.url == x.url } })
+        val category1 = doc("/genero-peliculas/accion/"); val category2 = doc("/genero-peliculas/accion/page/2/")
+        assertTrue(CinecalidadMarkup.cards(category1).isNotEmpty()); assertTrue(CinecalidadMarkup.hasNext(category1, 1))
+        assertTrue(CinecalidadMarkup.cards(category2).any { x -> CinecalidadMarkup.cards(category1).none { it.url == x.url } })
         val movie=doc("/pelicula/hermanastras-2026-online-descarga/")
         assertNotNull(CinecalidadMarkup.title(movie)); assertNotNull(CinecalidadMarkup.poster(movie)); assertNotNull(CinecalidadMarkup.plot(movie))
         val players=CinecalidadMarkup.players(movie); assertTrue(players.any { it.url.startsWith("https://voe.sx/e/") }); assertTrue(players.any { it.url.startsWith("https://bysedikamoum.com/e/") }); assertTrue(players.all { it.language=="Latino" })
