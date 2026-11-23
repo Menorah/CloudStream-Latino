@@ -15,7 +15,7 @@ import java.io.ByteArrayInputStream
 class BrowserPostersTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val url = "https://ww4.animeonline.ninja/wp-content/uploads/test.png"
-    private val png = Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", Base64.DEFAULT)
+    private val png = Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", Base64.DEFAULT)
     private fun response(type: String, data: ByteArray) = WebResourceResponse(type, null, 200, "OK", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(data))
 
     @Test fun imageIsFetchedInWebViewAndCanBeDecodedFromLocalCache() = runBlocking {
