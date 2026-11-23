@@ -16,14 +16,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
       - name: Compilar y generar índice
-        run: ./gradlew make makePluginsJson --stacktrace
+        shell: bash
+        run: |
+          set +e
+          ./gradlew make makePluginsJson --stacktrace > build-log.txt 2>&1
+          status=$?
+          cat build-log.txt
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PYLOG'
+          import pathlib
+          lines = pathlib.Path('build-log.txt').read_text(errors='replace').splitlines()
+          relevant = [s for s in lines if s.startswith('e: ') or s.startswith('> ') or 'What went wrong:' in s or 'Could not ' in s or 'Failed to ' in s]
+          print('::error::' + (' | '.join(relevant[:12]) or 'Ver registro de compilación').replace('%', '%25'))
+          PYLOG
+          fi
+          exit "$status"
       - name: Preparar archivos
         run: |
           mkdir -p output
