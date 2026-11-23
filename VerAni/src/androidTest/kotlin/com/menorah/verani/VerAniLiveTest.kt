@@ -12,9 +12,10 @@ import org.junit.runner.RunWith
 class VerAniLiveTest {
     @Test fun catalogueDetailsAndPlayersWhenRequested() = runBlocking {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
-        val browser = BrowserSiteTransport(InstrumentationRegistry.getInstrumentation().targetContext)
+        val client = SiteClient.create(InstrumentationRegistry.getInstrumentation().targetContext)
         suspend fun doc(path: String): org.jsoup.nodes.Document {
-            val response = browser.get("https://verani.me$path", emptyMap())
+            android.util.Log.i("VerAniProbe", "Consultando $path")
+            val response = client.get("https://verani.me$path")
             assertEquals("HTTP $path", 200, response.code)
             return Jsoup.parse(response.text, response.url)
         }
