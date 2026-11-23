@@ -14,3 +14,8 @@ for path in ['/tendencias/?get=movies','/tendencias/?get=tv','/tendencias/page/2
  try:
   html,url=req(path); soup=BeautifulSoup(html,'html.parser'); cards=soup.select('a.dpu-archive-card');notice('category',{'path':path,'url':url,'cards':len(cards),'first':str(cards[0])[:600] if cards else '', 'next':[(a.get('href'),a.get_text(' ',strip=True)) for a in soup.select('a[href*="/page/"]')][:8], 'genres':[{'url':a.get('href'),'text':a.get_text(' ',strip=True),'html':str(a)[:500]} for a in soup.select('a[href*="/genero/"]')][:35] if path=='/generos/' else []})
  except Exception as e:notice('error',{'path':path,'error':str(e)})
+for ep in ['74111','74112','74121','1']:
+ try:
+  body,_=req('/wp-admin/admin-ajax.php',{'action':'dpu_get_episode_player','episode_id':ep}); j=json.loads(body); data=j.get('data'); s=BeautifulSoup(data if isinstance(data,str) else '', 'html.parser')
+  notice('episode-options',{'episode':ep,'success':j.get('success'),'bodytype':type(data).__name__,'options':[{'number':x.get('data-nume'),'post':x.get('data-post'),'type':x.get('data-type'),'lang':(x.find_parent(attrs={'data-lang':True}) or {}).get('data-lang'),'text':x.get_text(' ',strip=True)} for x in s.select('li.dooplay_player_option')], 'html':str(data)[:1000]})
+ except Exception as e:notice('ep-error',{'episode':ep,'error':str(e)})
