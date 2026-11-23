@@ -53,7 +53,8 @@ class HostDiagnosticsTest {
                     val host = URI(server.url).host?.lowercase() ?: continue
                     val path = URI(server.url).path.orEmpty().lowercase()
                     val form = when { path.endsWith(".mp4") -> "mp4"; path.endsWith(".m3u8") -> "m3u8"; path.endsWith(".html") -> "html"; else -> "page" }
-                    inventory.getOrPut(host) { linkedSetOf() }.add(form)
+                    val pathKind = when { path.startsWith("/v/") -> "v"; path.startsWith("/e/") -> "e"; path.startsWith("/embed/") -> "embed"; path.startsWith("/get_video") -> "get_video"; else -> "other" }
+                    inventory.getOrPut(host) { linkedSetOf() }.add("$pathKind:$form")
                     samples.putIfAbsent(host, server.url to embed)
                     count++
                 }
