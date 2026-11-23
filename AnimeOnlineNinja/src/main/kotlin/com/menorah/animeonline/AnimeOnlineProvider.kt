@@ -5,6 +5,8 @@ import android.content.Context
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
+import com.lagradost.cloudstream3.utils.newDrmExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.NiceResponse
@@ -19,6 +21,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
+import java.util.Collections
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,6 +35,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     override val hasChromecastSupport = false
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
     private val site = SiteClient.create(context)
+    private val posters = PosterCache.create(context)
 
     override val mainPage = mainPageOf(
         "/inicio/" to "Inicio",
@@ -72,9 +76,16 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
         return response
     }
 
-    private fun cards(document: Document): List<SearchResponse> = SiteMarkup.cards(document).map { card ->
-        val type = if (card.movie) TvType.AnimeMovie else TvType.Anime
-        newTvSeriesSearchResponse(card.title, card.url, type) { posterUrl = card.poster }
+    private suspend fun cards(document: Document): List<SearchResponse> {
+        val items = SiteMarkup.cards(document)
+        val cached = posters.resolve(items.map { it.poster })
+        return items.map { card ->
+            val type = if (card.movie) TvType.AnimeMovie else TvType.Anime
+            newTvSeriesSearchResponse(card.title, card.url, type) {
+                posterUrl = cached[card.poster] ?: card.poster
+                posterHeaders = card.poster?.takeIf(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/inicio/") }
+            }
+        }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -97,17 +108,21 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
         val poster = SiteMarkup.image(doc.selectFirst(".poster img"))
         val plot = doc.selectFirst("#info .wp-content, .wp-content, .sinopsis")?.text()?.trim()
         val tags = doc.select(".sgeneros a").map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
-        val episodes = SiteMarkup.episodes(doc).map { item ->
-            newEpisode(item.url) { name = item.title; season = item.season; episode = item.number; posterUrl = item.poster }
+        val episodeData = SiteMarkup.episodes(doc)
+        val cached = posters.resolve(listOf(poster) + episodeData.map { it.poster })
+        val episodes = episodeData.map { item ->
+            newEpisode(item.url) { name = item.title; season = item.season; episode = item.number; posterUrl = cached[item.poster] ?: item.poster }
         }
+        val displayPoster = cached[poster] ?: poster
+        val displayHeaders = poster?.takeIf(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/inicio/") }
         if (sitePath(url).startsWith("/pelicula/")) {
             return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
-                posterUrl = poster; this.plot = plot; this.tags = tags
+                posterUrl = displayPoster; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
             }
         }
         if (episodes.isEmpty()) return null
         return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-            posterUrl = poster; this.plot = plot; this.tags = tags
+            posterUrl = displayPoster; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
         }
     }
 
@@ -155,22 +170,26 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
         return emitted.get()
     }
 
-    private suspend fun resolve(input: String, referer: String, subtitles: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit, visited: MutableSet<String>, depth: Int) {
+    private suspend fun resolve(input: String, referer: String, subtitles: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit, visited: MutableSet<String>, depth: Int, language: String? = null) {
         if (depth > 3 || input.isBlank()) return
         val cleaned = if (input.contains("<iframe")) Jsoup.parse(input, referer).selectFirst("iframe[src]")?.absUrl("src").orEmpty() else input.trim()
         val url = runCatching { URI(referer).resolve(cleaned).toString() }.getOrNull() ?: return
-        if (!(url.startsWith("https://") || url.startsWith("http://")) || !visited.add(url)) return
+        if (!(url.startsWith("https://") || url.startsWith("http://")) || !visited.add("${language.orEmpty()}|$url")) return
         val path = URI(url).path.orEmpty().lowercase()
         if (path.endsWith(".m3u8") || path.endsWith(".mp4")) {
             val type = if (path.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            callback(newExtractorLink(name, name, url, type) { this.referer = referer })
+            callback(newExtractorLink(name, sourceLabel(language, name), url, type) { this.referer = referer })
             return
         }
-        val gotLink = AtomicBoolean(false)
-        withTimeoutOrNull(10_000L) {
-            attempt { loadExtractor(url, referer, subtitles) { gotLink.set(true); callback(it) } }
+        // Buffer callbacks briefly so a suspendable builder can preserve DRM and all
+        // extractor metadata while adding the actual language to the visible name.
+        val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        withTimeoutOrNull(7_000L) {
+            attempt { loadExtractor(url, referer, subtitles) { found.add(it) } }
         }
-        if (gotLink.get()) return
+        val links = synchronized(found) { found.toList() }
+        for (link in links) callback(withLanguage(link, language))
+        if (links.isNotEmpty()) return
         val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = SiteClient.REQUEST_SECONDS) } ?: return
         if (!response.isSuccessful) return
         val doc = document(response)
@@ -183,7 +202,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
                 async {
                     permits.withPermit {
                         withTimeoutOrNull(8_000L) {
-                            resolve(server.url, response.url, subtitles, callback, visited, depth + 1)
+                            resolve(server.url, response.url, subtitles, callback, visited, depth + 1, server.language)
                         }
                     }
                 }
@@ -199,7 +218,9 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
         if (key.isNotEmpty() && langs != null) {
             var count = 0
             for (i in 0 until langs.length()) {
-                val items = langs.optJSONObject(i)?.optJSONArray("items") ?: continue
+                val group = langs.optJSONObject(i) ?: continue
+                val items = group.optJSONArray("items") ?: continue
+                val groupLanguage = languageLabel(group.optString("name").ifBlank { group.optString("label").ifBlank { group.optString("lang").ifBlank { group.optString("code") } } }) ?: language
                 for (j in 0 until items.length()) {
                     if (count++ >= 12) break
                     val encoded = items.optJSONObject(j)?.optString("url").orEmpty()
@@ -207,11 +228,28 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
                         val bytes = Base64.decode(encoded.replace('-', '+').replace('_', '/'), Base64.DEFAULT)
                         String(ByteArray(bytes.size) { n -> (bytes[n].toInt() xor key[n % key.length].code).toByte() }, Charsets.UTF_8)
                     }.getOrNull().orEmpty()
-                    resolve(decoded, response.url, subtitles, callback, visited, depth + 1)
+                    resolve(decoded, response.url, subtitles, callback, visited, depth + 1, groupLanguage)
                 }
             }
         }
-        for (frame in doc.select("iframe[src]").take(8)) resolve(frame.absUrl("src"), response.url, subtitles, callback, visited, depth + 1)
+        for (frame in doc.select("iframe[src]").take(8)) resolve(frame.absUrl("src"), response.url, subtitles, callback, visited, depth + 1, language)
+    }
+
+    private suspend fun withLanguage(link: ExtractorLink, language: String?): ExtractorLink {
+        if (language == null) return link
+        val label = sourceLabel(language, link.name)
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, label, link.url, link.type, link.uuid) {
+                referer = link.referer; quality = link.quality; headers = link.headers
+                extractorData = link.extractorData; audioTracks = link.audioTracks
+                kid = link.kid; key = link.key; kty = link.kty
+                keyRequestParameters = link.keyRequestParameters; licenseUrl = link.licenseUrl
+            }
+        }
+        return newExtractorLink(link.source, label, link.url, link.type) {
+            referer = link.referer; quality = link.quality; headers = link.headers
+            extractorData = link.extractorData; audioTracks = link.audioTracks
+        }
     }
 
     private fun origin(url: String): String? = runCatching {

@@ -42,7 +42,7 @@ internal object SiteMarkup {
 
     /** The current multiserver renders links in go_to_player() grouped by language. */
     fun playerServers(document: Element): List<PlayerServer> {
-        val grouped = listOf("LAT" to "Latino", "ES" to "Castellano", "SUB" to "Subtitulado").map { (code, label) ->
+        val grouped = listOf("LAT" to "Latino", "ES" to "Castellano", "SUB" to "Japonés · Sub español").map { (code, label) ->
             document.select(".OD_$code li[onclick]").mapNotNull { item ->
                 val match = Regex("""go_to_player\s*\(\s*(['"])(.*?)\1\s*\)""").find(item.attr("onclick")) ?: return@mapNotNull null
                 val url = runCatching { URI(item.baseUri()).resolve(match.groupValues[2]).toString() }.getOrNull()
@@ -53,7 +53,7 @@ internal object SiteMarkup {
         // Interleave languages so one group of dead hosts does not starve the others.
         return (0 until (grouped.maxOfOrNull { it.size } ?: 0)).flatMap { i ->
             grouped.mapNotNull { it.getOrNull(i) }
-        }.distinctBy { it.url }
+        }.distinctBy { it.url to it.language }
     }
 
     /** The site's root is an unrelated landing page; only follow its explicit entry. */
