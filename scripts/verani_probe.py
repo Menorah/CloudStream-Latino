@@ -1,24 +1,26 @@
-"""Inspect HLS response metadata, without exposing stream URLs or identifiers."""
-import json, urllib.request, urllib.parse, urllib.error
+"""Inspect HLS error metadata without logging media URLs or identifiers."""
+import json, re, urllib.request, urllib.parse, urllib.error, http.cookiejar
 from bs4 import BeautifulSoup
 ROOT='https://verani.me'; UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-def get(url,referer=None,range_=False):
- h={'User-Agent':UA};
- if referer: h['Referer']=referer
- if range_:h['Range']='bytes=0-1023'
- req=urllib.request.Request(url,headers=h)
- with urllib.request.urlopen(req,timeout=10) as r:return r.status,r.headers.get('Content-Type','').split(';')[0],r.geturl(),r.read(100000 if not range_ else 1024)
+jar=http.cookiejar.CookieJar();opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 def out(d):print('::notice::'+json.dumps(d,ensure_ascii=False).replace('%','%25'),flush=True)
+def get(url, referer=None, byte_range=False):
+ h={'User-Agent':UA};
+ if referer:h['Referer']=referer
+ if byte_range:h['Range']='bytes=0-1023'
+ req=urllib.request.Request(url,headers=h)
+ with opener.open(req,timeout=12) as r:return r.status,r.headers,r.geturl(),r.read(131072 if not byte_range else 1024)
 path='/dragon-ball/capitulo-1-bulma-y-son-goku/'
 try:
- status,mime,url,body=get(ROOT+path);doc=BeautifulSoup(body,'html.parser')
- tab=next(t for t in doc.select('.servidor-tab[data-url]') if urllib.parse.urlsplit(t['data-url']).hostname=='player.zilla-networks.com')
- manifest=tab['data-url'];status,mime,final,body=get(manifest,ROOT+path);lines=[s.strip() for s in body.decode('utf8','replace').splitlines() if s.strip()];resources=[s for s in lines if not s.startswith('#')];
- out({'manifest':{'status':status,'mime':mime,'isHls':body.lstrip().startswith(b'#EXTM3U'),'tags':[s.split(':')[0] for s in lines if s.startswith('#')][:20], 'resources':len(resources), 'resourceHost':urllib.parse.urlsplit(urllib.parse.urljoin(final,resources[0])).hostname if resources else None}})
- if resources:
-  target=urllib.parse.urljoin(final,resources[0]); parsed=urllib.parse.urlsplit(final); base=parsed.scheme+'://'+parsed.netloc+'/'
-  for label,ref in [('episode',ROOT+path),('site',ROOT+'/'),('player',base),('manifest',final),('none',None)]:
-   try:
-    status,mime,final2,b=get(target,ref,True);out({'referer':label,'status':status,'mime':mime,'bytes':len(b),'host':urllib.parse.urlsplit(final2).hostname,'hls':b.lstrip().startswith(b'#EXTM3U')})
-   except Exception as e:out({'referer':label,'status':getattr(e,'code',None),'error':type(e).__name__})
+ _,_,_,body=get(ROOT+path);doc=BeautifulSoup(body,'html.parser')
+ u=next(t['data-url'] for t in doc.select('.servidor-tab[data-url]') if urllib.parse.urlsplit(t['data-url']).hostname=='player.zilla-networks.com')
+ status,headers,final,body=get(u,ROOT+path);lines=body.decode('utf8','replace').splitlines(); media=[s.strip() for s in lines if s.strip() and not s.startswith('#')]; parsed=urllib.parse.urlsplit(final)
+ out({'manifest':{'status':status,'host':parsed.hostname,'cookiesCount':len(list(jar)), 'setCookie':bool(headers.get('Set-Cookie')),'firstTag':next((x.split(':')[0] for x in lines if x.startswith('#EXT-X-MAP')),None)}})
+ target=urllib.parse.urljoin(final,media[0]);parts=urllib.parse.urlsplit(target);out({'resource':{'host':parts.hostname,'pathKinds':[(('file' if '.' in x else 'part'),len(x)) for x in parts.path.split('/') if x][:8],'queryKeys':[k for k,v in urllib.parse.parse_qsl(parts.query)]}})
+ for label,range_ in [('no-range',False),('range',True)]:
+  try:
+   status,headers,_,data=get(target,ROOT+path,range_);out({'check':label,'status':status,'type':headers.get('Content-Type'),'bytes':len(data)})
+  except urllib.error.HTTPError as e:
+   data=e.read(1200).decode('utf8','replace');data=re.sub(r'https?://[^\s"<>]+','[url]',data);data=re.sub(r'[A-Za-z0-9_\-/+=]{40,}','[value]',data)
+   out({'check':label,'status':e.code,'server':e.headers.get('Server'),'contentType':e.headers.get('Content-Type'),'body':data[:350]})
 except Exception as e:out({'error':type(e).__name__,'status':getattr(e,'code',None)})
