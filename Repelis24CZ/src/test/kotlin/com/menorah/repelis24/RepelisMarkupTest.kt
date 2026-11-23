@@ -7,11 +7,11 @@ import org.junit.Test
 class RepelisMarkupTest {
     private fun doc(html: String) = Jsoup.parse(html, "https://repelis24.cz/series/game-of-thrones/")
     @Test fun parsesCardsAndPaginationWithoutAds() {
-        val doc = doc("""
+        val doc = Jsoup.parse("""
           <article><a class="dpu-archive-card" href="/peliculas/iron-man/" title="Iron Man"><div class="dpu-archive-c-title">Iron Man</div><img class="dpu-archive-img" src="https://image.tmdb.org/t/p/w500/iron.jpg"><img src="/flag.png"></a></article>
           <article><a class="dpu-archive-card" href="/series/game-of-thrones/"><div class="dpu-archive-c-title">Juego de Tronos</div></a></article>
           <a class="dpu-archive-card" href="https://other.example/peliculas/fake/" title="fake"></a><a href="/series/page/2/">2</a>
-        """.trimIndent())
+        """.trimIndent(), "https://repelis24.cz/series/")
         val cards = RepelisMarkup.cards(doc)
         assertEquals(2, cards.size); assertTrue(cards[0].movie); assertFalse(cards[1].movie)
         assertEquals("https://image.tmdb.org/t/p/w500/iron.jpg", cards[0].image)

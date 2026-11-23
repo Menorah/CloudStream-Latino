@@ -30,7 +30,15 @@ jobs:
           cat build-log.txt
           if [ "$status" -ne 0 ]; then
             python3 - <<'PYLOG'
-          import pathlib
+          import pathlib, xml.etree.ElementTree as ET
+          for report in pathlib.Path('.').glob('*/build/test-results/testDebugUnitTest/TEST-*.xml'):
+              try:
+                  for case in ET.parse(report).findall('.//testcase'):
+                      for failure in case.findall('failure') + case.findall('error'):
+                          text = case.get('classname', '') + '.' + case.get('name', '') + ': ' + (failure.get('message') or failure.text or '')[:1500]
+                          print('::error::' + text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D'))
+              except ET.ParseError:
+                  pass
           lines = pathlib.Path('build-log.txt').read_text(errors='replace').splitlines()
           relevant = [s for s in lines if s.startswith('e: ') or (s.startswith('> ') and not s.startswith('> Task ')) or 'What went wrong:' in s or 'Could not ' in s or 'Failed to ' in s]
           print('::error::' + (' | '.join(relevant[:12]) or 'Ver registro de compilación').replace('%', '%25'))
