@@ -14,6 +14,8 @@ class MediaCheckTest {
     @Test fun rejectsHtmlAndKnownMissingFilesWithoutRejectingPlaylists() {
         fun broken(status: Int, mime: String?, data: String) = MediaCheck.looksBroken(status, mime, data.toByteArray())
         assertTrue(broken(404, "video/mp4", ""))
+        assertFalse(broken(403, "text/html", "<html>Challenge</html>"))
+        assertFalse(broken(503, "text/html", "<html>Temporary error</html>"))
         assertTrue(broken(200, "text/html; charset=utf-8", "not video"))
         assertTrue(broken(200, "application/octet-stream", "<!DOCTYPE html>"))
         assertTrue(broken(200, "text/plain", "error_nofile"))

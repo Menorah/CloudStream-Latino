@@ -211,7 +211,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
             servers.map { server ->
                 async {
                     permits.withPermit {
-                        withTimeoutOrNull(8_000L) {
+                        withTimeoutOrNull(12_000L) {
                             resolve(server.url, response.url, subtitles, callback, visited, depth + 1, server.language)
                         }
                     }
