@@ -21,13 +21,15 @@ object PlaybackProbe {
                 withTimeout(600_000) {
                     val provider = Repelis24ShopProvider()
                     check(provider.search("iron man").isNotEmpty()) { "empty search" }
-                    val movie = "https://repelis24.shop/pelicula/iron-man-zepn/"
+                    val movie = "https://repelis24.shop/pelicula/la-odisea/"
                     check(provider.load(movie) != null) { "movie load failed" }
                     val series = provider.load("https://repelis24.shop/serie/the-terror/") as? TvSeriesLoadResponse
                         ?: error("series load failed")
                     check(series.episodes.any { it.season == 2 && it.episode == 3 }) { "missing episodes: ${series.episodes.size}" }
                     testPlayback(context, provider, "movie", movie)
-                    testPlayback(context, provider, "episode", "https://repelis24.shop/episodio/the-terror-1x1/")
+                    testPlayback(context, provider, "episode Mobland", "https://repelis24.shop/episodio/mobland-1x1/")
+                    // Keep the previously failing sample mandatory: do not hide unavailable links.
+                    testPlayback(context, provider, "movie Iron Man", "https://repelis24.shop/pelicula/iron-man-zepn/")
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
