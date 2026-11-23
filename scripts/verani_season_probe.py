@@ -13,9 +13,9 @@ for path in ['/ataque-a-los-titanes/','/naruto-shippuden/','/demon-slayer/','/dr
             links=group.select('a.capitulo-card-link[href]');all_links.extend(links)
             badge=group.select_one('.temporada-badge'); name=group.select_one('.temporada-name')
             sample=[]
-            for el in (links[:2]+links[-1:]):
-                sample.append({'url':el.get('href'),'title':el.select_one('.capitulo-card-title').get_text(' ',strip=True) if el.select_one('.capitulo-card-title') else None,'parent':el.parent.get('class'),'attrs':dict(el.attrs)})
-            groups.append({'attrs':dict(group.attrs),'badge':str(badge)[:300],'name':name.get_text(' ',strip=True) if name else None,'count':len(links),'withCapitulo':sum('/capitulo-' in el.get('href','') for el in links),'sample':sample})
+            for el in (links[:1]+links[-1:]):
+                sample.append({'url':el.get('href'),'title':el.select_one('.capitulo-card-title').get_text(' ',strip=True) if el.select_one('.capitulo-card-title') else None,'parent':el.parent.get('class'),'subtitle':el.select_one('.capitulo-card-subtitle').get_text(' ',strip=True) if el.select_one('.capitulo-card-subtitle') else None})
+            groups.append({'badge':badge.get_text(' ',strip=True) if badge else None,'name':name.get_text(' ',strip=True) if name else None,'count':len(links),'withCapitulo':sum('/capitulo-' in el.get('href','') for el in links),'sample':sample})
         counts=collections.Counter(a.get('href') for a in all_links)
         notice({'path':path,'groups':groups,'duplicates':sum(n-1 for n in counts.values() if n>1),'total':len(all_links)})
     except Exception as e:notice({'path':path,'error':str(e)[:200]})
