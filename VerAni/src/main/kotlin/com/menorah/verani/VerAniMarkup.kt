@@ -59,7 +59,9 @@ internal object VerAniMarkup {
         return raw.groupBy { it.url }.map { (url, choices) -> VerAniServer(url, choices.map { it.language }.distinct().joinToString(" / ")) }
     }
 
-    fun poster(doc: Element): String? = doc.selectFirst("meta[property=og:image][content]")
-        ?.let { absolute(it.baseUri(), it.attr("content")) }
+    fun poster(doc: Element): String? {
+        val element: Element = doc.selectFirst("meta[property=og:image][content]") ?: return null
+        return absolute(element.baseUri(), element.attr("content"))
+    }
     fun plot(doc: Element): String? = doc.selectFirst(".anime-hero-description, .pelicula-overview-text")?.text()?.trim()?.takeIf { it.isNotEmpty() }
 }
