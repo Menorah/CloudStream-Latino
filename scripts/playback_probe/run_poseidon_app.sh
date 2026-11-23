@@ -21,10 +21,10 @@ adb shell mkdir -p /sdcard/Cloudstream3/plugins
 adb push PoseidonHD2/build/PoseidonHD2.cs3 /sdcard/Cloudstream3/plugins/PoseidonHD2.cs3
 adb logcat -c
 adb shell monkey -p "$package" 1
-for i in $(seq 1 60); do
+for i in $(seq 1 100); do
   sleep 5
   log=$(adb logcat -d -s CSPlaybackProbe:I '*:S')
-  if echo "$log" | grep -q 'PASS all'; then echo "$log"; echo '::notice::CloudStream ejecutó el proveedor y reprodujo película y episodio con Media3'; exit 0; fi
+  if echo "$log" | grep -q 'PASS all'; then echo "$log"; echo '::notice::CloudStream ejecutó el proveedor y reprodujo película y dos episodios con Media3'; exit 0; fi
   if echo "$log" | grep -q 'FAIL '; then echo "$log"; echo "$log" | grep 'CSPlaybackProbe:' | sed -e 's/%/%25/g' -e 's/^/::notice::/'; echo "::error::$(echo "$log" | grep 'FAIL ' | tail -1 | sed 's/%/%25/g')"; exit 1; fi
 done
 adb logcat -d -s CSPlaybackProbe:I PluginManager:D '*:S' | tail -150
