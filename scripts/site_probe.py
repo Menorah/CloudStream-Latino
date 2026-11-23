@@ -54,5 +54,10 @@ for kind in ('rest','ajax'):
                     import re
                     matches=re.findall(r'<(?:script|div)[^>]+(?:id=["\']msp(?:-data)?["\']|data-api=)[^>]*>',body)
                     result.update({'player_host':urlsplit(p.url).hostname,'size':len(body),'msp_tags':matches[:3]})
+                    if kind == 'rest':
+                        # Markup and script structure only: strip long encoded payloads and URLs.
+                        cleaned = re.sub(r'https?://[^\s\"\'<>]+', '<url>', body)
+                        cleaned = re.sub(r'[A-Za-z0-9_+/=-]{100,}', '<encoded>', cleaned)
+                        result['markup_sample'] = cleaned[:11000]
     except Exception as e: result['error']=str(e)[:160]
     print('::notice::'+json.dumps(result).replace('%','%25'),flush=True)
