@@ -28,3 +28,20 @@ for path in ['/online/black-clover-091124/','/online/dragon-ball-super-3-082125/
             except Exception as e:info['imageChecks'].append({'url':img,'status':getattr(e,'code',None),'error':type(e).__name__})
         output(info)
     except Exception as e:output({'page':path,'status':getattr(e,'code',None),'error':type(e).__name__})
+for path in ['/online/black-clover-091124/','/pelicula/akira-110723/']:
+    try:
+        _,_,page,body=fetch(ROOT+path); raw=body.decode('utf-8','replace'); doc=BeautifulSoup(raw,'html.parser');
+        matches=[]
+        for token in ['backdrop','background-image','og:image','.fondo','sheader','g-item']:
+            indices=[m.start() for m in re.finditer(re.escape(token),raw,re.I)]
+            matches.append({'token':token,'count':len(indices),'context':[re.sub(r'\s+',' ',raw[max(0,i-180):i+240]) for i in indices[:3]]})
+        info={'detail':path,'contexts':matches}
+        thumb=doc.select_one('.sheader .poster img')
+        source=thumb.get('data-src') or thumb.get('src') if thumb else ''
+        original=re.sub(r'-\d+x\d+(?=\.[A-Za-z]+(?:\?.*)?$)','',source)
+        if original and original!=source:
+            try:
+                status,mime,_,data=fetch(original,page);im=Image.open(io.BytesIO(data)); info['unresized']={'url':original,'status':status,'type':mime,'size':len(data),'dimensions':im.size}
+            except Exception as e:info['unresized']={'url':original,'status':getattr(e,'code',None),'error':type(e).__name__}
+        output(info)
+    except Exception as e:output({'detail':path,'error':type(e).__name__})
