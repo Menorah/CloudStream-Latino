@@ -46,8 +46,13 @@ internal object CinecalidadAMMarkup {
     }
     fun episodes(doc: Document): List<EpisodeItem> = doc.select("a[href*=/ver-el-episodio/]").mapNotNull { a ->
         val url = a.absUrl("href"); if (!siteUrl(url)) return@mapNotNull null
-        val path = URI(url).path.orEmpty(); val m = Regex("-s([0-9]+)-e([0-9]+)/?$").find(path) ?: return@mapNotNull null
-        val season = m.groupValues[1].toIntOrNull() ?: return@mapNotNull null; val number = m.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+        val path = URI(url).path.orEmpty()
+        if (!path.startsWith("/ver-el-episodio/")) return@mapNotNull null
+        // Both slug-1x2 and tmdb-123-s1-e2 are used in the site's episode URLs.
+        val m = Regex("-(?:s([0-9]+)-e([0-9]+)|([0-9]+)x([0-9]+))/?$", RegexOption.IGNORE_CASE).find(path) ?: return@mapNotNull null
+        val season = m.groupValues[1].ifEmpty { m.groupValues[3] }.toIntOrNull() ?: return@mapNotNull null
+        val number = m.groupValues[2].ifEmpty { m.groupValues[4] }.toIntOrNull() ?: return@mapNotNull null
+        if (number < 1) return@mapNotNull null
         val container = a.closest("li") ?: a.parent()
         EpisodeItem(a.text().trim().ifBlank { "Episodio $number" }, url, season, number, img(container?.selectFirst("img")))
     }.distinctBy { it.url }.sortedWith(compareBy({ it.season }, { it.number }))

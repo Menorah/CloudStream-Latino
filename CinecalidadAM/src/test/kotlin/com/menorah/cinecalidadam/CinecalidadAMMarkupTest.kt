@@ -24,6 +24,25 @@ class CinecalidadAMMarkupTest {
         assertTrue(CinecalidadAMMarkup.isYearArchive(Jsoup.parse("", "https://www.cinecalidad.am/release/1915/page/2/"), "1915"))
         assertFalse(CinecalidadAMMarkup.isYearArchive(Jsoup.parse("", "https://www.cinecalidad.am/ver-pelicula/ano-uno/"), "1915"))
     }
+    @Test fun episodesSupportBothSiteUrlFormats() {
+        val d = doc("""<ul>
+            <li><img data-src="https://image.tmdb.org/episode.jpg"><a href="/ver-el-episodio/la-ninera-2x10/">La bodega de vinos</a></li>
+            <li><a href="/ver-el-episodio/jeffrey-epstein-asquerosamente-rico-1x1/">Zonas de caza</a></li>
+            <li><a href="/ver-el-episodio/vivir-100-anos-los-secretos-de-las-zonas-azules-1x4/">El futuro</a></li>
+            <li><a href="/ver-el-episodio/pinky-y-cerebro-3x12/">Episodio 12</a></li>
+            <li><a href="/ver-el-episodio/tmdb-3854-s1-e2/">Formato TMDB</a></li>
+            <li><a href="/ver-el-episodio/tmdb-3854-s1-e2/">Duplicado</a></li>
+            <li><a href="/ver-el-episodio/titulo-2x0/">Número inválido</a></li>
+            <li><a href="https://evil.test/ver-el-episodio/titulo-1x3/">Externo</a></li>
+            <li><a href="/not/ver-el-episodio/titulo-1x3/">Ruta inválida</a></li>
+            <li><a href="/ver-el-episodio/sin-numero/">Sin número</a></li>
+        </ul>""")
+        val episodes = CinecalidadAMMarkup.episodes(d)
+        assertEquals(5, episodes.size)
+        assertEquals(listOf(1 to 1, 1 to 2, 1 to 4, 2 to 10, 3 to 12), episodes.map { it.season to it.number })
+        assertEquals("La bodega de vinos", episodes[3].title)
+        assertEquals("https://image.tmdb.org/episode.jpg", episodes[3].poster)
+    }
     @Test fun episodesAndPlayers() {
         val d=doc("""<li><img data-src="https://image.tmdb.org/e.jpg"><div class="episodiotitle"><a href="/ver-el-episodio/tmdb-1-s2-e3/">Capítulo</a></div></li><li><a href="https://evil.test/ver-el-episodio/tmdb-1-s2-e4/">Mal</a></li><div id="panel_online"><div class="pane_descripcion">Audio latino</div><ul><li class="dooplay_player_option" data-option="https://vimeos.net/embed-a.html">Vimeos</li><li class="dooplay_player_option" data-option="https://videoapp.zip/e/movie/1">Videoapp</li><li class="dooplay_player_option dooplay_player_option_trailer" data-option="https://youtube.com/x">Trailer</li></ul></div>""")
         val episodes=CinecalidadAMMarkup.episodes(d); assertEquals(1, episodes.size); assertEquals(2, episodes[0].season); assertEquals(3, episodes[0].number); assertEquals("https://image.tmdb.org/e.jpg",episodes[0].poster)
