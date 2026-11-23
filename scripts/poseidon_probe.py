@@ -12,10 +12,13 @@ def notice(k,v):
 for path in ['/pelicula/9909/mentes-peligrosas','/serie/223397/ciudad-de-dios-la-lucha-no-para','/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3','/peliculas','/series','/buscar?q=iron']:
  try:
   doc=get(base+path); state=json.loads(doc.select_one('script#__NEXT_DATA__').string)['props']['pageProps']
-  data=state.get('thisMovie') or state.get('thisSerie') or state.get('thisEpisode') or {}
+  data=state.get('thisMovie') or state.get('thisSerie') or state.get('episode') or {}
   videos=data.get('videos',{})
-  result={'path':path,'keys':list(state),'mediaKeys':list(data),'videos':videos,'pagination':[(a.get_text(' ',strip=True),a.get('href')) for a in doc.select('a[href]') if ('page=' in a.get('href','') or '/page/' in a.get('href',''))][:10]}
+  result={'path':path,'keys':list(state),'mediaKeys':list(data),'videos':{k:v[:1] for k,v in videos.items()},'pagination':[(a.get_text(' ',strip=True),a.get('href')) for a in doc.select('a[href]') if ('page=' in a.get('href','') or '/page/' in a.get('href',''))][:10]}
   if 'seasons' in data: result['seasons']=[{'number':x.get('number'),'count':len(x.get('episodes',[]))} for x in data['seasons']]
+  if path.endswith('la-lucha-no-para'):
+   result['scripts']=[x.get('src') for x in doc.select('script[src]') if 'serie' in x.get('src','') or 'app-' in x.get('src','')]
+  if path == '/peliculas': result['scripts']=[x.get('src') for x in doc.select('script[src]') if 'app-' in x.get('src','')]
   if videos:
    first=next((x['result'] for v in videos.values() for x in v if x.get('result')),None)
    if first:
