@@ -10,9 +10,14 @@ for path in ['/serial/tt1844624?season=2&episode=1','/serial/tt1844624/2/1']:
  try:
   url='https://playlatinsrc.co'+path;body,_=req(url);s=BeautifulSoup(body,'html.parser');main=s.select_one('[data-resolve-token]');m=re.search(r"JSON.stringify\(\{\s*type:\s*'([^']+)',\s*id:\s*\"([^\"]+)\",\s*token:\s*\"([^\"]+)\"",body)
   out={'path':path,'shell':dict(main.attrs) if main else None,'scripts':[i.get('src') for i in s.select('script[src]')], 'api':[]}
-  if out['shell']:out['shell'].pop('data-resolve-token',None)
+  if out['shell']:
+   out['shell'].pop('data-resolve-token',None)
+   payload={k:main.get('data-'+k,'') for k in ['type','id','season','episode','mode']};payload['token']=main.get('data-resolve-token')
+   try:
+    j=json.loads(req('https://playlatinsrc.co/api/resolve',url,payload)[0]);out['resolve']={k:v for k,v in j.items() if k not in ('token',)}
+   except Exception as e:out['resolve_error']=str(e)
   if m:
-   payload={'type':m.group(1),'id':m.group(2),'token':m.group(3)};j=json.loads(req('https://playlatinsrc.co/api/embed-links',url,payload)[0]);out['api']={'keys':list(j),'source_count':len(j.get('sources',[])),'sources':j.get('sources',[])[:8]}
+   payload={'type':m.group(1),'id':m.group(2),'token':m.group(3)};j=json.loads(req('https://playlatinsrc.co/api/embed-links',url,payload)[0]);out['api']={'keys':list(j),'source_count':len(j.get('sources',[])),'sources':j.get('sources',[])[:8], 'tv_type':str(type(j.get('tv'))), 'tv_sample':str(j.get('tv'))[:2200]}
   emit('player',out)
   for script in s.select('script[src]'):
    src=urllib.parse.urljoin(url,script['src'])
