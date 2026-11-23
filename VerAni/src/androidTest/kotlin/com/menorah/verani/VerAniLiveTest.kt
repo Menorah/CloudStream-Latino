@@ -12,7 +12,23 @@ import org.junit.runner.RunWith
 class VerAniLiveTest {
     @Test fun catalogueDetailsAndPlayersWhenRequested() = runBlocking {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
-        val client = SiteClient.create(InstrumentationRegistry.getInstrumentation().targetContext)
+        // The app's HTTP client is supplied by CloudStream at runtime, not by the
+        // instrumentation APK. Exercise the same HTTP-first/browser-fallback policy.
+        val browser = BrowserSiteTransport(InstrumentationRegistry.getInstrumentation().targetContext)
+        val http = SiteTransport { url, headers ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 10000; conn.readTimeout = 10000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+                headers.forEach { (key, value) -> conn.setRequestProperty(key, value) }
+                try {
+                    val code = conn.responseCode
+                    val text = (if (code < 400) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    SiteResponse(code, conn.url.toString(), text)
+                } finally { conn.disconnect() }
+            }
+        }
+        val client = SiteClient(http, browser)
         suspend fun doc(path: String): org.jsoup.nodes.Document {
             android.util.Log.i("VerAniProbe", "Consultando $path")
             val response = client.get("https://verani.me$path")
