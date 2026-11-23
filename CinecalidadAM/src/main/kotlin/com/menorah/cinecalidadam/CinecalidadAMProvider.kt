@@ -18,7 +18,20 @@ class CinecalidadAMProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-    override val mainPage = mainPageOf("/" to "Películas y series", "/genero-de-la-pelicula/accion/" to "Acción", "/genero-de-la-pelicula/animacion/" to "Animación", "/genero-de-la-pelicula/comedia/" to "Comedia", "/genero-de-la-pelicula/drama/" to "Drama")
+    private val latestYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR).coerceIn(2026, 2100)
+    override val mainPage = mainPageOf(
+        "/" to "Películas y series", "#destacado" to "Destacados", "/ver-serie/" to "Series",
+        "/genero-de-la-pelicula/accion/" to "Acción", "/genero-de-la-pelicula/animacion/" to "Animación",
+        "/genero-de-la-pelicula/aventura/" to "Aventura", "/genero-de-la-pelicula/belica/" to "Bélica",
+        "/genero-de-la-pelicula/ciencia-ficcion/" to "Ciencia Ficción", "/genero-de-la-pelicula/comedia/" to "Comedia",
+        "/genero-de-la-pelicula/crimen/" to "Crimen", "/genero-de-la-pelicula/documental/" to "Documental",
+        "/genero-de-la-pelicula/drama/" to "Drama", "/genero-de-la-pelicula/familia/" to "Familia",
+        "/genero-de-la-pelicula/fantasia/" to "Fantasía", "/genero-de-la-pelicula/historia/" to "Historia",
+        "/genero-de-la-pelicula/musica/" to "Música", "/genero-de-la-pelicula/misterio/" to "Misterio",
+        "/genero-de-la-pelicula/terror/" to "Terror", "/genero-de-la-pelicula/suspense/" to "Suspenso",
+        "/genero-de-la-pelicula/romance/" to "Romance"
+    ) + (latestYear downTo latestYear - 7).map { year -> mainPage("/release/$year/", "Por año · $year") }
+
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(CinecalidadAMMarkup.siteUrl(url)) { "Dirección fuera de Cinecalidad.am" }
@@ -31,16 +44,37 @@ class CinecalidadAMProvider : MainAPI() {
         else newTvSeriesSearchResponse(item.title, item.url, TvType.TvSeries) { posterUrl = item.poster }
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (request.data == "#destacado") {
+            if (page != 1) return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+            return newHomePageResponse(HomePageList(request.name, responses(CinecalidadAMMarkup.featured(fetch("/")))), hasNext = false)
+        }
         val base = request.data.trimEnd('/')
-        val doc = fetch(if (page == 1) "$base/" else "$base/page/$page/")
+        val requestedYear = Regex("^/release/([0-9]{4})$").matchEntire(base)?.groupValues?.get(1)
+        val doc = try { fetch(if (page == 1) "$base/" else "$base/page/$page/") }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                // A newly started year can be absent from the site; don't break every home section.
+                if (requestedYear != null) return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+                throw e
+            }
+        if (requestedYear != null && !CinecalidadAMMarkup.isYearArchive(doc, requestedYear))
+            return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         return newHomePageResponse(HomePageList(request.name, responses(CinecalidadAMMarkup.cards(doc))), hasNext = CinecalidadAMMarkup.hasNext(doc, page))
     }
-    override suspend fun search(query: String): List<SearchResponse> = if (query.isBlank()) emptyList() else responses(CinecalidadAMMarkup.cards(fetch("/?s=${URLEncoder.encode(query.trim(), "UTF-8")}")))
+    override suspend fun search(query: String): List<SearchResponse> = search(query, 1)?.items.orEmpty()
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         if (query.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
+        val yearPath = CinecalidadAMMarkup.yearQueryPath(query, page)
         val path = if (page > 1) "/page/$page/" else "/"
-        val doc = fetch("$path?s=${URLEncoder.encode(query.trim(), "UTF-8")}")
+        val doc = try { fetch(yearPath ?: "$path?s=${URLEncoder.encode(query.trim(), "UTF-8")}") }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (yearPath != null) return newSearchResponseList(emptyList(), hasNext = false)
+                throw e
+            }
+        if (yearPath != null && !CinecalidadAMMarkup.isYearArchive(doc, query.trim()))
+            return newSearchResponseList(emptyList(), hasNext = false)
         return newSearchResponseList(responses(CinecalidadAMMarkup.cards(doc)), hasNext = CinecalidadAMMarkup.hasNext(doc, page))
     }
     override suspend fun load(url: String): LoadResponse? {
