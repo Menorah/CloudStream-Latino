@@ -1,0 +1,76 @@
+name: Compilar extensión
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compilar y generar índice
+        shell: bash
+        run: |
+          set +e
+          ./gradlew make makePluginsJson --stacktrace > build-log.txt 2>&1
+          status=$?
+          cat build-log.txt
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PYLOG'
+          import pathlib
+          lines = pathlib.Path('build-log.txt').read_text(errors='replace').splitlines()
+          relevant = [s for s in lines if s.startswith('e: ') or (s.startswith('> ') and not s.startswith('> Task ')) or 'What went wrong:' in s or 'Could not ' in s or 'Failed to ' in s]
+          print('::error::' + (' | '.join(relevant[:12]) or 'Ver registro de compilación').replace('%', '%25'))
+          PYLOG
+          fi
+          exit "$status"
+      - name: Preparar archivos
+        run: |
+          mkdir -p output
+          cp AnimeOnlineNinja/build/AnimeOnlineNinja.cs3 output/
+          cp build/plugins.json output/
+          cp repo.json output/
+          python3 - <<'PY'
+          import json, pathlib
+          output = pathlib.Path('output')
+          plugins = json.loads((output / 'plugins.json').read_text())
+          assert any(p['url'].endswith('/AnimeOnlineNinja.cs3') for p in plugins), plugins
+          assert (output / 'AnimeOnlineNinja.cs3').stat().st_size > 0
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AnimeOnlineNinja
+          path: output/
+          if-no-files-found: error
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AnimeOnlineNinja
+          path: output
+      - name: Publicar archivos para CloudStream
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cloudstream
+          target_commitish: ${{ github.sha }}
+          name: Extensiones CloudStream
+          files: output/*
+          fail_on_unmatched_files: true
