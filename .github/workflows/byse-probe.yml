@@ -1,0 +1,16 @@
+name: Diagnóstico reproductor Byse
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/byse_probe.py', '.github/workflows/byse-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/byse_probe.py

@@ -1,0 +1,20 @@
+name: Diagnóstico de reproductores de cine
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/film_player_probe.py', '.github/workflows/film-player-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/film_player_probe.py my
+      - run: python3 scripts/film_player_probe.py am
+      - run: python3 scripts/film_player_probe.py amep
+      - run: python3 scripts/film_player_probe.py smart
+      - run: python3 scripts/film_player_probe.py poseidon

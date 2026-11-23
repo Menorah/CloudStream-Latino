@@ -1,0 +1,15 @@
+name: Diagnóstico reproducción Vidara
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/vidara_media_probe.py', '.github/workflows/vidara-media-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/vidara_media_probe.py
