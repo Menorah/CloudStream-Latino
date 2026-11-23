@@ -21,7 +21,25 @@ class RepelisProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-    override val mainPage = mainPageOf("/peliculas/" to "Películas", "/series/" to "Series")
+    override val mainPage = mainPageOf(
+        "/peliculas/" to "Películas", "/series/" to "Series",
+        "/tendencias/?get=movies" to "Películas en tendencia",
+        "/tendencias/?get=tv" to "Series en tendencia",
+        "/genero/accion/" to "Acción", "/genero/animacion/" to "Animación",
+        "/genero/aventura/" to "Aventura", "/genero/belica/" to "Bélica",
+        "/genero/ciencia-ficcion/" to "Ciencia ficción", "/genero/comedia/" to "Comedia",
+        "/genero/crimen/" to "Crimen", "/genero/documental/" to "Documental",
+        "/genero/drama/" to "Drama", "/genero/familia/" to "Familia",
+        "/genero/fantasia/" to "Fantasía", "/genero/historia/" to "Historia",
+        "/genero/misterio/" to "Misterio", "/genero/romance/" to "Romance",
+        "/genero/suspense/" to "Suspense", "/genero/terror/" to "Terror",
+        "/genero/sci-fi-fantasy/" to "Sci-Fi & Fantasy",
+        "/genero/pelicula-de-tv/" to "Película de TV",
+        "/genero/action-adventure/" to "Action & Adventure", "/genero/musica/" to "Música",
+        "/genero/western/" to "Western", "/genero/kids/" to "Kids",
+        "/genero/reality/" to "Reality", "/genero/war-politics/" to "War & Politics",
+        "/genero/soap/" to "Soap", "/genero/talk/" to "Talk", "/genero/news/" to "News"
+    )
 
     private suspend fun fetch(url: String): Document {
         val absolute = URI("$mainUrl/").resolve(url).toString()
@@ -35,7 +53,7 @@ class RepelisProvider : MainAPI() {
         else newTvSeriesSearchResponse(c.title, c.url, TvType.TvSeries) { posterUrl = c.image }
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val path = request.data.trimEnd('/') + if (page > 1) "/page/$page/" else "/"
+        val path = RepelisMarkup.pageUrl(request.data, page)
         val doc = fetch(path)
         return newHomePageResponse(HomePageList(request.name, responses(RepelisMarkup.cards(doc))), hasNext = RepelisMarkup.hasNext(doc, page))
     }
@@ -68,7 +86,14 @@ class RepelisProvider : MainAPI() {
     private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val doc = fetch(data)
-        val options = RepelisMarkup.options(doc).ifEmpty { RepelisMarkup.fallbackEpisodeOptions(data) }.take(24)
+        val episodeId = RepelisMarkup.episodeId(data)
+        // The redirected series page has no episode options until the same AJAX
+        // action used by the site returns the player markup for that episode.
+        val episodeOptions = episodeId?.let { id ->
+            val body = attempt { app.post("$mainUrl/wp-admin/admin-ajax.php", data = mapOf("action" to "dpu_get_episode_player", "episode_id" to id), headers = mapOf("Referer" to doc.location(), "X-Requested-With" to "XMLHttpRequest"), timeout = 8).text }
+            body?.let { RepelisMarkup.episodePlayerOptions(it, id) }.orEmpty()
+        }.orEmpty()
+        val options = (if (episodeId != null) episodeOptions.ifEmpty { RepelisMarkup.fallbackEpisodeOptions(data) } else RepelisMarkup.options(doc)).take(100)
         val emitted = AtomicBoolean(false)
         val lock = Any()
         withTimeoutOrNull(45_000L) {

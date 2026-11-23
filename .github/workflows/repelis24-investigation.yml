@@ -1,0 +1,16 @@
+name: Investigación RePelis24
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/repelis24_category_language_probe.py', '.github/workflows/repelis24-investigation.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/repelis24_category_language_probe.py

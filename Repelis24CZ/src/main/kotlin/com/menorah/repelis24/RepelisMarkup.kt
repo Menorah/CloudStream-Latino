@@ -1,6 +1,8 @@
 package com.menorah.repelis24
 
 import org.jsoup.nodes.Element
+import org.jsoup.Jsoup
+import org.json.JSONObject
 import java.net.URI
 
 internal data class Card(val title: String, val url: String, val image: String?, val movie: Boolean)
@@ -30,9 +32,22 @@ internal object RepelisMarkup {
         if (title.isBlank()) return@mapNotNull null
         Card(title, url, image(a.selectFirst("img.dpu-archive-img")), movie)
     }.distinctBy { it.url }
-    fun hasNext(doc: Element, page: Int): Boolean = doc.select("a[href]").any { a ->
-        val url = resolve(a.baseUri(), a.attr("href"))?.takeIf(::siteUrl) ?: return@any false
-        Regex("/page/${page + 1}/?$").containsMatchIn(URI(url).path.orEmpty())
+    /** Insert the page component before the query string, preserving filters. */
+    fun pageUrl(path: String, page: Int): String {
+        require(page >= 1)
+        val parts = path.split('?', limit = 2)
+        val base = parts[0].trimEnd('/')
+        val paged = if (page > 1) "$base/page/$page/" else "$base/"
+        return paged + if (parts.size == 2) "?${parts[1]}" else ""
+    }
+    fun hasNext(doc: Element, page: Int): Boolean {
+        val current = runCatching { URI(doc.baseUri()) }.getOrNull() ?: return false
+        val expectedPath = current.path.orEmpty().replace(Regex("/page/[0-9]+/?$"), "").trimEnd('/') + "/page/${page + 1}"
+        return doc.select("a[href]").any { a ->
+            val url = resolve(a.baseUri(), a.attr("href"))?.takeIf(::siteUrl) ?: return@any false
+            val next = URI(url)
+            next.path.orEmpty().trimEnd('/') == expectedPath && next.rawQuery == current.rawQuery
+        }
     }
     fun episodes(doc: Element): List<EpisodeItem> = doc.select(".dpu-episode-card[data-episode][data-season-number][data-episode-number]").mapNotNull { e ->
         val id = e.attr("data-episode").takeIf { it.matches(Regex("[0-9]+")) } ?: return@mapNotNull null
@@ -55,14 +70,22 @@ internal object RepelisMarkup {
         }
         PlayerOption(post, number, type, language)
     }.distinctBy { Triple(it.post, it.number, it.type) }
-    /** Episode player navigation may be rendered only after client-side selection.
-     * Probe a bounded set of DooPlay source slots without guessing their languages. */
-    fun fallbackEpisodeOptions(url: String): List<PlayerOption> {
-        if (!siteUrl(url)) return emptyList()
+    fun episodeId(url: String): String? {
+        if (!siteUrl(url)) return null
         val uri = URI(url)
-        if (uri.path !in listOf("", "/")) return emptyList()
+        if (uri.path !in listOf("", "/")) return null
         val ids = uri.rawQuery.orEmpty().split('&').filter { it.startsWith("p=") }.map { it.substringAfter('=') }
-        val id = ids.singleOrNull()?.takeIf { it.matches(Regex("[0-9]+")) } ?: return emptyList()
+        return ids.singleOrNull()?.takeIf { it.matches(Regex("[0-9]+")) }
+    }
+    fun episodePlayerOptions(json: String, id: String): List<PlayerOption> = runCatching {
+        val response = JSONObject(json)
+        if (!response.optBoolean("success")) return@runCatching emptyList()
+        val html = response.opt("data") as? String ?: return@runCatching emptyList()
+        options(Jsoup.parse(html, "$BASE/")).filter { it.post == id && it.type == "tv" }
+    }.getOrDefault(emptyList())
+    /** Preserve playback without inventing languages if the player menu is unavailable. */
+    fun fallbackEpisodeOptions(url: String): List<PlayerOption> {
+        val id = episodeId(url) ?: return emptyList()
         return (1..12).map { PlayerOption(id, it.toString(), "tv", "Idioma no indicado") }
     }
     fun title(doc: Element): String? = doc.selectFirst("h1.dpu-hero-title, h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
