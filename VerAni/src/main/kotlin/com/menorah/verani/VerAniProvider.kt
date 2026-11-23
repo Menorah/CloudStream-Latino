@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
@@ -25,9 +27,42 @@ class VerAniProvider(context: Context) : MainAPI() {
     override val hasQuickSearch = true
     override val hasChromecastSupport = false
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
-    override val mainPage = mainPageOf("/animes/" to "Animes", "/peliculas/" to "Películas")
+    override val mainPage = mainPageOf(
+        "/animes/" to "Animes", "/peliculas/" to "Películas",
+        "/tops/animes/#rated_anime" to "Top animes · Mejor puntuados",
+        "/tops/animes/#votes_anime" to "Top animes · Más votados",
+        "/tops/animes/#viewed" to "Top animes · Más vistos",
+        "/tops/animes/#commented" to "Top animes · Más comentados",
+        "/tops/animes/#reactions" to "Top animes · Más reacciones",
+        "/tops/animes/#fav_anime" to "Top animes · Favoritos",
+        "/tops/peliculas/#peli_viewed" to "Top películas · Más vistas",
+        "/tops/peliculas/#peli_commented" to "Top películas · Más comentadas",
+        "/tops/peliculas/#peli_reactions" to "Top películas · Más reacciones",
+        "/tops/peliculas/#fav_peli" to "Top películas · Favoritas",
+    )
     private val site = SiteClient.create(context)
     private val posters = PosterCache.create(context)
+    private val rankingMutex = Mutex()
+    private val rankingCache = mutableMapOf<String, RankingSnapshot>()
+
+    private data class RankingSnapshot(val expiresAt: Long, val lists: Map<String, List<VerAniCard>>)
+    private val rankingKeys = mapOf(
+        "/tops/animes/" to listOf("rated_anime", "votes_anime", "viewed", "commented", "reactions", "fav_anime"),
+        "/tops/peliculas/" to listOf("peli_viewed", "peli_commented", "peli_reactions", "fav_peli"),
+    )
+    private suspend fun ranking(path: String, key: String): List<VerAniCard> = rankingMutex.withLock {
+        val keys = rankingKeys[path] ?: return@withLock emptyList()
+        if (key !in keys) return@withLock emptyList()
+        val now = System.currentTimeMillis()
+        val snapshot = rankingCache[path]?.takeIf { now < it.expiresAt } ?: run {
+            val doc = fetch(path)
+            val lists = keys.associateWith { VerAniMarkup.ranking(doc, it, path == "/tops/peliculas/") }
+            // Do not cache a changed or blocked page as an empty ranking.
+            if (lists.values.all { it.isEmpty() }) throw IllegalStateException("No se pudieron leer los tops de VerAni.")
+            RankingSnapshot(now + 5 * 60_000L, lists).also { rankingCache[path] = it }
+        }
+        snapshot.lists[key].orEmpty()
+    }
 
     private suspend fun fetch(url: String): Document {
         val target = URI("$mainUrl/").resolve(url).toString()
@@ -37,8 +72,7 @@ class VerAniProvider(context: Context) : MainAPI() {
         return Jsoup.parse(response.text, response.url)
     }
 
-    private suspend fun cards(doc: Document): List<SearchResponse> {
-        val parsed = VerAniMarkup.cards(doc)
+    private suspend fun cards(parsed: List<VerAniCard>): List<SearchResponse> {
         val cached = posters.resolve(parsed.map { it.poster })
         return parsed.map { item ->
             val poster = cached[item.poster] ?: item.poster
@@ -49,37 +83,45 @@ class VerAniProvider(context: Context) : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val section = request.data.substringBefore('#')
+        if (section in rankingKeys) {
+            val entries = ranking(section, request.data.substringAfter('#', ""))
+            val result = VerAniMarkup.rankingPage(entries, page)
+            return newHomePageResponse(HomePageList(request.name, cards(result.cards)), hasNext = result.hasNext)
+        }
         val path = request.data.trimEnd('/') + if (page > 1) "/page/$page/" else "/"
         val doc = fetch(path)
-        return newHomePageResponse(HomePageList(request.name, cards(doc)), hasNext = VerAniMarkup.hasNext(doc))
+        return newHomePageResponse(HomePageList(request.name, cards(VerAniMarkup.cards(doc))), hasNext = VerAniMarkup.hasNext(doc))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
-        return cards(fetch("/?s=${URLEncoder.encode(query.trim(), "UTF-8")}"))
+        return cards(VerAniMarkup.cards(fetch("/?s=${URLEncoder.encode(query.trim(), "UTF-8")}")))
     }
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         if (query.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
         val path = if (page > 1) "/page/$page/" else "/"
         val doc = fetch("$path?s=${URLEncoder.encode(query.trim(), "UTF-8")}")
-        return newSearchResponseList(cards(doc), hasNext = VerAniMarkup.hasNext(doc))
+        return newSearchResponseList(cards(VerAniMarkup.cards(doc)), hasNext = VerAniMarkup.hasNext(doc))
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = fetch(url)
         val title = doc.selectFirst("h1")?.text()?.replace(Regex("\\s*\\(\\d{4}\\)\\s*$"), "")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val poster = VerAniMarkup.poster(doc)
+        val backdrop = VerAniMarkup.backdrop(doc)
         val plot = VerAniMarkup.plot(doc)
         val episodes = VerAniMarkup.episodes(doc)
-        val cached = posters.resolve(listOf(poster) + episodes.map { it.poster })
+        val cached = posters.resolve(listOf(poster, backdrop) + episodes.map { it.poster })
         val display = cached[poster] ?: poster
-        val headers = poster?.takeIf(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/") }
+        val background = cached[backdrop] ?: backdrop
+        val headers = listOfNotNull(poster, backdrop).firstOrNull(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/") }
         val movie = URI(url).path.orEmpty().contains("/pelicula/")
-        if (movie) return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) { posterUrl = display; posterHeaders = headers; this.plot = plot }
+        if (movie) return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) { posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot }
         if (episodes.isEmpty()) return null
         val list = episodes.map { ep -> newEpisode(ep.url) { name = ep.title; season = ep.season; episode = ep.number; posterUrl = cached[ep.poster] ?: ep.poster } }
-        return newTvSeriesLoadResponse(title, url, TvType.Anime, list) { posterUrl = display; posterHeaders = headers; this.plot = plot }
+        return newTvSeriesLoadResponse(title, url, TvType.Anime, list) { posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot }
     }
 
     private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }

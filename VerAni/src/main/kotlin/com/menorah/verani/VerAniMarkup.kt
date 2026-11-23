@@ -6,6 +6,7 @@ import java.net.URI
 data class VerAniCard(val title: String, val url: String, val poster: String?, val movie: Boolean)
 data class VerAniEpisode(val title: String, val url: String, val poster: String?, val season: Int, val number: Int)
 data class VerAniServer(val url: String, val language: String)
+internal data class RankingPage(val cards: List<VerAniCard>, val hasNext: Boolean)
 
 internal object VerAniMarkup {
     private fun validUrl(url: String): Boolean {
@@ -13,7 +14,9 @@ internal object VerAniMarkup {
         return uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank() && uri.userInfo == null
     }
     private fun absolute(base: String, value: String): String? =
-        runCatching { URI(base).resolve(value.trim()).toString() }.getOrNull()?.takeIf(::validUrl)
+        value.trim().takeIf { it.isNotEmpty() }?.let { raw ->
+            runCatching { URI(base).resolve(raw).toString() }.getOrNull()?.takeIf(::validUrl)
+        }
 
     fun image(element: Element?): String? = element?.let { img ->
         listOf("data-src", "data-lazy-src", "src").asSequence().map { img.attr(it) }
@@ -29,6 +32,26 @@ internal object VerAniMarkup {
         val movie = URI(url).path.orEmpty().contains("/pelicula/") || card.hasClass("pelicula-card")
         VerAniCard(title, url, image(card.selectFirst("img")), movie)
     }.distinctBy { it.url }
+
+    /** Each top panel contains its complete ranking, in site order. */
+    fun ranking(doc: Element, key: String, movie: Boolean): List<VerAniCard> {
+        if (!key.matches(Regex("[a-z_]+"))) return emptyList()
+        val panel = doc.selectFirst("#tops-panel-body-$key") ?: return emptyList()
+        return panel.select("a.tops-card[href]").mapNotNull { link ->
+            val url = absolute(link.baseUri(), link.attr("href"))?.takeIf(::isSiteUrl) ?: return@mapNotNull null
+            val title = link.selectFirst(".tops-card__title")?.text()?.trim().orEmpty()
+            if (title.isBlank()) return@mapNotNull null
+            VerAniCard(title, url, image(link.selectFirst("img")), movie)
+        }.distinctBy { it.url }
+    }
+
+    fun rankingPage(entries: List<VerAniCard>, page: Int): RankingPage {
+        val start = (page.toLong() - 1).coerceAtLeast(0) * 30
+        if (start >= entries.size) return RankingPage(emptyList(), false)
+        val from = start.toInt()
+        val end = minOf(from + 30, entries.size)
+        return RankingPage(entries.subList(from, end), end < entries.size)
+    }
 
     fun hasNext(doc: Element): Boolean = doc.select(".pagination-wrapper a.next[href], .pagination-nav a.next[href]")
         .any { absolute(it.baseUri(), it.attr("href"))?.let(::isSiteUrl) == true }
@@ -59,9 +82,31 @@ internal object VerAniMarkup {
         return raw.groupBy { it.url }.map { (url, choices) -> VerAniServer(url, choices.map { it.language }.distinct().joinToString(" / ")) }
     }
 
+    private fun imageKey(url: String): String? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        val path = uri.path.orEmpty().lowercase()
+            .replace(Regex("-\\d+x\\d+(?=\\.[^.]+$)"), "")
+            .replace(Regex("-e\\d+(?=\\.[^.]+$)"), "")
+        return "${uri.host?.lowercase()}$path"
+    }
+
+    private fun isSiteLogo(doc: Element, candidate: String): Boolean {
+        val key = imageKey(candidate) ?: return false
+        return doc.select(".site-logo img, img.site-logo-img, .custom-logo").mapNotNull(::image)
+            .any { imageKey(it) == key }
+    }
+
+    fun backdrop(doc: Element): String? = image(doc.selectFirst(".anime-hero-bg-image, .pelicula-backdrop-image"))
+        ?.takeUnless { isSiteLogo(doc, it) }
+
     fun poster(doc: Element): String? {
-        val element: Element = doc.selectFirst("meta[property=og:image][content]") ?: return null
-        return absolute(element.baseUri(), element.attr("content"))
+        val explicit = image(doc.selectFirst(".pelicula-poster-image, .anime-poster-image"))
+            ?.takeUnless { isSiteLogo(doc, it) }
+        if (explicit != null) return explicit
+        val metadata = doc.select("meta[property=og:image][content], meta[name=twitter:image][content]")
+            .asSequence().mapNotNull { absolute(it.baseUri(), it.attr("content")) }
+            .firstOrNull { !isSiteLogo(doc, it) }
+        return metadata ?: backdrop(doc)
     }
     fun plot(doc: Element): String? = doc.selectFirst(".anime-hero-description, .pelicula-overview-text")?.text()?.trim()?.takeIf { it.isNotEmpty() }
 }
