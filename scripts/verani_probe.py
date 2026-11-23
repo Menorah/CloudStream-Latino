@@ -39,3 +39,8 @@ for page in ['/dragon-ball/capitulo-1-bulma-y-son-goku/','/tensei-kizoku-kantei-
    res.append(result)
   out({'page':page,'checks':res})
  except Exception as e:out({'page':page,'error':type(e).__name__})
+for page in ['/animes/','/?s=dragon+ball','/dragon-ball/']:
+ try:
+  _,_,_,html=get(ROOT+page); doc=BeautifulSoup(html,'html.parser');card=doc.select_one('.content-card');nextlink=doc.select_one('a.next.page-numbers'); ep=doc.select_one('.temporada-group a.capitulo-card-link');
+  out({'layout':page,'cardChildren':[(x.name,x.get('class')) for x in card.children if getattr(x,'name',None)] if card else None,'cardLinks':[(x.get('class'), bool(x.get('href'))) for x in card.select('a')[:3]] if card else None,'nextParents':[(x.name,x.get('class')) for x in list(nextlink.parents)[:4]] if nextlink else None,'episodeTitle':ep.select_one('.capitulo-card-title').get_text(' ',strip=True) if ep and ep.select_one('.capitulo-card-title') else None,'episodeSeason':ep.find_parent(class_='temporada-group').select_one('.temporada-name').get_text(' ',strip=True) if ep and ep.find_parent(class_='temporada-group').select_one('.temporada-name') else None})
+ except Exception as e:out({'layout':page,'error':type(e).__name__})
