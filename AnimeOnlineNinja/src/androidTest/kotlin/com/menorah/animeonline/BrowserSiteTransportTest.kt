@@ -48,4 +48,15 @@ class BrowserSiteTransportTest {
         }
         assertEquals(403, browser.get("$root/inicio/", emptyMap()).code)
     }
+
+    @Test fun liveSiteWhenRequested() = runBlocking {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
+        val browser = BrowserSiteTransport(context)
+        val page = browser.get("$root/online/", emptyMap())
+        assertEquals("El catálogo real debe responder desde WebView", 200, page.code)
+        assertTrue("El catálogo debe contener series", SiteMarkup.cards(org.jsoup.Jsoup.parse(page.text, page.url)).isNotEmpty())
+        val api = browser.get("$root/wp-json/dooplayer/v1/post/82790?type=tv&source=1", mapOf("Referer" to "$root/episodio/dragon-ball-super-cap-1/"))
+        assertEquals("La API real debe responder desde WebView", 200, api.code)
+        assertTrue(org.json.JSONObject(api.text).optString("embed_url").startsWith("https://"))
+    }
 }
