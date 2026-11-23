@@ -3,7 +3,8 @@ rootProject.name = "CloudstreamPlugins"
 // This file sets what projects are included.
 // All new projects should get automatically included unless specified in the "disabled" variable.
 
-val disabled = listOf<String>()
+// Cinecalidad.my remains experimental: its current host is not supported yet.
+val disabled = listOf("CinecalidadMY")
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
