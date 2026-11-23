@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :CinecalidadAM:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :CinecalidadAM:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
           cat build-log.txt
           if [ "$status" -ne 0 ]; then
@@ -52,7 +52,6 @@ jobs:
           cp VerAni/build/VerAni.cs3 output/
           cp Repelis24CZ/build/Repelis24CZ.cs3 output/
           cp PoseidonHD2/build/PoseidonHD2.cs3 output/
-          cp CinecalidadMY/build/CinecalidadMY.cs3 output/
           cp CinecalidadAM/build/CinecalidadAM.cs3 output/
           cp build/plugins.json output/
           cp repo.json output/
@@ -68,8 +67,6 @@ jobs:
           assert (output / 'Repelis24CZ.cs3').stat().st_size > 0
           assert any(p['url'].endswith('/PoseidonHD2.cs3') for p in plugins), plugins
           assert (output / 'PoseidonHD2.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/CinecalidadMY.cs3') for p in plugins), plugins
-          assert (output / 'CinecalidadMY.cs3').stat().st_size > 0
           assert any(p['url'].endswith('/CinecalidadAM.cs3') for p in plugins), plugins
           assert (output / 'CinecalidadAM.cs3').stat().st_size > 0
           PY
