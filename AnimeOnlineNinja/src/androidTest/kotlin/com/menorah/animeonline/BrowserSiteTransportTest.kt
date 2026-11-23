@@ -62,15 +62,23 @@ class BrowserSiteTransportTest {
     @Test fun livePaginationWhenRequested() = runBlocking {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
         val browser = BrowserSiteTransport(context)
-        for (path in listOf("/online/", "/pelicula/", "/genero/audio-latino/", "/genero/anime-castellano/", "/genero/audio-latino/page/2/")) {
+        val urls = mutableMapOf<String, Set<String>>()
+        for (path in listOf("/online/", "/online/page/2/", "/pelicula/", "/genero/audio-latino/", "/genero/anime-castellano/", "/genero/audio-latino/page/2/")) {
             val start = System.currentTimeMillis()
             val response = browser.get(root + path, emptyMap())
             assertEquals(200, response.code)
             val doc = org.jsoup.Jsoup.parse(response.text, response.url)
+            val isSecond = path.contains("/page/2/")
+            val section = path.substringBefore("/page/").trimEnd('/') + "/"
+            assertTrue("Debe detectar la siguiente página: $path", SiteMarkup.hasNextPage(doc, if (isSecond) 2 else 1, section))
+            urls[path] = SiteMarkup.cards(doc).map { it.url }.toSet()
+            val groups = doc.select("article.item").groupingBy { e -> e.parents().take(3).joinToString(" > ") { it.tagName() + "#" + it.id() + "." + it.className() } }.eachCount()
             val pageLinks = doc.select("a[href*='/page/']").takeLast(10).map { a ->
                 mapOf("href" to a.attr("href"), "class" to a.className(), "parent" to (a.parent()?.className() ?: ""), "text" to a.text())
             }
-            android.util.Log.i("AOPaging", org.json.JSONObject(mapOf("path" to path, "ms" to (System.currentTimeMillis() - start), "cards" to SiteMarkup.cards(doc).size, "links" to pageLinks)).toString())
+            android.util.Log.i("AOPaging", org.json.JSONObject(mapOf("path" to path, "ms" to (System.currentTimeMillis() - start), "cards" to SiteMarkup.cards(doc).size, "groups" to groups, "links" to pageLinks)).toString())
         }
+        assertTrue("La página 2 debe aportar títulos nuevos", (urls.getValue("/genero/audio-latino/page/2/") - urls.getValue("/genero/audio-latino/")).isNotEmpty())
+        assertTrue("La página 2 de animes debe aportar títulos nuevos", (urls.getValue("/online/page/2/") - urls.getValue("/online/")).isNotEmpty())
     }
 }

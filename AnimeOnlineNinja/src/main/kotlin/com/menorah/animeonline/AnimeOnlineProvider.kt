@@ -36,6 +36,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
     private val site = SiteClient.create(context)
     private val posters = PosterCache.create(context)
+    @Volatile private var homeUrls: Set<String> = emptySet()
 
     override val mainPage = mainPageOf(
         "/inicio/" to "Inicio",
@@ -76,8 +77,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
         return response
     }
 
-    private suspend fun cards(document: Document): List<SearchResponse> {
-        val items = SiteMarkup.cards(document)
+    private suspend fun cards(items: List<CatalogCard>): List<SearchResponse> {
         val cached = posters.resolve(items.map { it.poster })
         return items.map { card ->
             val type = if (card.movie) TvType.AnimeMovie else TvType.Anime
@@ -89,16 +89,25 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (request.data == "/inicio/" && page > 1) return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
-        val path = request.data.trimEnd('/') + if (page > 1) "/page/$page/" else "/"
+        // Inicio is a curated, unpaged page; continue with the paged anime
+        // catalogue instead of stopping after its first screen.
+        val home = request.data == "/inicio/"
+        val sitePage = if (home && page > 1) page - 1 else page
+        val section = if (home && page > 1) "/online/" else request.data
+        val path = section.trimEnd('/') + if (sitePage > 1) "/page/$sitePage/" else "/"
         val doc = document(fetch(path))
-        val next = request.data != "/inicio/" && doc.selectFirst(".pagination a[href*='/page/${page + 1}/'], .pagination a.next, a.next.page-numbers, link[rel=next]") != null
-        return newHomePageResponse(HomePageList(request.name, cards(doc)), hasNext = next)
+        val parsed = SiteMarkup.cards(doc)
+        val items = if (home && page == 1) {
+            homeUrls = parsed.map { it.url }.toSet()
+            parsed
+        } else if (home) parsed.filterNot { it.url in homeUrls } else parsed
+        val next = if (home && page == 1) true else SiteMarkup.hasNextPage(doc, sitePage, section)
+        return newHomePageResponse(HomePageList(request.name, cards(items)), hasNext = next)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
-        return cards(document(fetch("/search/?s=${URLEncoder.encode(query.trim(), "UTF-8")}")))
+        return cards(SiteMarkup.cards(document(fetch("/search/?s=${URLEncoder.encode(query.trim(), "UTF-8")}"))))
     }
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
