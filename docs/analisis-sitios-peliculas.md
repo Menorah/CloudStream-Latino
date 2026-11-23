@@ -38,3 +38,5 @@ El prototipo incorpora una vía experimental para enlaces VOE hallados en envolt
 ## Diagnóstico adicional de 123pelispop.pro
 
 La ejecución 45265454583 examinó cinco fichas de películas: las opciones por idioma contenían `data-url="#"`, sin iframe ni fuente de vídeo identificada en la respuesta, y mostraban enlaces de registro. Es una muestra, no prueba de que todas las fichas o series se comporten igual. No se enviaron formularios de registro ni se verificó la reproducción mediante una cuenta.
+
+Tras corregir el arnés, la ejecución 45266242131 reprodujo vídeo de La Odisea específicamente mediante VOE, además de muestras de The Terror 1x1 y Silent Night sin exigir un servidor concreto. Mobland 1x1 devolvió HTTP 404 e Iron Man siguió fallando con un segmento que no era MPEG-TS. Estos resultados acreditan una alternativa VOE en una muestra, no la disponibilidad del catálogo completo; el módulo sigue sin publicarse.
