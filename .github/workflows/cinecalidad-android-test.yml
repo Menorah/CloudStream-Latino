@@ -1,0 +1,38 @@
+name: Pruebas Android de Cinecalidad.my
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['CinecalidadMY/**', '.github/workflows/cinecalidad-android-test.yml']
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verificar catálogo y servidores en Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: ./scripts/run_cinecalidad_android.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pruebas-cinecalidad
+          path: CinecalidadMY/build/reports/androidTests/
+          if-no-files-found: ignore
