@@ -39,10 +39,11 @@ def inspect(page):
         return {'page':page,'label':player.get_text(' ',strip=True),'status':code,'bytes':len(data),'transport_sync':sync,'dmca':b'DMCA' in data,'type':typ}
     except Exception as e: return {'page':page,'error':str(e)[:200]}
 
-home,_=fetch(BASE+'/'); soup=BeautifulSoup(home,'html.parser')
-urls=[]
-for a in soup.select('.movie-item a[href]'):
-    url=urllib.parse.urljoin(BASE,a['href']); p=urllib.parse.urlparse(url)
-    if p.hostname=='repelis24.shop' and p.path.startswith('/pelicula/') and url not in urls: urls.append(url)
-checks=urls[:8]+[BASE+'/pelicula/iron-man-zepn/',BASE+'/episodio/the-terror-1x1/',BASE+'/episodio/the-terror-2x1/']
-notice({'results':[inspect(url) for url in checks]})
+if __name__ == "__main__":
+    home,_=fetch(BASE+'/'); soup=BeautifulSoup(home,'html.parser')
+    urls=[]
+    for a in soup.select('.movie-item a[href]'):
+        url=urllib.parse.urljoin(BASE,a['href']); p=urllib.parse.urlparse(url)
+        if p.hostname=='repelis24.shop' and p.path.startswith('/pelicula/') and url not in urls: urls.append(url)
+    checks=urls[:8]+[BASE+'/pelicula/iron-man-zepn/',BASE+'/episodio/the-terror-1x1/',BASE+'/episodio/the-terror-2x1/']
+    notice({'results':[inspect(url) for url in checks]})

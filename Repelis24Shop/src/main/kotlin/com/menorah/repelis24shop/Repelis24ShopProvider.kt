@@ -34,6 +34,9 @@ class Repelis24ShopProvider : MainAPI() {
         if (response.code == 403 && url != "$mainUrl/") {
             app.get("$mainUrl/", headers = headers, timeout = 15)
             response = app.get(url, headers = headers, timeout = 15)
+        } else if (response.code in listOf(502, 503, 504)) {
+            delay(750)
+            response = app.get(url, headers = headers, timeout = 15)
         }
         check(response.isSuccessful && Repelis24ShopMarkup.site(response.url)) { "RePelis24.shop: HTTP ${response.code}" }
         return Jsoup.parse(response.text, response.url)

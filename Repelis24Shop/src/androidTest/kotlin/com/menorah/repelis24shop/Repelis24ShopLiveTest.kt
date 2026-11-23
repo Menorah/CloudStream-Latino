@@ -20,6 +20,16 @@ class Repelis24ShopLiveTest {
         try { assertEquals("HTTP $path", 200, c.responseCode); return Jsoup.parse(c.inputStream.bufferedReader().use { it.readText() }, c.url.toString()) }
         finally { c.disconnect() }
     }
+    @Test fun nuuploadNumericArrayIsDecodedWithoutExecutingScript() {
+        val source = "https://sv2.ibra.lat/video/"
+        val encoded = source.map { c ->
+            val value = "abc${c.code + 1234}xyz".toByteArray()
+            "\"${android.util.Base64.encodeToString(value, android.util.Base64.NO_WRAP)}\""
+        }.joinToString(",")
+        val html = "var arr=[$encoded]; var dest = \"\"; arr.forEach(function doIt(value) { dest += String.fromCharCode(parseInt(atob(value).replace(/\\D/g,'')) - 1234); });var sesz=\"abc123\";"
+        assertEquals("$source?s=abc123", Repelis24ShopMarkup.media(html))
+        assertNull(Repelis24ShopMarkup.media("no media"))
+    }
     @Test fun catalogueAndSeries() {
         CookieHandler.setDefault(CookieManager())
         doc("/")
