@@ -1,0 +1,47 @@
+package com.menorah.repelis24
+
+import org.jsoup.Jsoup
+import org.junit.Assert.*
+import org.junit.Test
+
+class RepelisMarkupTest {
+    private fun doc(html: String) = Jsoup.parse(html, "https://repelis24.cz/series/game-of-thrones/")
+    @Test fun parsesCardsAndPaginationWithoutAds() {
+        val doc = doc("""
+          <article><a class="dpu-archive-card" href="/peliculas/iron-man/" title="Iron Man"><div class="dpu-archive-c-title">Iron Man</div><img class="dpu-archive-img" src="https://image.tmdb.org/t/p/w500/iron.jpg"><img src="/flag.png"></a></article>
+          <article><a class="dpu-archive-card" href="/series/game-of-thrones/"><div class="dpu-archive-c-title">Juego de Tronos</div></a></article>
+          <a class="dpu-archive-card" href="https://other.example/peliculas/fake/" title="fake"></a><a href="/series/page/2/">2</a>
+        """.trimIndent())
+        val cards = RepelisMarkup.cards(doc)
+        assertEquals(2, cards.size); assertTrue(cards[0].movie); assertFalse(cards[1].movie)
+        assertEquals("https://image.tmdb.org/t/p/w500/iron.jpg", cards[0].image)
+        assertTrue(RepelisMarkup.hasNext(doc, 1)); assertFalse(RepelisMarkup.hasNext(doc, 2))
+    }
+    @Test fun episodesAreSortedAndUseEpisodeIdsNotSlugs() {
+        val doc = doc("""
+          <div class="dpu-episode-card" data-episode="74122" data-season-number="2" data-episode-number="1"><h3 class="dpu-ep-title">Episodio T2</h3></div>
+          <div class="dpu-episode-card" data-episode="74111" data-season-number="1" data-episode-number="1"><h3 class="dpu-ep-title">Invierno</h3><img src="https://image.tmdb.org/a.jpg"></div>
+          <div class="dpu-episode-card" data-episode="javascript:evil" data-season-number="1" data-episode-number="2"></div>
+          <div class="dpu-episode-card" data-episode="74111" data-season-number="1" data-episode-number="1"></div>
+        """.trimIndent())
+        val eps = RepelisMarkup.episodes(doc)
+        assertEquals(2, eps.size); assertEquals(listOf(1, 2), eps.map { it.season })
+        assertEquals("Invierno", eps.first().title); assertEquals("https://repelis24.cz/?p=74111", RepelisMarkup.episodeUrl(eps.first().id))
+    }
+    @Test fun playerLanguageComesFromItsOwnDropdown() {
+        val doc = doc("""
+          <div data-lang="en"><ul><li class="dooplay_player_option" data-post="1" data-type="movie" data-nume="1">Voe</li></ul></div>
+          <div data-lang="mx"><ul><li class="dooplay_player_option" data-post="1" data-type="movie" data-nume="2">Voe</li></ul></div>
+          <div data-lang="es"><ul><li class="dooplay_player_option" data-post="1" data-type="movie" data-nume="trailer">Trailer</li></ul></div>
+        """.trimIndent())
+        val options = RepelisMarkup.options(doc)
+        assertEquals(listOf("Inglés", "Latino"), options.map { it.language })
+        assertEquals(listOf("1", "2"), options.map { it.number })
+    }
+    @Test fun rejectForeignAndMalformedSiteUrls() {
+        assertTrue(RepelisMarkup.siteUrl("https://repelis24.cz/?p=74111"))
+        assertFalse(RepelisMarkup.siteUrl("https://repelis24.cz.evil.test/"))
+        assertFalse(RepelisMarkup.siteUrl("http://repelis24.cz/"))
+        assertFalse(RepelisMarkup.siteUrl("https://evil@repelis24.cz/"))
+    }
+}
