@@ -95,4 +95,66 @@ class VerAniMarkupTest {
         assertEquals(all, first.cards + second.cards + third.cards)
         assertTrue(VerAniMarkup.rankingPage(all, Int.MAX_VALUE).cards.isEmpty())
     }
+    @Test fun `titan seasons include numeric and named urls and unnumbered ovas`() {
+        fun card(slug: String, heading: String, subtitle: String = "") = """
+            <div class="capitulo-card"><a class="capitulo-card-link" href="/titan/$slug/">
+              <img src="/img.jpg"><h3 class="capitulo-card-title">$heading</h3>
+              <span class="capitulo-card-subtitle">$subtitle</span>
+            </a></div>
+        """
+        fun group(num: Int, count: Int): String {
+            val label = if (num == 5) "Especiales" else "Temporada $num"
+            val cards = (count downTo 1).joinToString("") { episode ->
+                val prefix = if (episode % 3 == 0) "capitulo-$episode" else "$episode"
+                card("$prefix-s$num", "Capitulo $episode", "Título $episode")
+            }
+            return """<div class="temporada-group"><span class="temporada-badge">T. $num</span><span class="temporada-name">$label</span>$cards</div>"""
+        }
+        val ovas = (8 downTo 1).joinToString("") { index ->
+            card("ova-nombre-$index", if (index == 8) "La historia: Parte 2" else "OVA nombre $index")
+        }
+        val html = (5 downTo 1).joinToString("") { group(it, mapOf(1 to 25, 2 to 12, 3 to 22, 4 to 28, 5 to 2).getValue(it)) } +
+            """<div class="temporada-group"><span class="temporada-badge">O</span><span class="temporada-name">OVAS</span>$ovas
+                <div class="capitulo-card pelicula-card"><a class="capitulo-card-link" href="/titan/pelicula/no/"><h3 class="capitulo-card-title">Capitulo 9</h3></a></div>
+                <a class="capitulo-card-link" href="https://otro.test/capitulo-99/"><h3 class="capitulo-card-title">Capitulo 99</h3></a>
+              </div>"""
+        val episodes = VerAniMarkup.episodes(Jsoup.parse(html, base))
+        assertEquals(mapOf(0 to 8, 1 to 25, 2 to 12, 3 to 22, 4 to 28, 5 to 2), episodes.groupingBy { it.season }.eachCount())
+        assertEquals((1..8).toList(), episodes.filter { it.season == 0 }.map { it.number })
+        assertEquals("OVA nombre 1", episodes.first().title)
+        assertEquals("La historia: Parte 2", episodes[7].title)
+        assertEquals("OVAS", episodes.first().seasonLabel)
+        assertEquals("Especiales", episodes.last().seasonLabel)
+        assertEquals((1..28).toList(), episodes.filter { it.season == 4 }.map { it.number })
+    }
+    @Test fun `heading determines episode numbers even when slug is a name`() {
+        val html = """
+           <div class="temporada-group"><span class="temporada-badge">T. 5</span><span class="temporada-name">Temporada 5</span>
+             <a class="capitulo-card-link" href="/demon/los-pilares-se-reunen/"><h3 class="capitulo-card-title">Capitulo 8</h3><p class="capitulo-card-subtitle">Los pilares se reúnen</p></a>
+             <a class="capitulo-card-link" href="/demon/para-vencer-a-muzan/"><h3 class="capitulo-card-title">Capitulo 1</h3><p class="capitulo-card-subtitle">Para vencer a Muzan</p></a>
+           </div>
+           <div class="temporada-group"><span class="temporada-badge">T. 20</span><span class="temporada-name">Temporada 20: Shinobi</span>
+             <a class="capitulo-card-link" href="/naruto/500-felices-nupcias/"><h3 class="capitulo-card-title">Capitulo 500</h3></a>
+           </div>
+        """
+        val episodes = VerAniMarkup.episodes(Jsoup.parse(html, base))
+        assertEquals(listOf(1, 8, 500), episodes.map { it.number })
+        assertEquals(listOf(5, 5, 20), episodes.map { it.season })
+        assertEquals("Shinobi", episodes.last().seasonLabel)
+    }
+    @Test fun `episode slug fallback and duplicates are scoped to a season`() {
+        val html = """
+          <div class="temporada-group"><span class="temporada-name">Temporada 1</span>
+            <a class="capitulo-card-link" href="/s/2-algo/"><span class="capitulo-card-title">Algo</span></a>
+            <a class="capitulo-card-link" href="/s/2-algo/"><span class="capitulo-card-title">Algo duplicado</span></a>
+          </div>
+          <div class="temporada-group"><span class="temporada-name">Temporada 2</span>
+            <a class="capitulo-card-link" href="/s/2-algo/"><span class="capitulo-card-title">Algo</span></a>
+          </div>
+        """
+        val episodes = VerAniMarkup.episodes(Jsoup.parse(html, base))
+        assertEquals(2, episodes.size)
+        assertEquals(listOf(1, 2), episodes.map { it.season })
+        assertEquals(listOf(2, 2), episodes.map { it.number })
+    }
 }

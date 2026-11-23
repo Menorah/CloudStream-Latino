@@ -4,7 +4,10 @@ import org.jsoup.nodes.Element
 import java.net.URI
 
 data class VerAniCard(val title: String, val url: String, val poster: String?, val movie: Boolean)
-data class VerAniEpisode(val title: String, val url: String, val poster: String?, val season: Int, val number: Int)
+data class VerAniEpisode(
+    val title: String, val url: String, val poster: String?, val season: Int, val number: Int,
+    val seasonLabel: String? = null,
+)
 data class VerAniServer(val url: String, val language: String)
 internal data class RankingPage(val cards: List<VerAniCard>, val hasNext: Boolean)
 
@@ -56,19 +59,55 @@ internal object VerAniMarkup {
     fun hasNext(doc: Element): Boolean = doc.select(".pagination-wrapper a.next[href], .pagination-nav a.next[href]")
         .any { absolute(it.baseUri(), it.attr("href"))?.let(::isSiteUrl) == true }
 
-    fun episodes(doc: Element): List<VerAniEpisode> = doc.select(".temporada-group a.capitulo-card-link[href]").mapNotNull { link ->
-        val url = absolute(link.baseUri(), link.attr("href"))?.takeIf(::isSiteUrl) ?: return@mapNotNull null
-        if (!URI(url).path.orEmpty().contains("/capitulo-")) return@mapNotNull null
-        val group = link.closest(".temporada-group")
-        val seasonText = group?.selectFirst(".temporada-name, .temporada-badge")?.text().orEmpty()
-        val season = Regex("\\d+").find(seasonText)?.value?.toIntOrNull() ?: 1
-        val chapter = link.selectFirst(".capitulo-card-title")?.text().orEmpty()
-        val number = Regex("\\d+").find(chapter)?.value?.toIntOrNull()
-            ?: Regex("/capitulo-(\\d+)").find(URI(url).path.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
-            ?: return@mapNotNull null
-        val title = link.selectFirst(".capitulo-card-subtitle")?.text()?.trim()?.takeIf { it.isNotEmpty() } ?: chapter.ifBlank { "Episodio $number" }
-        VerAniEpisode(title, url, image(link.selectFirst("img")), season, number)
-    }.distinctBy { it.url }.sortedWith(compareBy<VerAniEpisode> { it.season }.thenBy { it.number })
+    private data class EpisodeCandidate(val url: String, val title: String, val poster: String?, val number: Int?)
+
+    /** The page groups cards by season; URLs may be named, numeric, or capitulo-prefixed. */
+    fun episodes(doc: Element): List<VerAniEpisode> {
+        val chapterNumber = Regex("(?i)^(?:cap[ií]tulo|episodio|ep\\.?|chapter)\\s*#?\\s*(\\d+)\\b")
+        val slugNumber = Regex("(?i)^(?:(?:capitulo|episodio)-)?(\\d+)(?:-|$)")
+        val seasonNumber = Regex("\\d+")
+        val episodes = mutableListOf<VerAniEpisode>()
+        for (group in doc.select(".temporada-group")) {
+            val badge = group.selectFirst(".temporada-badge")?.text().orEmpty().trim()
+            val seasonName = group.selectFirst(".temporada-name")?.text().orEmpty().trim()
+            val season = seasonNumber.find(badge)?.value?.toIntOrNull()
+                ?: Regex("(?i)temporada\\s*(\\d+)").find(seasonName)?.groupValues?.get(1)?.toIntOrNull()
+                ?: if (badge.equals("O", true) || Regex("(?i)\\b(?:ovas?|oads?|especiales?)\\b").containsMatchIn(seasonName)) 0 else 1
+            val customLabel = seasonName.replace(Regex("(?i)^temporada\\s*\\d+\\s*[:–-]?\\s*"), "")
+                .trim().takeIf { it.isNotEmpty() }
+            val candidates = group.select("a.capitulo-card-link[href]").mapNotNull { link ->
+                if (link.closest(".pelicula-card") != null) return@mapNotNull null
+                val url = absolute(link.baseUri(), link.attr("href"))?.takeIf(::isSiteUrl) ?: return@mapNotNull null
+                val path = URI(url).path.orEmpty()
+                if (path.split('/').any { it.equals("pelicula", true) }) return@mapNotNull null
+                val heading = link.selectFirst(".capitulo-card-title")?.text()?.trim().orEmpty()
+                val subtitle = link.selectFirst(".capitulo-card-subtitle")?.text()?.trim().orEmpty()
+                val number = chapterNumber.find(heading)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: slugNumber.find(path.trimEnd('/').substringAfterLast('/'))?.groupValues?.get(1)?.toIntOrNull()
+                val title = subtitle.ifBlank { heading }.ifBlank { number?.let { "Episodio $it" }.orEmpty() }
+                if (title.isBlank()) return@mapNotNull null
+                EpisodeCandidate(url, title, image(link.selectFirst("img")), number)
+            }.distinctBy { it.url }
+
+            // Unnumbered specials are presented newest-first by VerAni. Number
+            // them in reverse card order without using incidental numbers in titles.
+            val used = candidates.mapNotNull { it.number }.toMutableSet()
+            val assigned = mutableMapOf<String, Int>()
+            for ((index, candidate) in candidates.withIndex().toList().asReversed()) {
+                if (candidate.number != null) continue
+                var number = candidates.size - index
+                while (number in used) number++
+                assigned[candidate.url] = number
+                used.add(number)
+            }
+            episodes += candidates.map { candidate ->
+                VerAniEpisode(candidate.title, candidate.url, candidate.poster, season,
+                    candidate.number ?: assigned.getValue(candidate.url), customLabel)
+            }
+        }
+        return episodes.distinctBy { it.season to it.url }
+            .sortedWith(compareBy<VerAniEpisode> { it.season }.thenBy { it.number })
+    }
 
     fun servers(doc: Element): List<VerAniServer> {
         val raw = doc.select(".servidor-tab[data-url]").mapNotNull { tab ->
