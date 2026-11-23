@@ -48,6 +48,36 @@ class VerAniLiveTest {
         val servers = VerAniMarkup.servers(episode)
         assertTrue(servers.any { it.language.contains("Latino") })
         assertTrue(servers.any { it.url.contains("player.zilla-networks.com/m3u8/") })
+        // Report actual segment accessibility separately: a valid playlist alone
+        // does not prove playback and the host may deny a particular network.
+        val stream = servers.firstOrNull { it.url.contains("player.zilla-networks.com/m3u8/") }
+        if (stream != null) {
+            val checks = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val record = org.json.JSONObject()
+                try {
+                    val manifest = java.net.URL(stream.url).openConnection() as java.net.HttpURLConnection
+                    manifest.connectTimeout = 8000; manifest.readTimeout = 8000
+                    manifest.setRequestProperty("Referer", "https://verani.me/dragon-ball/capitulo-1-bulma-y-son-goku/")
+                    try {
+                        record.put("manifestStatus", manifest.responseCode)
+                        if (manifest.responseCode == 200) {
+                            val text = manifest.inputStream.bufferedReader().use { it.readText() }
+                            record.put("isHls", text.trimStart().startsWith("#EXTM3U"))
+                            val first = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
+                            if (first != null) {
+                                val segment = java.net.URL(java.net.URL(stream.url), first).openConnection() as java.net.HttpURLConnection
+                                segment.connectTimeout = 8000; segment.readTimeout = 8000
+                                segment.setRequestProperty("Referer", "https://verani.me/dragon-ball/capitulo-1-bulma-y-son-goku/")
+                                segment.setRequestProperty("Range", "bytes=0-1023")
+                                try { record.put("segmentStatus", segment.responseCode) } finally { segment.disconnect() }
+                            }
+                        }
+                    } finally { manifest.disconnect() }
+                } catch (e: Exception) { record.put("error", e.javaClass.simpleName) }
+                record
+            }
+            android.util.Log.i("VerAniProbe", checks.toString())
+        }
         val movie = doc("/pelicula/el-nino-y-la-bestia/")
         assertTrue(VerAniMarkup.servers(movie).any { it.language.contains("Japonés") })
         assertNotNull(VerAniMarkup.poster(movie)); assertNotNull(VerAniMarkup.plot(movie))
