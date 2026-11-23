@@ -32,7 +32,7 @@ jobs:
             python3 - <<'PYLOG'
           import pathlib
           lines = pathlib.Path('build-log.txt').read_text(errors='replace').splitlines()
-          relevant = [s for s in lines if s.startswith('e: ') or s.startswith('> ') or 'What went wrong:' in s or 'Could not ' in s or 'Failed to ' in s]
+          relevant = [s for s in lines if s.startswith('e: ') or (s.startswith('> ') and not s.startswith('> Task ')) or 'What went wrong:' in s or 'Could not ' in s or 'Failed to ' in s]
           print('::error::' + (' | '.join(relevant[:12]) or 'Ver registro de compilación').replace('%', '%25'))
           PYLOG
           fi

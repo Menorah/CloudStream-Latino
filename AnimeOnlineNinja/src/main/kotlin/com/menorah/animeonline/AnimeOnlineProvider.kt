@@ -49,7 +49,7 @@ class AnimeOnlineProvider : MainAPI() {
                 val response = app.get(domain + relative, interceptor = cf)
                 if (response.isSuccessful) return response
                 last = IllegalStateException("HTTP ${response.code} en $domain")
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: java.util.concurrent.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 last = e
