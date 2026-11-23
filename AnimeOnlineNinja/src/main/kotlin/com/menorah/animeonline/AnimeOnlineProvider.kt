@@ -176,9 +176,13 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
         val url = runCatching { URI(referer).resolve(cleaned).toString() }.getOrNull() ?: return
         if (!(url.startsWith("https://") || url.startsWith("http://")) || !visited.add("${language.orEmpty()}|$url")) return
         val path = URI(url).path.orEmpty().lowercase()
-        if (path.endsWith(".m3u8") || path.endsWith(".mp4")) {
-            val type = if (path.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            callback(newExtractorLink(name, sourceLabel(language, name), url, type) { this.referer = referer })
+        if ((path.endsWith(".m3u8") || path.endsWith(".mp4")) && !MediaCheck.isKnownPlayerPage(url)) {
+            // An extension is only a hint: expired media can return HTML or error_nofile.
+            if (!MediaCheck.definitelyBroken(url, referer)) {
+                val type = if (path.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                val host = URI(url).host.orEmpty().removePrefix("www.").ifBlank { name }
+                callback(newExtractorLink(name, sourceLabel(language, host), url, type) { this.referer = referer })
+            }
             return
         }
         // Buffer callbacks briefly so a suspendable builder can preserve DRM and all
@@ -188,7 +192,13 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
             attempt { loadExtractor(url, referer, subtitles) { found.add(it) } }
         }
         val links = synchronized(found) { found.toList() }
-        for (link in links) callback(withLanguage(link, language))
+        for (link in links) {
+            // Preserve DRM and extractor headers. Do not treat network failures or
+            // access challenges as proof that a protected stream is unavailable.
+            if (link is DrmExtractorLink || !MediaCheck.definitelyBroken(link.url, link.referer, link.headers)) {
+                callback(withLanguage(link, language))
+            }
+        }
         if (links.isNotEmpty()) return
         val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = SiteClient.REQUEST_SECONDS) } ?: return
         if (!response.isSuccessful) return
@@ -201,7 +211,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
             servers.map { server ->
                 async {
                     permits.withPermit {
-                        withTimeoutOrNull(8_000L) {
+                        withTimeoutOrNull(12_000L) {
                             resolve(server.url, response.url, subtitles, callback, visited, depth + 1, server.language)
                         }
                     }
