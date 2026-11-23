@@ -17,7 +17,7 @@ home,_=get(BASE+'/'); soup=BeautifulSoup(home,'html.parser'); urls=[]
 for a in soup.select('a[href]'):
     url=urllib.parse.urljoin(BASE,a['href']); u=urllib.parse.urlparse(url)
     if u.hostname=='123pelispop.pro' and (u.path.startswith('/pelicula/') or u.path.startswith('/serie/')) and url not in urls: urls.append(url)
-samples=[BASE+'/pelicula/iron-man-m1726e/']+urls[:5]
+samples=[BASE+'/pelicula/iron-man-m1726e/']+[u for u in urls if '/pelicula/' in u][:4]+[u for u in urls if '/serie/' in u][:2]
 results=[]; scripts=[]
 for url in samples:
     try:
@@ -36,7 +36,7 @@ for url in scripts[:15]:
     try:
         text,_=get(url)
         chunks=[]
-        for m in list(re.finditer(r'data-url|sgty|register|iframe',text,re.I))[:8]: chunks.append(text[max(0,m.start()-100):m.start()+220])
+        for m in list(re.finditer(r'function\s+createplayer|createplayer\s*=|\.sgty|data-url|register',text,re.I))[:8]: chunks.append(text[max(0,m.start()-100):m.start()+500])
         if chunks: findings.append({'url':url,'snippets':chunks[:4]})
     except Exception as e: findings.append({'url':url,'error':str(e)[:100]})
 notice({'scripts':findings})
