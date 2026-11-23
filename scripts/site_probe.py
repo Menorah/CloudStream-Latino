@@ -66,3 +66,24 @@ for path in ('/online/', '/search/?s=dragon+ball', '/episodio/dragon-ball-super-
             val={'path':path,'sample':sample.samples[:1], 'options':sample.options[:3]}
             print('::notice::'+json.dumps(val, ensure_ascii=True).replace('%','%25').replace('\n','%0A').replace('\r','%0D'), flush=True)
     except Exception as e: print('::notice::sample error '+str(e)[:160],flush=True)
+
+# Probe the site's documented player endpoint, without publishing the video URL.
+from urllib.parse import urlencode, urlsplit
+for kind in ('rest','ajax'):
+    try:
+        data={'action':'doo_player_ajax','post':'82790','nume':'1','type':'tv'}
+        if kind=='rest':
+            req=Request(ROOT+'/wp-json/dooplayer/v1/post/82790?type=tv&source=1',headers={'User-Agent':'Mozilla/5.0','Referer':ROOT+'/episodio/dragon-ball-super-cap-1/'})
+        else:
+            req=Request(ROOT+'/wp-admin/admin-ajax.php',data=urlencode(data).encode(),headers={'User-Agent':'Mozilla/5.0','Referer':ROOT+'/episodio/dragon-ball-super-cap-1/','X-Requested-With':'XMLHttpRequest'})
+        with urlopen(req,timeout=8) as r:
+            parsed=json.loads(r.read(200000)); embed=parsed.get('embed_url','')
+            print('::notice::'+json.dumps({'api':kind,'status':r.status,'keys':list(parsed.keys()),'embed_host':urlsplit(embed).hostname,'embed_format':embed[:30] if '<iframe' in embed else 'url'}),flush=True)
+            if embed.startswith('http'):
+                req2=Request(embed,headers={'User-Agent':'Mozilla/5.0','Referer':ROOT+'/episodio/dragon-ball-super-cap-1/'})
+                with urlopen(req2,timeout=8) as p:
+                    body=p.read(1024*1024).decode('utf-8','replace')
+                    import re
+                    matches=re.findall(r'<(?:script|div)[^>]+(?:id=["\']msp(?:-data)?["\']|data-api=)[^>]*>',body)
+                    print('::notice::'+json.dumps({'api':kind,'player_host':urlsplit(p.url).hostname,'size':len(body),'msp_tags':matches[:3]}).replace('%','%25'),flush=True)
+    except Exception as e: print('::notice::'+json.dumps({'api':kind,'error':str(e)[:160]}),flush=True)
