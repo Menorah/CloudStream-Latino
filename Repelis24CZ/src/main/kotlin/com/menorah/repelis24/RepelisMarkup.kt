@@ -55,6 +55,16 @@ internal object RepelisMarkup {
         }
         PlayerOption(post, number, type, language)
     }.distinctBy { Triple(it.post, it.number, it.type) }
+    /** Episode player navigation may be rendered only after client-side selection.
+     * Probe a bounded set of DooPlay source slots without guessing their languages. */
+    fun fallbackEpisodeOptions(url: String): List<PlayerOption> {
+        if (!siteUrl(url)) return emptyList()
+        val uri = URI(url)
+        if (uri.path !in listOf("", "/")) return emptyList()
+        val ids = uri.rawQuery.orEmpty().split('&').filter { it.startsWith("p=") }.map { it.substringAfter('=') }
+        val id = ids.singleOrNull()?.takeIf { it.matches(Regex("[0-9]+")) } ?: return emptyList()
+        return (1..12).map { PlayerOption(id, it.toString(), "tv", "Idioma no indicado") }
+    }
     fun title(doc: Element): String? = doc.selectFirst("h1.dpu-hero-title, h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
     fun poster(doc: Element): String? = image(doc.selectFirst(".dpu-hero-poster img, .dpu-poster img, .poster img, img[itemprop=image]"))
         ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.let { resolve(doc.baseUri(), it) }

@@ -38,6 +38,12 @@ class RepelisMarkupTest {
         assertEquals(listOf("Inglés", "Latino"), options.map { it.language })
         assertEquals(listOf("1", "2"), options.map { it.number })
     }
+    @Test fun episodeFallbackDoesNotGuessLanguage() {
+        val opts = RepelisMarkup.fallbackEpisodeOptions("https://repelis24.cz/?p=74111")
+        assertEquals(12, opts.size); assertTrue(opts.all { it.type == "tv" && it.language == "Idioma no indicado" })
+        assertTrue(RepelisMarkup.fallbackEpisodeOptions("https://other.example/?p=74111").isEmpty())
+        assertTrue(RepelisMarkup.fallbackEpisodeOptions("https://repelis24.cz/?p=1&p=2").isEmpty())
+    }
     @Test fun rejectForeignAndMalformedSiteUrls() {
         assertTrue(RepelisMarkup.siteUrl("https://repelis24.cz/?p=74111"))
         assertFalse(RepelisMarkup.siteUrl("https://repelis24.cz.evil.test/"))
