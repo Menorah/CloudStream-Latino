@@ -1,0 +1,16 @@
+name: Diagnóstico navegación Cinecalidad.my
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/cinecalidad_my_navigation_probe.py', '.github/workflows/cinecalidad-my-navigation.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/cinecalidad_my_navigation_probe.py

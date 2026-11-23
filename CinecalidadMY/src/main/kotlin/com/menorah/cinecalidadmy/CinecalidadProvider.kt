@@ -18,7 +18,16 @@ class CinecalidadProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie)
-    override val mainPage = mainPageOf("/" to "Películas", "/genero-peliculas/accion/" to "Acción", "/genero-peliculas/animacion/" to "Animación", "/genero-peliculas/comedia/" to "Comedia", "/genero-peliculas/drama/" to "Drama", "/genero-peliculas/terror/" to "Terror")
+    override val mainPage = mainPageOf(
+        "/" to "Películas", "/genero-peliculas/destacada/" to "Destacadas",
+        "/genero-peliculas/accion/" to "Acción", "/genero-peliculas/animacion/" to "Animación",
+        "/genero-peliculas/aventura/" to "Aventura", "/genero-peliculas/ciencia-ficcion/" to "Ciencia ficción",
+        "/genero-peliculas/comedia/" to "Comedia", "/genero-peliculas/crimen/" to "Crimen",
+        "/genero-peliculas/drama/" to "Drama", "/genero-peliculas/familiar/" to "Familiar",
+        "/genero-peliculas/fantasia/" to "Fantasía", "/genero-peliculas/misterio/" to "Misterio",
+        "/genero-peliculas/romance/" to "Romance", "/genero-peliculas/suspenso/" to "Suspenso",
+        "/genero-peliculas/terror/" to "Terror"
+    )
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(CinecalidadMarkup.siteUrl(url)) { "Dirección fuera de Cinecalidad.my" }
