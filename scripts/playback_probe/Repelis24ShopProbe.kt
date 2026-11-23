@@ -26,10 +26,22 @@ object PlaybackProbe {
                     val series = provider.load("https://repelis24.shop/serie/the-terror/") as? TvSeriesLoadResponse
                         ?: error("series load failed")
                     check(series.episodes.any { it.season == 2 && it.episode == 3 }) { "missing episodes: ${series.episodes.size}" }
-                    testPlayback(context, provider, "movie", movie)
-                    testPlayback(context, provider, "episode Mobland", "https://repelis24.shop/episodio/mobland-1x1/")
-                    // Keep the previously failing sample mandatory: do not hide unavailable links.
-                    testPlayback(context, provider, "movie Iron Man", "https://repelis24.shop/pelicula/iron-man-zepn/")
+                    val samples = listOf(
+                        Triple("movie La Odisea", movie, null),
+                        Triple("VOE La Odisea", movie, "Voe"),
+                        Triple("episode Mobland", "https://repelis24.shop/episodio/mobland-1x1/", null),
+                        Triple("episode The Terror", "https://repelis24.shop/episodio/the-terror-1x1/", null),
+                        Triple("movie Silent Night", "https://repelis24.shop/pelicula/silent-night-venganza-silenciosa-zsbl/", null),
+                        Triple("movie Iron Man", "https://repelis24.shop/pelicula/iron-man-zepn/", null)
+                    )
+                    val errors = mutableListOf<String>()
+                    for ((label, url, host) in samples) {
+                        try { testPlayback(context, provider, label, url, host) }
+                        catch (e: TimeoutCancellationException) { errors.add("$label: timeout") }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Throwable) { errors.add("$label: ${e.message}") }
+                    }
+                    check(errors.isEmpty()) { "unavailable samples: $errors" }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
@@ -38,14 +50,16 @@ object PlaybackProbe {
         }
     }
 
-    private suspend fun testPlayback(context: Context, provider: Repelis24ShopProvider, label: String, page: String) {
+    private suspend fun testPlayback(context: Context, provider: Repelis24ShopProvider, label: String, page: String, host: String? = null) {
         val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
         val ok = withContext(Dispatchers.IO) { provider.loadLinks(page, false, {}, { links.add(it) }) }
         val found = synchronized(links) { links.toList() }
         Log.i("CSPlaybackProbe", "$label extracted=${found.size} labels=${found.map { it.name }}")
         check(ok && found.isNotEmpty()) { "$label produced no links" }
         var errors = mutableListOf<String>()
-        for (link in found.take(8)) {
+        val candidates = if (host == null) found else found.filter { it.name.contains(host, ignoreCase = true) }
+        check(candidates.isNotEmpty()) { "$label produced no $host links" }
+        for (link in candidates.take(6)) {
             try {
                 play(context, link)
                 Log.i("CSPlaybackProbe", "PASS $label frame and playback")
@@ -57,7 +71,7 @@ object PlaybackProbe {
         error("$label no playable link: $errors")
     }
 
-    private suspend fun play(context: Context, link: ExtractorLink) = withTimeout(35_000) {
+    private suspend fun play(context: Context, link: ExtractorLink) = withTimeout(20_000) {
         val texture = SurfaceTexture(0)
         val surface = Surface(texture)
         val headers = link.headers.toMutableMap()

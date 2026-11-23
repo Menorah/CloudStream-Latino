@@ -42,5 +42,6 @@ class Repelis24ShopLiveTest {
         assertEquals(9, Repelis24ShopMarkup.episodes(doc("/temporada/the-terror-2/"), 2).size)
         val players = Repelis24ShopMarkup.players(doc("/pelicula/iron-man-zepn/"))
         assertTrue(players.any { it.language == "Latino" }); assertTrue(players.any { it.language == "Castellano" }); assertTrue(players.any { it.language == "Subtitulado" })
+        assertTrue("Falta opción VOE", players.any { Repelis24ShopMarkup.voeFromWrapper(it.url) != null })
     }
 }
