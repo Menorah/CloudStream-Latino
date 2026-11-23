@@ -15,6 +15,47 @@ internal object SiteMarkup {
             ?.let { value -> runCatching { URI(img.baseUri()).resolve(value).toString() }.getOrNull() }
     }
 
+    /** Prefer the actual detail header, not the site's generic header h1. */
+    fun detailTitle(document: Element): String? =
+        document.selectFirst("#single .sheader .data h1, .sheader .data h1, .sheader h1")
+            ?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: document.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun artworkUrl(base: String, value: String): String? {
+        val cleaned = value.trim().takeIf { it.isNotEmpty() } ?: return null
+        val uri = runCatching { URI(base).resolve(cleaned) }.getOrNull() ?: return null
+        return uri.toString().takeIf {
+            uri.scheme?.lowercase() in listOf("http", "https") && !uri.host.isNullOrBlank() && uri.userInfo == null
+        }
+    }
+
+    /** DooPlay places the actual backdrop in the #dt_contenedor CSS rule. */
+    fun backdrop(document: Element): String? {
+        val rule = Regex("(?is)#dt_contenedor\\s*\\{([^}]*)}")
+        val backgroundUrl = Regex("""(?is)background(?:-image)?\s*:[^;}]*?url\(\s*(['"]?)(.*?)\1\s*\)""")
+        val inline = document.selectFirst("#dt_contenedor[style]")?.attr("style").orEmpty()
+        val declarations = sequenceOf(inline) + document.select("style").asSequence().flatMap { style ->
+            rule.findAll(style.data()).map { it.groupValues[1] }
+        }
+        val background = declarations.mapNotNull { css ->
+            backgroundUrl.findAll(css).mapNotNull { match -> artworkUrl(document.baseUri(), match.groupValues[2]) }.firstOrNull()
+        }.firstOrNull()
+        if (background != null) return background
+        // If the layout has no backdrop, the gallery is still specific to this title.
+        return document.select("#dt_galery .g-item a[href]").asSequence()
+            .mapNotNull { artworkUrl(it.baseUri(), it.attr("href")) }.firstOrNull()
+    }
+
+    /** WordPress thumbnails often end in -185x278; use only after it actually downloads. */
+    fun originalPoster(thumbnail: String?): String? {
+        val url = thumbnail?.takeIf(PosterCache::isProtectedPoster) ?: return null
+        val original = url.replace(Regex("-\\d+x\\d+(?=\\.[A-Za-z0-9]+(?:[?#]|$))"), "")
+        return original.takeIf { it != url }
+    }
+
+    fun displayedPoster(thumbnail: String?, original: String?, cached: Map<String, String>): String? =
+        cached[original] ?: cached[thumbnail] ?: thumbnail
+
     fun cards(document: Element): List<CatalogCard> {
         // Archive pages also contain a large, randomly ordered featured carousel.
         // It repeats on every page and must not be mistaken for paged results.
