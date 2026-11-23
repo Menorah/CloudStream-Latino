@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Non-interactive public-page diagnostics; never submit forms or follow ad links."""
-import concurrent.futures, json, re, urllib.request
+import concurrent.futures, json, re, sys, urllib.request
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
@@ -46,6 +46,9 @@ def inspect(item):
    result['pages'].append({'url':url,'final':final,'status':code,'title':s.title.get_text(strip=True) if s.title else '', 'h1': [h.get_text(' ',strip=True) for h in s.select('h1')[:2]],'cards':links,'elements':elements,'scripts':scripts})
   except Exception as e: result['pages'].append({'url':url,'error':str(e)})
  return result
+batch = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+items = list(PAGES.items())
+if batch: items = items[(batch - 1) * 7:batch * 7]
 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
- for result in executor.map(inspect,PAGES.items()):
+ for result in executor.map(inspect,items):
   print('::notice::'+json.dumps(result,ensure_ascii=True).replace('%','%25').replace('\n','%0A')[:60000])

@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m pip install beautifulsoup4
-      - run: python3 scripts/catalogue_sites_probe.py
+      - run: python3 scripts/catalogue_sites_probe.py 1
+      - run: python3 scripts/catalogue_sites_probe.py 2
       - run: python3 scripts/poseidon_probe.py
       - run: python3 scripts/poseidon_js_probe.py
