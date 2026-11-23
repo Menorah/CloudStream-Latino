@@ -36,7 +36,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
     private val site = SiteClient.create(context)
     private val posters = PosterCache.create(context)
-    @Volatile private var homeUrls: Set<String> = emptySet()
+    private val catalogue = CatalogPager { path -> document(fetch(path)) }
 
     override val mainPage = mainPageOf(
         "/inicio/" to "Inicio",
@@ -89,20 +89,8 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Inicio is a curated, unpaged page; continue with the paged anime
-        // catalogue instead of stopping after its first screen.
-        val home = request.data == "/inicio/"
-        val sitePage = if (home && page > 1) page - 1 else page
-        val section = if (home && page > 1) "/online/" else request.data
-        val path = section.trimEnd('/') + if (sitePage > 1) "/page/$sitePage/" else "/"
-        val doc = document(fetch(path))
-        val parsed = SiteMarkup.cards(doc)
-        val items = if (home && page == 1) {
-            homeUrls = parsed.map { it.url }.toSet()
-            parsed
-        } else if (home) parsed.filterNot { it.url in homeUrls } else parsed
-        val next = if (home && page == 1) true else SiteMarkup.hasNextPage(doc, sitePage, section)
-        return newHomePageResponse(HomePageList(request.name, cards(items)), hasNext = next)
+        val result = catalogue.get(request.data, page)
+        return newHomePageResponse(HomePageList(request.name, cards(result.cards)), hasNext = result.hasNext)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {

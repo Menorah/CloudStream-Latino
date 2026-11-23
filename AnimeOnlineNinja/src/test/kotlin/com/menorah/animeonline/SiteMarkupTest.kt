@@ -72,4 +72,12 @@ class SiteMarkupTest {
         assertTrue(SiteMarkup.hasNextPage(responsive, 2, "/genero/audio-latino/"))
         assertFalse(SiteMarkup.hasNextPage(Jsoup.parse(""), 1, "/genero/audio-latino/"))
     }
+    @Test fun `archive pages ignore the repeated featured carousel`() {
+        val html = """
+            <div id="featured-titles"><article class="item"><div class="data"><h3><a href="/online/featured/">Featured</a></h3></div></article></div>
+            <div id="archive-content"><article class="item"><div class="data"><h3><a href="/online/actual/">Actual</a></h3></div></article></div>
+        """
+        val cards = SiteMarkup.cards(Jsoup.parse(html, "https://ww4.animeonline.ninja/online/"))
+        assertEquals(listOf("Actual"), cards.map { it.title })
+    }
 }
