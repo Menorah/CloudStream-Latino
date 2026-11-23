@@ -1,26 +1,41 @@
-"""Inspect HLS error metadata without logging media URLs or identifiers."""
-import json, re, urllib.request, urllib.parse, urllib.error, http.cookiejar
+"""Check public host-player structure and bounded media response without logging URLs."""
+import json,re,urllib.request,urllib.parse,urllib.error
 from bs4 import BeautifulSoup
+from jsbeautifier.unpackers import packer
 ROOT='https://verani.me'; UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-jar=http.cookiejar.CookieJar();opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-def out(d):print('::notice::'+json.dumps(d,ensure_ascii=False).replace('%','%25'),flush=True)
-def get(url, referer=None, byte_range=False):
+def out(d): print('::notice::'+json.dumps(d,ensure_ascii=False).replace('%','%25'),flush=True)
+def get(url,ref=None,limit=512000,ran=False):
  h={'User-Agent':UA};
- if referer:h['Referer']=referer
- if byte_range:h['Range']='bytes=0-1023'
- req=urllib.request.Request(url,headers=h)
- with opener.open(req,timeout=12) as r:return r.status,r.headers,r.geturl(),r.read(131072 if not byte_range else 1024)
-path='/dragon-ball/capitulo-1-bulma-y-son-goku/'
-try:
- _,_,_,body=get(ROOT+path);doc=BeautifulSoup(body,'html.parser')
- u=next(t['data-url'] for t in doc.select('.servidor-tab[data-url]') if urllib.parse.urlsplit(t['data-url']).hostname=='player.zilla-networks.com')
- status,headers,final,body=get(u,ROOT+path);lines=body.decode('utf8','replace').splitlines(); media=[s.strip() for s in lines if s.strip() and not s.startswith('#')]; parsed=urllib.parse.urlsplit(final)
- out({'manifest':{'status':status,'host':parsed.hostname,'cookiesCount':len(list(jar)), 'setCookie':bool(headers.get('Set-Cookie')),'firstTag':next((x.split(':')[0] for x in lines if x.startswith('#EXT-X-MAP')),None)}})
- target=urllib.parse.urljoin(final,media[0]);parts=urllib.parse.urlsplit(target);out({'resource':{'host':parts.hostname,'pathKinds':[(('file' if '.' in x else 'part'),len(x)) for x in parts.path.split('/') if x][:8],'queryKeys':[k for k,v in urllib.parse.parse_qsl(parts.query)]}})
- for label,range_ in [('no-range',False),('range',True)]:
-  try:
-   status,headers,_,data=get(target,ROOT+path,range_);out({'check':label,'status':status,'type':headers.get('Content-Type'),'bytes':len(data)})
-  except urllib.error.HTTPError as e:
-   data=e.read(1200).decode('utf8','replace');data=re.sub(r'https?://[^\s"<>]+','[url]',data);data=re.sub(r'[A-Za-z0-9_\-/+=]{40,}','[value]',data)
-   out({'check':label,'status':e.code,'server':e.headers.get('Server'),'contentType':e.headers.get('Content-Type'),'body':data[:350]})
-except Exception as e:out({'error':type(e).__name__,'status':getattr(e,'code',None)})
+ if ref:h['Referer']=ref
+ if ran:h['Range']='bytes=0-1023'
+ with urllib.request.urlopen(urllib.request.Request(url,headers=h),timeout=9) as r:return r.status,r.headers.get('Content-Type','').split(';')[0],r.geturl(),r.read(limit)
+for page in ['/dragon-ball/capitulo-1-bulma-y-son-goku/','/tensei-kizoku-kantei-skill-de-nariagaru/capitulo-33-sentimientos-duraderos/','/pelicula/el-nino-y-la-bestia/']:
+ try:
+  _,_,_,html=get(ROOT+page);doc=BeautifulSoup(html,'html.parser');res=[]
+  for tab in doc.select('.servidor-tab[data-url]'):
+   url=tab['data-url']; host=urllib.parse.urlsplit(url).hostname
+   if host not in ('www.mp4upload.com','byselapuix.com','animeav1.uns.bio'): continue
+   result={'host':host,'language':tab.get('data-idioma')}
+   try:
+    if host=='www.mp4upload.com':
+     match=re.search(r'mp4upload\.com/(?:embed-)?([A-Za-z0-9]+)',url)
+     if match:url='https://www.mp4upload.com/embed-'+match.group(1)+'.html'
+    st,mime,final,body=get(url,ROOT+page);text=body.decode('utf8','replace');html=BeautifulSoup(text,'html.parser');
+    unpacked=[]
+    for script in html.select('script'):
+     content=script.string or script.get_text()
+     if 'eval(function(p,a,c,k,e,' in content:
+      try:unpacked.append(packer.unpack(content))
+      except Exception:pass
+    joined='\n'.join(unpacked)
+    candidate=re.search(r'player\.src\([\s\S]*?src\s*:\s*["\'](https?[^"\']+)|player\.src\(["\'](https?[^"\']+)|(?:file|src)\s*:\s*["\'](https?[^"\']+)',joined)
+    result.update({'status':st,'contentType':mime,'title':html.title.get_text(strip=True)[:60] if html.title else None,'packed':len(unpacked),'matchesMedia':bool(candidate),'frames':len(html.select('iframe[src]'))})
+    if candidate:
+     video=next(x for x in candidate.groups() if x)
+     try:
+      code,typ,finalv,data=get(video,url,1024,True); result['media']={'status':code,'type':typ,'bytes':len(data),'hls':data.startswith(b'#EXTM3U'),'mp4':b'ftyp' in data[:32]}
+     except Exception as e:result['media']={'status':getattr(e,'code',None),'error':type(e).__name__}
+   except Exception as e:result.update({'error':type(e).__name__,'status':getattr(e,'code',None)})
+   res.append(result)
+  out({'page':page,'checks':res})
+ except Exception as e:out({'page':page,'error':type(e).__name__})
