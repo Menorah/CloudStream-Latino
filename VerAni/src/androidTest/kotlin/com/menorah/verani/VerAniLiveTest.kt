@@ -41,6 +41,26 @@ class VerAniLiveTest {
         assertTrue(page2.any { candidate -> page1.none { it.url == candidate.url } })
         val movies = VerAniMarkup.cards(doc("/peliculas/")); assertTrue(movies.any { it.movie && it.poster != null })
         val search = doc("/?s=dragon+ball"); assertTrue(VerAniMarkup.cards(search).isNotEmpty()); assertTrue(VerAniMarkup.hasNext(search))
+        val animeTops = doc("/tops/animes/")
+        for (key in listOf("rated_anime", "votes_anime", "viewed", "commented", "reactions", "fav_anime")) {
+            val ranking = VerAniMarkup.ranking(animeTops, key, false)
+            assertTrue("Ranking de anime vacío: $key", ranking.isNotEmpty())
+            assertTrue(ranking.all { !it.movie && isSiteUrl(it.url) })
+        }
+        val movieTops = doc("/tops/peliculas/")
+        for (key in listOf("peli_viewed", "peli_commented", "peli_reactions", "fav_peli")) {
+            val ranking = VerAniMarkup.ranking(movieTops, key, true)
+            assertTrue("Ranking de películas vacío: $key", ranking.isNotEmpty())
+            assertTrue(ranking.all { it.movie && isSiteUrl(it.url) })
+        }
+        val top = VerAniMarkup.ranking(animeTops, "rated_anime", false)
+        assertTrue(top.size > 30)
+        val top1 = VerAniMarkup.rankingPage(top, 1); val top2 = VerAniMarkup.rankingPage(top, 2)
+        assertTrue(top1.hasNext); assertTrue(top2.cards.isNotEmpty())
+        assertTrue(top1.cards.map { it.url }.intersect(top2.cards.map { it.url }.toSet()).isEmpty())
+        val example = doc("/kiniro-no-corda-primo-passo/")
+        assertNotNull(VerAniMarkup.backdrop(example))
+        assertEquals("La ficha sin portada específica debe usar su fondo, no el logo", VerAniMarkup.backdrop(example), VerAniMarkup.poster(example))
         val details = doc("/dragon-ball/"); val episodes = VerAniMarkup.episodes(details)
         assertTrue("Se espera la lista completa de episodios", episodes.size > 100)
         assertTrue(episodes.first().number < episodes.last().number)
@@ -80,6 +100,8 @@ class VerAniLiveTest {
         }
         val movie = doc("/pelicula/el-nino-y-la-bestia/")
         assertTrue(VerAniMarkup.servers(movie).any { it.language.contains("Japonés") })
+        assertEquals(VerAniMarkup.image(movie.selectFirst(".pelicula-poster-image")), VerAniMarkup.poster(movie))
+        assertEquals(VerAniMarkup.image(movie.selectFirst(".pelicula-backdrop-image")), VerAniMarkup.backdrop(movie))
         assertNotNull(VerAniMarkup.poster(movie)); assertNotNull(VerAniMarkup.plot(movie))
         android.util.Log.i("VerAniProbe", org.json.JSONObject(mapOf("animePage1" to page1.size, "animePage2" to page2.size, "movies" to movies.size, "episodes" to episodes.size, "episodeServers" to servers.size, "movieServers" to VerAniMarkup.servers(movie).size)).toString())
     }

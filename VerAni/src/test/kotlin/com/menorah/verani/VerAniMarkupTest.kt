@@ -45,4 +45,54 @@ class VerAniMarkupTest {
         assertTrue(VerAniMarkup.hasNext(Jsoup.parse("""<div class="pagination-wrapper"><a class="next" href="/animes/page/2/">Siguiente</a></div>""", base)))
         assertFalse(VerAniMarkup.hasNext(Jsoup.parse("""<div class="pagination-wrapper"><a class="next" href="https://evil.test/">Siguiente</a></div>""", base)))
     }
+    @Test fun `details use backdrop instead of generic site logo`() {
+        val doc = Jsoup.parse("""
+          <meta property="og:image" content="https://verani.me/wp-content/uploads/site-logo-1024x401.png">
+          <div class="site-logo"><img class="site-logo-img" src="https://verani.me/wp-content/uploads/site-logo-e1767498152326.png"></div>
+          <div class="anime-hero-background"><img class="anime-hero-bg-image" src="https://image.tmdb.org/t/p/w1280/backdrop.jpg"></div>
+        """, base)
+        assertEquals("https://image.tmdb.org/t/p/w1280/backdrop.jpg", VerAniMarkup.poster(doc))
+        assertEquals(VerAniMarkup.poster(doc), VerAniMarkup.backdrop(doc))
+    }
+    @Test fun `movie artwork uses actual poster and separate backdrop`() {
+        val doc = Jsoup.parse("""
+          <meta property="og:image" content="https://image.tmdb.org/social.jpg">
+          <img class="pelicula-backdrop-image" src="https://image.tmdb.org/wide.jpg">
+          <img class="pelicula-poster-image" src="https://image.tmdb.org/portrait.jpg">
+        """, base)
+        assertEquals("https://image.tmdb.org/portrait.jpg", VerAniMarkup.poster(doc))
+        assertEquals("https://image.tmdb.org/wide.jpg", VerAniMarkup.backdrop(doc))
+        val noBackdrop = Jsoup.parse("""<meta property="og:image" content="/poster.jpg">""", base)
+        assertEquals("https://verani.me/poster.jpg", VerAniMarkup.poster(noBackdrop))
+        assertNull(VerAniMarkup.backdrop(noBackdrop))
+        assertNull(VerAniMarkup.poster(Jsoup.parse("""<meta property="og:image" content="">""", base)))
+    }
+    @Test fun `rankings retain order and type and ignore foreign duplicate and unrelated sections`() {
+        val doc = Jsoup.parse("""
+          <div id="tops-panel-body-rated_anime">
+           <a class="tops-card" href="/first/"><img src="/a.jpg"><span class="tops-card__title">Primero</span></a>
+           <a class="tops-card" href="https://other.example/a/"><span class="tops-card__title">Externo</span></a>
+           <a class="tops-card" href="/second/"><span class="tops-card__title">Segundo</span></a>
+           <a class="tops-card" href="/first/"><span class="tops-card__title">Duplicado</span></a>
+          </div>
+          <div id="tops-panel-body-peli_viewed"><a class="tops-card" href="/pelicula/one/"><span class="tops-card__title">Película</span></a></div>
+          <div id="tops-panel-body-user_reactions"><a class="tops-card" href="/user/"><span class="tops-card__title">Usuario</span></a></div>
+        """, base)
+        val anime = VerAniMarkup.ranking(doc, "rated_anime", false)
+        assertEquals(listOf("Primero", "Segundo"), anime.map { it.title })
+        assertFalse(anime.first().movie)
+        assertEquals("https://verani.me/a.jpg", anime.first().poster)
+        val movie = VerAniMarkup.ranking(doc, "peli_viewed", true).single()
+        assertTrue(movie.movie); assertEquals("Película", movie.title)
+        assertTrue(VerAniMarkup.ranking(doc, "bad] selector", false).isEmpty())
+    }
+    @Test fun `ranking pagination includes every entry without repetition`() {
+        val all = (1..65).map { VerAniCard("$it", "https://verani.me/$it/", null, false) }
+        val first = VerAniMarkup.rankingPage(all, 1)
+        val second = VerAniMarkup.rankingPage(all, 2)
+        val third = VerAniMarkup.rankingPage(all, 3)
+        assertTrue(first.hasNext); assertTrue(second.hasNext); assertFalse(third.hasNext)
+        assertEquals(all, first.cards + second.cards + third.cards)
+        assertTrue(VerAniMarkup.rankingPage(all, Int.MAX_VALUE).cards.isEmpty())
+    }
 }
