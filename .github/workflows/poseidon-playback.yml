@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['PoseidonHD2/**', 'scripts/playback_probe/**', '.github/workflows/poseidon-playback.yml']
+    paths: ['PoseidonHD2/**', 'scripts/playback_probe/PoseidonProbe.kt', 'scripts/playback_probe/run_poseidon_app.sh', '.github/workflows/poseidon-playback.yml']
 permissions:
   contents: read
 jobs:

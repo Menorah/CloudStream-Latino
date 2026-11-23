@@ -50,7 +50,7 @@ object PlaybackProbe {
                 return
             } catch (e: TimeoutCancellationException) { errors.add("playback timeout") }
             catch (e: CancellationException) { throw e }
-            catch (t: Throwable) { errors.add("${t.javaClass.simpleName}: ${t.message}") }
+            catch (t: Throwable) { errors.add("${link.name}: " + generateSequence(t) { it.cause }.take(5).joinToString(" -> ") { "${it.javaClass.simpleName}: ${it.message?.take(150)}" }) }
         }
         error("$label no playable link: $errors")
     }
