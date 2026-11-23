@@ -60,4 +60,16 @@ class SiteMarkupTest {
         assertNull(languageLabel("desconocido"))
         assertEquals("Castellano", languageLabel("ES"))
     }
+    @Test fun `pagination follows the next page of the requested section only`() {
+        val base = "https://ww4.animeonline.ninja/genero/audio-latino/"
+        val first = Jsoup.parse("""<div class="pagination"><a class="inactive" href="/genero/audio-latino/page/2/">2</a></div>""", base)
+        assertTrue(SiteMarkup.hasNextPage(first, 1, "/genero/audio-latino/"))
+        assertFalse(SiteMarkup.hasNextPage(first, 2, "/genero/audio-latino/"))
+        assertFalse(SiteMarkup.hasNextPage(first, 1, "/genero/anime-castellano/"))
+        val other = Jsoup.parse("""<div class="pagination"><a href="https://evil.test/genero/audio-latino/page/2/">2</a></div>""", base)
+        assertFalse(SiteMarkup.hasNextPage(other, 1, "/genero/audio-latino/"))
+        val responsive = Jsoup.parse("""<div class="resppages"><a href="/genero/audio-latino/page/3/"></a></div>""", base)
+        assertTrue(SiteMarkup.hasNextPage(responsive, 2, "/genero/audio-latino/"))
+        assertFalse(SiteMarkup.hasNextPage(Jsoup.parse(""), 1, "/genero/audio-latino/"))
+    }
 }

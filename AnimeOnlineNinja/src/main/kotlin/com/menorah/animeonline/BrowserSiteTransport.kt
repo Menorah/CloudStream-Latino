@@ -27,7 +27,7 @@ internal class BrowserSiteTransport(
     // Optional response source for deterministic on-device tests; production leaves it null.
     private val testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
 ) : SiteTransport {
-    private val slots = Semaphore(2)
+    private val slots = Semaphore(4)
 
     override suspend fun get(url: String, headers: Map<String, String>): SiteResponse {
         require(isSiteUrl(url)) { "URL ajena al sitio" }

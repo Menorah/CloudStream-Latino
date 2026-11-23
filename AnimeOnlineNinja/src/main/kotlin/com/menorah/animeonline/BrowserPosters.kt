@@ -24,7 +24,7 @@ internal class BrowserPosters(
     private val context: Context,
     private val testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
 ) : PosterFetcher {
-    private val slots = Semaphore(2)
+    private val slots = Semaphore(4)
     override suspend fun get(urls: List<String>): Map<String, ByteArray> = slots.withPermit {
         val safe = urls.filter(PosterCache::isProtectedPoster).distinct().take(64)
         if (safe.isEmpty()) emptyMap() else load(safe)
@@ -38,6 +38,7 @@ internal class BrowserPosters(
         val allowedUrls = urls.toSet()
         var view: WebView? = null
         var started = false
+        var fallbackStarted = false
         fun finish() {
             if (!finished.compareAndSet(false, true)) return
             handler.post { view?.stopLoading(); view?.destroy(); view = null }
@@ -61,8 +62,15 @@ internal class BrowserPosters(
                         if (bytes != null && bytes.size <= PosterCache.MAX_IMAGE_BYTES && PosterCache.isImage(bytes)) result[url] = bytes
                     }
                 }
-                if (json?.optBoolean("done") == true) finish()
-                else handler.postDelayed(poll, if (item == null) 120L else 10L)
+                if (json?.optBoolean("done") == true) {
+                    if (result.isEmpty() && !fallbackStarted) {
+                        // Some protected networks need an actual site navigation to
+                        // establish their browser session before image fetches work.
+                        fallbackStarted = true
+                        started = false
+                        current.loadUrl("https://ww4.animeonline.ninja/inicio/")
+                    } else finish()
+                } else handler.postDelayed(poll, if (item == null) 120L else 10L)
             }
         }
         val timeout = Runnable { finish() }
@@ -88,13 +96,15 @@ internal class BrowserPosters(
                         if (finished.get() || started || !url.startsWith("https://ww4.animeonline.ninja/")) return
                         started = true
                         val targets = JSONArray(urls).toString()
-                        val script = """(function(){window.__posterQueue=[];window.__posterDone=false;let a=$targets;let n=0;async function worker(){while(n<a.length){let u=a[n++];try{let r=await fetch(u,{credentials:'same-origin'});if(!r.ok)continue;let b=await r.blob();if(!b.type.startsWith('image/')||b.size>${PosterCache.MAX_IMAGE_BYTES})continue;let d=await new Promise((ok,fail)=>{let f=new FileReader();f.onload=()=>ok(f.result);f.onerror=fail;f.readAsDataURL(b);});window.__posterQueue.push({url:u,data:d});}catch(e){}}}Promise.all(Array.from({length:6},worker)).then(()=>{window.__posterDone=true;});})();"""
+                        val script = """(function(){window.__posterQueue=[];window.__posterDone=false;let a=$targets;let n=0;async function worker(){while(n<a.length){let u=a[n++];try{let c=new AbortController();let timer=setTimeout(()=>c.abort(),4000);let r;try{r=await fetch(u,{credentials:'same-origin',signal:c.signal});}finally{clearTimeout(timer);}if(!r.ok)continue;let b=await r.blob();if(!b.type.startsWith('image/')||b.size>${PosterCache.MAX_IMAGE_BYTES})continue;let d=await new Promise((ok,fail)=>{let f=new FileReader();f.onload=()=>ok(f.result);f.onerror=fail;f.readAsDataURL(b);});window.__posterQueue.push({url:u,data:d});}catch(e){}}}Promise.all(Array.from({length:10},worker)).then(()=>{window.__posterDone=true;});})();"""
                         view.evaluateJavascript(script, null)
                         handler.postDelayed(poll, 120L)
                     }
                 }
                 handler.postDelayed(timeout, 12_000L)
-                web.loadUrl("https://ww4.animeonline.ninja/inicio/")
+                // Establish the same origin without downloading the heavy homepage
+                // a second time for every category. Cookies remain shared by WebView.
+                web.loadDataWithBaseURL("https://ww4.animeonline.ninja/inicio/", "<html><body></body></html>", "text/html", "UTF-8", null)
             } catch (_: Exception) { finish() }
         }
     }

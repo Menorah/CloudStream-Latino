@@ -30,6 +30,15 @@ internal object SiteMarkup {
             CatalogCard(title, url, image(card.selectFirst("img")), movie)
         }.distinctBy { it.url }
 
+    /** Only follow a next-page link belonging to the requested section. */
+    fun hasNextPage(document: Element, page: Int, section: String): Boolean {
+        val expected = section.trimEnd('/') + "/page/${page + 1}/"
+        return document.select(".pagination a[href], .resppages a[href], a.next.page-numbers[href], link[rel=next][href]").any { link ->
+            val uri = runCatching { URI(link.absUrl("href")) }.getOrNull()
+            isSiteUrl(uri?.toString().orEmpty()) && uri?.path.orEmpty().trimEnd('/') == expected.trimEnd('/')
+        }
+    }
+
     fun episodes(document: Element): List<EpisodeData> =
         document.select("#seasons ul.episodios li").mapIndexedNotNull { index, item ->
             val link = item.selectFirst(".episodiotitle a[href]") ?: return@mapIndexedNotNull null
