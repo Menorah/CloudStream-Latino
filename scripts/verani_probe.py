@@ -3,7 +3,7 @@ import json, re, urllib.request, urllib.parse, urllib.error
 from bs4 import BeautifulSoup
 ROOT='https://verani.me'; UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'
 def get(url, referer=ROOT+'/', count=1800000):
-    req=urllib.request.Request(urllib.parse.urljoin(ROOT,url),headers={'User-Agent':UA,'Referer':referer,'Range':'bytes=0-1048575'})
+    req=urllib.request.Request(urllib.parse.urljoin(ROOT,url),headers={'User-Agent':UA,'Referer':referer})
     with urllib.request.urlopen(req,timeout=10) as r: return r.status, r.headers.get('Content-Type','').split(';')[0],r.geturl(),r.read(count).decode('utf8','replace')
 def clean(s):
     s=re.sub(r'https?:\\?/\\?/[^\s"\'<>]+',lambda m: 'https://'+(urllib.parse.urlsplit(m[0].replace('\\/','/')).hostname or 'redacted')+'/…',str(s))
