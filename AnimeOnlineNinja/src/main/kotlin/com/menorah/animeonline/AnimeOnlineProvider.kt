@@ -38,13 +38,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     private val posters = PosterCache.create(context)
     private val catalogue = CatalogPager { path -> document(fetch(path)) }
 
-    override val mainPage = mainPageOf(
-        "/inicio/" to "Inicio",
-        "/online/" to "Animes",
-        "/pelicula/" to "Películas",
-        "/genero/audio-latino/" to "Audio latino",
-        "/genero/anime-castellano/" to "Castellano"
-    )
+    override val mainPage = mainPageOf(*CatalogSections.all.toTypedArray())
 
     private fun sitePath(url: String): String {
         if (!url.startsWith("http")) return if (url.startsWith("/")) url else "/$url"
@@ -89,7 +83,7 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val result = catalogue.get(request.data, page)
+        val result = catalogue.get(request.data, page, CatalogSections.initialPageCount(request.data))
         return newHomePageResponse(HomePageList(request.name, cards(result.cards)), hasNext = result.hasNext)
     }
 
