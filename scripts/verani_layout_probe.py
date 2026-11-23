@@ -13,9 +13,13 @@ def page(path):
 
 try:
     s=page('/tops/peliculas/')
-    for section in s.select('section.tops-panel'):
+    panels=[]
+    for section in s.select('section.tops-panel[data-tops-group]'):
         cards=section.select('a.tops-card[href]')
-        if not cards: continue
-        el=cards[0]
-        output({'group':section.get('data-tops-group'),'id':section.get('class'),'heading':section.select_one('.tops-panel__title').get_text(' ',strip=True),'count':len(cards),'first':{'url':el.get('href'),'title':el.select_one('.tops-card__title').get_text(' ',strip=True) if el.select_one('.tops-card__title') else None,'image':el.select_one('img').get('src') if el.select_one('img') else None},'panelid':section.select_one('[id^=tops-panel-body-]').get('id') if section.select_one('[id^=tops-panel-body-]') else None})
-except Exception as e: output({'error':type(e).__name__})
+        body=section.select_one('[id^=tops-panel-body-]')
+        heading=section.select_one('.tops-panel__title')
+        if cards and body and heading and section.get('data-tops-group') in ('anime','pelicula'):
+            panels.append({'group':section.get('data-tops-group'), 'panelid':body.get('id'), 'heading':heading.get_text(' ',strip=True), 'count':len(cards)})
+    output({'rankings':panels})
+except Exception as e:
+    output({'error':type(e).__name__})
