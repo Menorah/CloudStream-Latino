@@ -29,6 +29,27 @@ class CinecalidadAMLiveTest {
         assertTrue(CinecalidadAMMarkup.hasNext(year1,1)); assertTrue(CinecalidadAMMarkup.cards(year2).any { x -> CinecalidadAMMarkup.cards(year1).none { it.url == x.url } })
         assertTrue(CinecalidadAMMarkup.cards(doc("/release/1915/")).isNotEmpty())
     }
+    @Test fun reportedSeriesHaveAllListedEpisodes() {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return
+        val samples = listOf(
+            "jeffrey-epstein-asquerosamente-rico" to 1,
+            "vivir-100-anos-los-secretos-de-las-zonas-azules" to 1,
+            "pinky-y-cerebro" to 3,
+            "la-ninera" to 6
+        )
+        val pathPattern = Regex("/ver-el-episodio/[^/]+-[0-9]+x[0-9]+/?$")
+        for ((slug, seasons) in samples) {
+            val page = doc("/ver-serie/$slug/")
+            val listed = page.select("a[href*=/ver-el-episodio/]").map { it.absUrl("href") }.filter {
+                CinecalidadAMMarkup.siteUrl(it) && pathPattern.matches(java.net.URI(it).path)
+            }.toSet()
+            val parsed = CinecalidadAMMarkup.episodes(page)
+            assertTrue("$slug sin episodios en el sitio", listed.size >= 4)
+            assertEquals("Episodios incompletos en $slug", listed, parsed.map { it.url }.toSet())
+            assertEquals("Temporadas incompletas en $slug", (1..seasons).toList(), parsed.map { it.season }.distinct())
+            assertTrue("Falta $slug 1x1", parsed.any { it.season == 1 && it.number == 1 && it.poster != null })
+        }
+    }
     @Test fun catalogMovieAndSeries() {
         if (InstrumentationRegistry.getArguments().getString("live") != "true") return
         val first=doc("/"); val second=doc("/page/2/"); val a=CinecalidadAMMarkup.cards(first); val b=CinecalidadAMMarkup.cards(second)
