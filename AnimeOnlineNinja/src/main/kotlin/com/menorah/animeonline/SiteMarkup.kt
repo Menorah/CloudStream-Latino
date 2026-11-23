@@ -15,8 +15,11 @@ internal object SiteMarkup {
             ?.let { value -> runCatching { URI(img.baseUri()).resolve(value).toString() }.getOrNull() }
     }
 
-    fun cards(document: Element): List<CatalogCard> =
-        document.select("article.item, .result-item").mapNotNull { card ->
+    fun cards(document: Element): List<CatalogCard> {
+        // Archive pages also contain a large, randomly ordered featured carousel.
+        // It repeats on every page and must not be mistaken for paged results.
+        val content = document.selectFirst("#archive-content") ?: document
+        return content.select("article.item, .result-item").mapNotNull { card ->
             val link = card.selectFirst(".data h3 a[href], .details .title a[href], h3.title a[href], .image a[href], .poster a[href]") ?: return@mapNotNull null
             val url = link.absUrl("href").takeIf { it.startsWith("http") } ?: return@mapNotNull null
             val path = runCatching { URI(url).path.orEmpty() }.getOrDefault("")
@@ -29,6 +32,16 @@ internal object SiteMarkup {
             if (title.isBlank()) return@mapNotNull null
             CatalogCard(title, url, image(card.selectFirst("img")), movie)
         }.distinctBy { it.url }
+    }
+
+    /** Only follow a next-page link belonging to the requested section. */
+    fun hasNextPage(document: Element, page: Int, section: String): Boolean {
+        val expected = section.trimEnd('/') + "/page/${page + 1}/"
+        return document.select(".pagination a[href], .resppages a[href], a.next.page-numbers[href], link[rel=next][href]").any { link ->
+            val uri = runCatching { URI(link.absUrl("href")) }.getOrNull()
+            isSiteUrl(uri?.toString().orEmpty()) && uri?.path.orEmpty().trimEnd('/') == expected.trimEnd('/')
+        }
+    }
 
     fun episodes(document: Element): List<EpisodeData> =
         document.select("#seasons ul.episodios li").mapIndexedNotNull { index, item ->

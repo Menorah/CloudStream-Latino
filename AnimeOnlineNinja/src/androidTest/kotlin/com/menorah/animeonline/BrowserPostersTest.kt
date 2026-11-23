@@ -19,9 +19,10 @@ class BrowserPostersTest {
     private fun response(type: String, data: ByteArray) = WebResourceResponse(type, null, 200, "OK", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(data))
 
     @Test fun imageIsFetchedInWebViewAndCanBeDecodedFromLocalCache() = runBlocking {
+        var homeRequests = 0
         val browser = BrowserPosters(context) { req ->
             when (req.url.path) {
-                "/inicio/" -> response("text/html", "<html><body>Home</body></html>".toByteArray())
+                "/inicio/" -> { homeRequests++; response("text/html", "<html><body>Home</body></html>".toByteArray()) }
                 "/wp-content/uploads/test.png" -> response("image/png", png)
                 else -> null
             }
@@ -34,7 +35,26 @@ class BrowserPostersTest {
             val file = java.io.File(java.net.URI(local))
             assertTrue(file.readBytes().contentEquals(png))
             assertNotNull("Android debe poder decodificar el archivo", BitmapFactory.decodeFile(file.absolutePath))
+            assertEquals("No debe descargar la portada del sitio para obtener imágenes", 0, homeRequests)
         } finally { cacheDir.deleteRecursively() }
+    }
+
+    @Test fun fallsBackToSiteNavigationWhenSyntheticPageCannotFetch() = runBlocking {
+        var imageRequests = 0
+        var homeRequests = 0
+        val browser = BrowserPosters(context) { req ->
+            when (req.url.path) {
+                "/inicio/" -> { homeRequests++; response("text/html", "<html><body>Home</body></html>".toByteArray()) }
+                "/wp-content/uploads/test.png" -> {
+                    imageRequests++
+                    if (imageRequests == 1) WebResourceResponse("text/html", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+                    else response("image/png", png)
+                }
+                else -> null
+            }
+        }
+        assertTrue(browser.get(listOf(url))[url]!!.contentEquals(png))
+        assertEquals(1, homeRequests)
     }
 
     @Test fun livePosterWhenRequested() = runBlocking {
