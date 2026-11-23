@@ -5,11 +5,13 @@ import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import kotlinx.coroutines.*
 
 // Added to a temporary build only; never part of the published plugin.
@@ -77,7 +79,10 @@ object PlaybackProbe {
         val headers = link.headers.toMutableMap()
         if (link.referer.isNotBlank() && headers.keys.none { it.equals("Referer", true) }) headers["Referer"] = link.referer
         val factory = DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers)
-        val media = DefaultMediaSourceFactory(factory).createMediaSource(MediaItem.fromUri(link.url))
+        val item = MediaItem.Builder().setUri(link.url).apply {
+            if (link.type == ExtractorLinkType.M3U8) setMimeType(MimeTypes.APPLICATION_M3U8)
+        }.build()
+        val media = DefaultMediaSourceFactory(factory).createMediaSource(item)
         val player = ExoPlayer.Builder(context).build()
         try {
             player.setVideoSurface(surface)
