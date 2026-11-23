@@ -1,11 +1,11 @@
 # Análisis preliminar de los sitios solicitados
 
-Fecha: 23 de noviembre de 2026. Este documento es una investigación inicial, **no una lista de complementos implementados o verificados**. Los resultados dependen de la red y de la fecha. El diagnóstico HTTP reproducible es `.github/workflows/catalogue-diagnostics.yml`; la ejecución 45217497897 inspeccionó una portada y, salvo excepciones, una ficha o página de reproducción por sitio. No se enviaron formularios ni se siguieron anuncios.
+Fecha: 23 de noviembre de 2026. Este documento es una investigación inicial, **no una lista de todos los complementos implementados o verificados**. Los resultados dependen de la red y de la fecha. El diagnóstico HTTP reproducible es `.github/workflows/catalogue-diagnostics.yml`; la ejecución 45217497897 inspeccionó una portada y, salvo excepciones, una ficha o página de reproducción por sitio. No se enviaron formularios ni se siguieron anuncios.
 
 | Sitio | Observación inicial | Pendiente |
 | --- | --- | --- |
 | repelis24.shop | La portada respondió HTTP 200; la ficha muestreada devolvió 403 desde Actions. | Ver acceso en Android y reproductores, películas, series y búsqueda. |
-| repelis24.cz | WordPress/Dooplay; ficha muestra varios servidores por idioma. | Investigar resolución AJAX y probar películas, episodios y paginación. |
+| repelis24.cz | Implementado en `Repelis24CZ`: catálogos, búsqueda, películas, temporadas y resolución AJAX. Pruebas Android aprobaron paginación, 73 episodios de Juego de Tronos y enlaces de muestra de película y episodio. | La reproducción final depende de extractores y hosts. En episodios cargados dinámicamente se desconoce el idioma y no se inventa. |
 | pelissmart.com | Catálogo y ficha accesibles en el diagnóstico. | Determinar si los reproductores ofrecen fuentes completas, búsqueda y series. |
 | pelisplus.fit | Catálogo y página `/play/` accesibles; el ejemplo utiliza un reproductor que pide registro tras 10 segundos. | No tratar el ejemplo como un enlace a una película completa; comprobar si hay otras fuentes auténticas. |
 | repelishd.surf | Catálogo Next.js y reproductor PlayLatinSRC en la ficha examinada. | Investigar el reproductor, búsqueda, paginación y temporadas. |
