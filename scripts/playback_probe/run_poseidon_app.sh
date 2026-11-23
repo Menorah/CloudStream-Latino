@@ -11,7 +11,7 @@ p='PoseidonHD2/build.gradle.kts'
 s=open(p).read().replace('dependencies {','dependencies {\n    compileOnly("androidx.media3:media3-exoplayer:1.9.3")\n    compileOnly("androidx.media3:media3-exoplayer-hls:1.9.3")',1)
 open(p,'w').write(s)
 PY
-./gradlew :PoseidonHD2:make --stacktrace
+./gradlew -PenablePoseidon=true :PoseidonHD2:make --stacktrace
 curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cloudstream.apk
 adb install -r /tmp/cloudstream.apk
 package=com.lagradost.cloudstream3.prerelease

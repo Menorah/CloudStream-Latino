@@ -1,24 +1,24 @@
 # CloudStream Latino
 
-Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [PoseidonHD 2](https://www.poseidonhd2.co/) y [Cinecalidad.am](https://www.cinecalidad.am/), en fase beta. Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
+Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/) y [Cinecalidad.am](https://www.cinecalidad.am/), en fase beta. Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
 
 ## Instalación
 
-El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json`, `AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `PoseidonHD2.cs3` y `CinecalidadAM.cs3` en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
+El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json`, `AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3` y `CinecalidadAM.cs3` en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
 
-1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los cinco complementos.
+1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los cuatro complementos.
 2. En CloudStream abre **Ajustes → Extensiones → Repositorios → Añadir repositorio**.
 3. Pega esta URL:
 
    `https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo.json`
 
-4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **PoseidonHD2**, **CinecalidadAM** o los que desees y activa los proveedores en español si es necesario.
+4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **CinecalidadAM** o los que desees y activa los proveedores en español si es necesario.
 
 Como alternativa para pruebas privadas, descarga el artefacto `AnimeOnlineNinja` desde la ejecución de Actions, extrae el `.cs3` deseado e impórtalo localmente en CloudStream si tu versión admite instalación de archivos locales. La descarga del artefacto requiere iniciar sesión en GitHub.
 
 ## Compilación
 
-Necesitas JDK 17, Android SDK 35 y acceso a los repositorios Maven/JitPack y a las releases de CloudStream. Ejecuta `./gradlew make makePluginsJson`. Los paquetes se generan en `AnimeOnlineNinja/build/AnimeOnlineNinja.cs3`, `VerAni/build/VerAni.cs3`, `Repelis24CZ/build/Repelis24CZ.cs3`, `PoseidonHD2/build/PoseidonHD2.cs3` y `CinecalidadAM/build/CinecalidadAM.cs3`; el índice, en `build/plugins.json`. El flujo de ramas y PR solo sube un artefacto; únicamente una ejecución exitosa de `main` actualiza la release. Si las políticas de Actions restringen la escritura, habilita el permiso de escritura de contenidos para el flujo de publicación.
+Necesitas JDK 17, Android SDK 35 y acceso a los repositorios Maven/JitPack y a las releases de CloudStream. Ejecuta `./gradlew make makePluginsJson`. Los paquetes se generan en `AnimeOnlineNinja/build/AnimeOnlineNinja.cs3`, `VerAni/build/VerAni.cs3`, `Repelis24CZ/build/Repelis24CZ.cs3` y `CinecalidadAM/build/CinecalidadAM.cs3`; el índice, en `build/plugins.json`. El flujo de ramas y PR solo sube un artefacto; únicamente una ejecución exitosa de `main` actualiza la release. Si las políticas de Actions restringen la escritura, habilita el permiso de escritura de contenidos para el flujo de publicación.
 
 ## Limitaciones
 
@@ -51,10 +51,8 @@ VerAni incluye páginas de anime y películas con paginación, búsqueda, fichas
 
 La extensión incluye catálogos paginados de películas, series, tendencias y los géneros del sitio, además de búsqueda y fichas. Los enlaces de películas y episodios se etiquetan según el idioma de cada opción en la web. Si no se puede recuperar la lista de un episodio, se intenta la búsqueda alternativa y se conservan como «Idioma no indicado», sin adivinarlo. La disponibilidad de los reproductores externos depende de la red y de los extractores de CloudStream.
 
-### PoseidonHD 2 y Cinecalidad.am
+### Cinecalidad.am y proveedores en investigación
 
-Ambas extensiones incluyen películas, series, búsqueda y catálogos paginados. PoseidonHD 2 recupera las temporadas ausentes de la ficha a partir de páginas de episodios cuando están disponibles y etiqueta los servidores según el idioma indicado por la web. Cinecalidad.am muestra los servidores en línea, sin añadir los tráileres ni enlaces de descarga.
+Cinecalidad.am incluye películas, series, búsqueda y catálogo paginado. Una prueba en un emulador con CloudStream pre-release ejecutó el proveedor y decodificó vídeo de una película y un episodio con Media3. Esto no garantiza que todos los títulos o servidores funcionen en todas las redes o dispositivos.
 
-Las pruebas Android verifican catálogos y muestras de películas y episodios. Desde GitHub también se obtuvo un manifiesto HLS y un segmento de vídeo de Vidara (Poseidon) y Vimeos (Cinecalidad.am); esto no garantiza reproducción en todos los títulos, dispositivos o redes. Algunos servidores devuelven errores, han cambiado su reproductor o solicitan verificación humana.
-
-Cinecalidad.my tiene un prototipo en el código, pero está deshabilitado y no se publica mientras no haya un extractor de vídeo verificado para sus servidores actuales.
+PoseidonHD 2 se mantiene como prototipo fuera del índice y de la release: la prueba en CloudStream reprodujo una película, pero no pudo reproducir un episodio de muestra. Se puede compilar solo para diagnóstico con `./gradlew -PenablePoseidon=true :PoseidonHD2:make`. Cinecalidad.my también sigue deshabilitado mientras no se compruebe un extractor compatible con sus servidores actuales.
