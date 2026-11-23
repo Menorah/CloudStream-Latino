@@ -49,4 +49,4 @@ VerAni incluye páginas de anime y películas con paginación, búsqueda, fichas
 
 ### RePelis24.cz
 
-La extensión incluye catálogos paginados, búsqueda, series y películas. Las opciones de película muestran el idioma indicado por el sitio. Cuando los servidores de un episodio se cargan dinámicamente, se buscan sus opciones sin adivinar el idioma y se etiquetan como «Idioma no indicado». La disponibilidad de los reproductores externos depende de la red y de los extractores de CloudStream.
+La extensión incluye catálogos paginados de películas, series, tendencias y los géneros del sitio, además de búsqueda y fichas. Los enlaces de películas y episodios se etiquetan según el idioma de cada opción en la web. Si no se puede recuperar la lista de un episodio, se intenta la búsqueda alternativa y se conservan como «Idioma no indicado», sin adivinarlo. La disponibilidad de los reproductores externos depende de la red y de los extractores de CloudStream.

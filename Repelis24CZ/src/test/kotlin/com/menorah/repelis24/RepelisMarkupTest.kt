@@ -38,6 +38,26 @@ class RepelisMarkupTest {
         assertEquals(listOf("Inglés", "Latino"), options.map { it.language })
         assertEquals(listOf("1", "2"), options.map { it.number })
     }
+    @Test fun episodeAjaxPlayerUsesTheRealLanguagePerSlot() {
+        val html = """<div data-lang="mx"><li class="dooplay_player_option" data-post="74111" data-type="tv" data-nume="1">Streamwish</li></div><div data-lang="en"><li class="dooplay_player_option" data-post="74111" data-type="tv" data-nume="4">Netu</li></div><div data-lang="es"><li class="dooplay_player_option" data-post="999" data-type="tv" data-nume="5">Other</li></div>"""
+        val json = org.json.JSONObject().put("success", true).put("data", html).toString()
+        val opts = RepelisMarkup.episodePlayerOptions(json, "74111")
+        assertEquals(listOf("Latino", "Inglés"), opts.map { it.language })
+        assertEquals(listOf("1", "4"), opts.map { it.number })
+        assertTrue(RepelisMarkup.episodePlayerOptions(json, "74112").isEmpty())
+        assertTrue(RepelisMarkup.episodePlayerOptions("{}", "74111").isEmpty())
+        assertTrue(RepelisMarkup.episodePlayerOptions("bad", "74111").isEmpty())
+    }
+    @Test fun categoriesPreserveFiltersAndDetectCorrectPagination() {
+        assertEquals("/tendencias/?get=tv", RepelisMarkup.pageUrl("/tendencias/?get=tv", 1))
+        assertEquals("/tendencias/page/2/?get=tv", RepelisMarkup.pageUrl("/tendencias/?get=tv", 2))
+        assertEquals("/genero/accion/page/2/", RepelisMarkup.pageUrl("/genero/accion/", 2))
+        val wrong = Jsoup.parse("""<a href="/tendencias/page/2/?get=movies">Películas</a><a href="/genero/drama/page/2/">Drama</a>""", "https://repelis24.cz/tendencias/?get=tv")
+        assertFalse(RepelisMarkup.hasNext(wrong, 1))
+        wrong.body().append("""<a href="/tendencias/page/2/?get=tv">Series</a>""")
+        assertTrue(RepelisMarkup.hasNext(wrong, 1))
+        assertFalse(RepelisMarkup.hasNext(wrong, 2))
+    }
     @Test fun detailImageUsesHigherResolutionAndMovieBackdrop() {
         val detail = doc("""<img itemprop="image" src="https://image.tmdb.org/t/p/w185/portrait.jpg"><div class="playbox"><img class="cover" src="https://image.tmdb.org/t/p/original/background.jpg"></div>""")
         assertEquals("https://image.tmdb.org/t/p/w500/portrait.jpg", RepelisMarkup.poster(detail))
