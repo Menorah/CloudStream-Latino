@@ -65,4 +65,40 @@ class BrowserPostersTest {
         assertNotNull("WebView debe poder descargar una portada real", bytes)
         assertNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes!!.size))
     }
+    @Test fun liveDetailArtworkWhenRequested() = runBlocking {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
+        val browser = BrowserSiteTransport(context)
+        for ((path, expectedTitle) in listOf(
+            "/online/black-clover-091124/" to "Black Clover",
+            "/pelicula/akira-110723/" to "Akira",
+        )) {
+            val response = browser.get("https://ww4.animeonline.ninja$path", emptyMap())
+            assertEquals(200, response.code)
+            val doc = org.jsoup.Jsoup.parse(response.text, response.url)
+            assertEquals(expectedTitle, SiteMarkup.detailTitle(doc))
+            val background = SiteMarkup.backdrop(doc)
+            assertNotNull("La ficha debe tener fondo: $path", background)
+            val size = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val conn = java.net.URL(background!!).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 15000; conn.readTimeout = 15000
+                try {
+                    check(conn.responseCode == 200) { "Fondo: HTTP ${conn.responseCode}" }
+                    val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    conn.inputStream.use { android.graphics.BitmapFactory.decodeStream(it, null, options) }
+                    options.outWidth to options.outHeight
+                } finally { conn.disconnect() }
+            }
+            assertTrue("El fondo debe ser apaisado y mayor que la miniatura: $size", size.first >= 780 && size.first > size.second)
+            val thumb = SiteMarkup.image(doc.selectFirst(".sheader .poster img"))
+            val original = SiteMarkup.originalPoster(thumb)
+            assertNotNull("La ficha usa miniatura redimensionada", original)
+            val imageBytes = BrowserPosters(context).get(listOf(original!!, thumb!!))
+            val originalBytes = imageBytes[original]
+            assertNotNull("Debe poder descargarse la portada original", originalBytes)
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes!!.size, bounds)
+            assertTrue("La portada original debe ser más grande que 185 píxeles", bounds.outWidth > 185)
+            android.util.Log.i("AOPaging", org.json.JSONObject(mapOf("artwork" to path, "backgroundWidth" to size.first, "backgroundHeight" to size.second, "posterWidth" to bounds.outWidth)).toString())
+        }
+    }
 }
