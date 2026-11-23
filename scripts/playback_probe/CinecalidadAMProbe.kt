@@ -9,6 +9,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
+import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.*
 
@@ -20,6 +21,18 @@ object PlaybackProbe {
                 delay(4000)
                 withTimeout(240_000) {
                     val provider = CinecalidadAMProvider()
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    val sections = withContext(Dispatchers.IO) { coroutineScope {
+                        provider.mainPage.map { section -> async {
+                            val page = provider.getMainPage(1, MainPageRequest(section.name, section.data, section.horizontalImages))
+                            section.name to page.items.flatMap { it.list }.size
+                        } }.awaitAll()
+                    } }
+                    val elapsed = android.os.SystemClock.elapsedRealtime() - started
+                    Log.i("CSPlaybackProbe", "home sections=${sections.size} empty=${sections.filter { it.second == 0 }.map { it.first }} elapsedMs=$elapsed")
+                    check(sections.all { it.second > 0 }) { "empty home sections: ${sections.filter { it.second == 0 }}" }
+                    check(elapsed < 35_000) { "home too slow: $elapsed ms" }
+                    check(provider.search("2025").isNotEmpty()) { "year search empty" }
                     check(provider.search("madden").isNotEmpty()) { "empty search" }
                     val movie = "https://www.cinecalidad.am/ver-pelicula/madden/"
                     check(provider.load(movie) != null) { "movie load failed" }
