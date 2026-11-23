@@ -18,7 +18,7 @@ object PlaybackProbe {
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             try {
                 delay(4000)
-                withTimeout(360_000) {
+                withTimeout(600_000) {
                     val provider = PoseidonProvider()
                     check(provider.search("mentes").isNotEmpty()) { "empty search" }
                     val movie = "https://www.poseidonhd2.co/pelicula/9909/mentes-peligrosas"
@@ -29,10 +29,15 @@ object PlaybackProbe {
                     testPlayback(context, provider, "movie", movie)
                     testPlayback(context, provider, "episode Blue Road", "https://www.poseidonhd2.co/serie/300523/the-blue-road/temporada/1/episodio/1")
                     testPlayback(context, provider, "episode Outlander", "https://www.poseidonhd2.co/serie/207484/outlander-blood-of-my-blood/temporada/1/episodio/1")
-                    try {
-                        testPlayback(context, provider, "episode Ciudad de Dios", "https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3")
+                    val optionalEpisodes = listOf(
+                        "Ciudad de Dios" to "https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3",
+                        "Yellowjackets" to "https://www.poseidonhd2.co/serie/117488/yellowjackets/temporada/1/episodio/1",
+                        "Guerra" to "https://www.poseidonhd2.co/serie/298852/guerra/temporada/1/episodio/1"
+                    )
+                    for ((title, url) in optionalEpisodes) try {
+                        testPlayback(context, provider, "episode $title", url)
                     } catch (e: CancellationException) { throw e }
-                    catch (e: Throwable) { Log.w("CSPlaybackProbe", "known unavailable sample: ${e.message}") }
+                    catch (e: Throwable) { Log.w("CSPlaybackProbe", "unavailable sample $title: ${e.message}") }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
