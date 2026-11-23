@@ -26,6 +26,10 @@ El sitio puede presentar un desafío de Cloudflare que CloudStream no siempre pu
 
 Basado en la [documentación de desarrollo](https://recloudstream.github.io/csdocs/devs/gettingstarted/) y la [plantilla oficial](https://github.com/recloudstream/TestPlugins). La implementación se ha contrastado con los patrones públicos de DooPlay usados por [MiPlugin](https://github.com/Anonimo-00/MiPlugin).
 
+### Imágenes de AnimeOnline
+
+En las fichas de AnimeOnline se usa la imagen de fondo que indica el propio sitio. Cuando una portada es una miniatura de WordPress, se intenta obtener su archivo original; si no está disponible, se conserva la miniatura. Los fondos alojados por terceros dependen de la disponibilidad de ese servidor en la red del dispositivo.
+
 ### Diagnóstico de acceso
 
 La raíz del dominio puede redirigir a `ver2.animeonline.ninja`, que muestra el botón de entrada; el catálogo real se consulta en `ww4.animeonline.ninja/inicio/`. El proveedor entra directamente en las rutas de catálogo y detecta la portada intermedia si aparece como redirección. Las peticiones tienen límites de espera y, ante un rechazo, el proveedor intenta obtener la respuesta mediante el WebView integrado del dispositivo, no solo reutilizar sus cookies en el cliente HTTP. No comparte cookies con otras aplicaciones. Un desafío interactivo, el bloqueo de la red o la caída de un servidor externo todavía pueden impedir el acceso. El flujo opcional **Diagnóstico de acceso al sitio** comprueba algunas rutas públicas desde GitHub Actions; no demuestra que funcionen desde la red o el dispositivo del usuario.
