@@ -1,6 +1,7 @@
 package com.menorah.animeonline
 
 import android.util.Base64
+import android.content.Context
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -22,7 +23,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-class AnimeOnlineProvider : MainAPI() {
+class AnimeOnlineProvider(context: Context) : MainAPI() {
     override var mainUrl = "https://ww4.animeonline.ninja"
     override var name = "AnimeOnline Ninja"
     override var lang = "es"
@@ -30,7 +31,7 @@ class AnimeOnlineProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasChromecastSupport = false
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
-    private val site = SiteClient()
+    private val site = SiteClient.create(context)
 
     override val mainPage = mainPageOf(
         "/inicio/" to "Inicio",
@@ -48,14 +49,15 @@ class AnimeOnlineProvider : MainAPI() {
         return (uri.rawPath?.ifBlank { "/" } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
     }
 
+    private fun document(response: SiteResponse): Document = Jsoup.parse(response.text, response.url)
     private fun document(response: NiceResponse): Document = Jsoup.parse(response.text, response.url)
 
     /** Requests the catalogue host directly. ver2 is an entry page, not a mirror. */
-    private suspend fun fetch(path: String): NiceResponse {
+    private suspend fun fetch(path: String): SiteResponse {
         val relative = sitePath(path)
         val url = if (relative.startsWith("http")) relative else mainUrl.trimEnd('/') + relative
         var response = site.get(url)
-        if (!response.isSuccessful) throw IllegalStateException("AnimeOnline no respondió (HTTP ${response.code}). Comprueba el acceso al sitio en el navegador.")
+        if (!response.isSuccessful) throw IllegalStateException("AnimeOnline rechazó el acceso (HTTP ${response.code}). Comprueba el sitio en el navegador del dispositivo.")
         val entry = SiteMarkup.landingEntry(document(response), response.url)
         if (entry != null) {
             // The landing button leads to /inicio/. Visit it before retrying the requested path.

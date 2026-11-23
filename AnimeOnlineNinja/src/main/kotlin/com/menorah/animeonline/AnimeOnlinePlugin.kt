@@ -7,6 +7,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class AnimeOnlinePlugin : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(AnimeOnlineProvider())
+        registerMainAPI(AnimeOnlineProvider(context))
     }
 }
