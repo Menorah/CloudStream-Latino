@@ -5,16 +5,12 @@ import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
 import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.*
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 // Added to a temporary build only; never part of the published plugin.
 object PlaybackProbe {
@@ -52,7 +48,8 @@ object PlaybackProbe {
                 play(context, link)
                 Log.i("CSPlaybackProbe", "PASS $label frame and playback")
                 return
-            } catch (e: CancellationException) { throw e }
+            } catch (e: TimeoutCancellationException) { errors.add("playback timeout") }
+            catch (e: CancellationException) { throw e }
             catch (t: Throwable) { errors.add("${t.javaClass.simpleName}: ${t.message}") }
         }
         error("$label no playable link: $errors")
@@ -69,15 +66,12 @@ object PlaybackProbe {
         try {
             player.setVideoSurface(surface)
             player.setMediaSource(media)
-            suspendCancellableCoroutine<Unit> { cont ->
-                player.addListener(object : Player.Listener {
-                    override fun onRenderedFirstFrame() { if (cont.isActive) cont.resume(Unit) }
-                    override fun onPlayerError(error: PlaybackException) { if (cont.isActive) cont.resumeWithException(error) }
-                })
-                player.prepare(); player.playWhenReady = true
+            player.prepare(); player.playWhenReady = true
+            while (true) {
+                player.playerError?.let { throw it }
+                if ((player.videoDecoderCounters?.renderedOutputBufferCount ?: 0) > 0 && player.currentPosition > 1000) break
+                delay(250)
             }
-            delay(2500)
-            check(player.currentPosition > 1000) { "playback did not progress" }
             check(player.videoSize.width > 0 && player.videoSize.height > 0) { "no decoded video" }
         } finally { player.release(); surface.release(); texture.release() }
     }
