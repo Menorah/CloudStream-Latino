@@ -1,0 +1,53 @@
+package com.menorah.repelis24
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import org.jsoup.Jsoup
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+@RunWith(AndroidJUnit4::class)
+class RepelisLiveTest {
+    private fun request(url: String, form: Map<String, String>? = null): Pair<String, String> {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15000; conn.readTimeout = 15000
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36")
+        conn.setRequestProperty("Referer", "https://repelis24.cz/")
+        if (form != null) {
+            conn.requestMethod = "POST"; conn.doOutput = true
+            val body = form.entries.joinToString("&") { URLEncoder.encode(it.key, "UTF-8") + "=" + URLEncoder.encode(it.value, "UTF-8") }
+            conn.outputStream.use { it.write(body.toByteArray()) }
+        }
+        try {
+            assertEquals("HTTP $url", 200, conn.responseCode)
+            return conn.url.toString() to conn.inputStream.bufferedReader().use { it.readText() }
+        } finally { conn.disconnect() }
+    }
+    @Test fun catalogueMovieSeriesAndServerWhenRequested() {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return
+        fun doc(path: String): org.jsoup.nodes.Document {
+            val (url, html) = request("https://repelis24.cz$path")
+            return Jsoup.parse(html, url)
+        }
+        val first = doc("/peliculas/"); val second = doc("/peliculas/page/2/")
+        assertTrue(RepelisMarkup.hasNext(first, 1))
+        val pageOne = RepelisMarkup.cards(first); val pageTwo = RepelisMarkup.cards(second)
+        assertTrue(pageOne.isNotEmpty()); assertTrue(pageTwo.any { p -> pageOne.none { it.url == p.url } })
+        assertTrue(RepelisMarkup.cards(doc("/?s=iron")).isNotEmpty())
+        val series = doc("/series/game-of-thrones/")
+        val episodes = RepelisMarkup.episodes(series)
+        assertEquals(73, episodes.size); assertEquals((1..8).toList(), episodes.map { it.season }.distinct())
+        assertEquals("74111", episodes.first().id)
+        val movie = doc("/peliculas/codigo-venganza-2/")
+        val options = RepelisMarkup.options(movie)
+        assertTrue(options.any { it.language == "Latino" }); assertTrue(options.any { it.language == "Inglés" })
+        val option = options.first { it.language == "Latino" }
+        val (_, body) = request("https://repelis24.cz/wp-admin/admin-ajax.php", mapOf("action" to "doo_player_ajax", "post" to option.post, "nume" to option.number, "type" to option.type))
+        assertTrue(JSONObject(body).optString("embed_url").startsWith("https://"))
+    }
+}
