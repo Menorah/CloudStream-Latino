@@ -162,6 +162,12 @@ class AnimeOnlineProvider : MainAPI() {
         val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = SiteClient.REQUEST_SECONDS) } ?: return
         if (!response.isSuccessful) return
         val doc = document(response)
+        for (server in SiteMarkup.playerServers(doc).take(12)) {
+            // Bound each external host separately as well as the overall loadLinks call.
+            withTimeoutOrNull(8_000L) {
+                resolve(server.url, response.url, subtitles, callback, visited, depth + 1)
+            }
+        }
         val raw = doc.selectFirst("script#msp-data")?.data()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("#msp[data-api]")?.absUrl("data-api")?.takeIf { it.isNotBlank() }?.let { api ->
                 attempt { app.get(api, headers = mapOf("Referer" to response.url), timeout = SiteClient.REQUEST_SECONDS).text }

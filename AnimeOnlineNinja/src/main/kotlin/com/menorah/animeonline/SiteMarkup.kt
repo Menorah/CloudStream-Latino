@@ -4,6 +4,7 @@ import org.jsoup.nodes.Element
 import java.net.URI
 
 internal data class CatalogCard(val title: String, val url: String, val poster: String?, val movie: Boolean)
+internal data class PlayerServer(val url: String, val language: String)
 internal data class EpisodeData(val url: String, val title: String, val season: Int, val number: Int, val poster: String?)
 
 /** Pure parsing helpers. Documents must have the response URL as their base URI. */
@@ -38,6 +39,22 @@ internal object SiteMarkup {
                 numbers?.groupValues?.get(1)?.toIntOrNull() ?: 1,
                 numbers?.groupValues?.get(2)?.toIntOrNull() ?: index + 1, image(item.selectFirst("img")))
         }
+
+    /** The current multiserver renders links in go_to_player() grouped by language. */
+    fun playerServers(document: Element): List<PlayerServer> {
+        val grouped = listOf("LAT" to "Latino", "ES" to "Castellano", "SUB" to "Subtitulado").map { (code, label) ->
+            document.select(".OD_$code li[onclick]").mapNotNull { item ->
+                val match = Regex("""go_to_player\s*\(\s*(['"])(.*?)\1\s*\)""").find(item.attr("onclick")) ?: return@mapNotNull null
+                val url = runCatching { URI(item.baseUri()).resolve(match.groupValues[2]).toString() }.getOrNull()
+                    ?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: return@mapNotNull null
+                PlayerServer(url, label)
+            }
+        }
+        // Interleave languages so one group of dead hosts does not starve the others.
+        return (0 until (grouped.maxOfOrNull { it.size } ?: 0)).flatMap { i ->
+            grouped.mapNotNull { it.getOrNull(i) }
+        }.distinctBy { it.url }
+    }
 
     /** The site's root is an unrelated landing page; only follow its explicit entry. */
     fun landingEntry(document: Element, finalUrl: String): String? {
