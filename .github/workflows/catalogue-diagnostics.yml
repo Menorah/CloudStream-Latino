@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/repelis24_dynamic_probe.py
       - run: python3 scripts/catalogue_sites_probe.py 1
       - run: python3 scripts/catalogue_sites_probe.py 2
       - run: python3 scripts/poseidon_probe.py
@@ -21,4 +22,3 @@ jobs:
       - run: python3 scripts/repelis24_probe.py
       - run: python3 scripts/repelis24_layout_probe.py
       - run: python3 scripts/repelis24_episode_probe.py
-      - run: python3 scripts/repelis24_dynamic_probe.py
