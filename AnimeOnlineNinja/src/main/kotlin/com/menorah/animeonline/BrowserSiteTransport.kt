@@ -141,9 +141,11 @@ internal class BrowserSiteTransport(
                             if (finished.get() || generation != currentGeneration) return@evaluateJavascript
                             val page = parseValue(raw) ?: return@evaluateJavascript
                             if (looksLikeChallenge(page.optString("text"))) return@evaluateJavascript
-                            if (!apiRequest || status !in 200..299) {
-                                complete(page, status)
+                            if (status == 0) {
+                                finish(Result.failure(IllegalStateException("El navegador no pudo cargar la página del sitio.")))
                             } else if (!fetchStarted && URI(url).host.equals(URI(target).host, true)) {
+                                // A WebView's page callbacks do not reliably expose HTTP status.
+                                // Fetch even HTML from the same origin so 403 is never mistaken for 200.
                                 fetchStarted = true
                                 // Same-origin browser fetch retains WebView's own TLS and cookie context.
                                 val quoted = JSONObject.quote(target)
