@@ -49,5 +49,8 @@ class RepelisLiveTest {
         val option = options.first { it.language == "Latino" }
         val (_, body) = request("https://repelis24.cz/wp-admin/admin-ajax.php", mapOf("action" to "doo_player_ajax", "post" to option.post, "nume" to option.number, "type" to option.type))
         assertTrue(JSONObject(body).optString("embed_url").startsWith("https://"))
+        val episodeOption = RepelisMarkup.fallbackEpisodeOptions(RepelisMarkup.episodeUrl(episodes.first().id)).first()
+        val (_, episodeBody) = request("https://repelis24.cz/wp-admin/admin-ajax.php", mapOf("action" to "doo_player_ajax", "post" to episodeOption.post, "nume" to episodeOption.number, "type" to episodeOption.type))
+        assertTrue(JSONObject(episodeBody).optString("embed_url").startsWith("https://"))
     }
 }

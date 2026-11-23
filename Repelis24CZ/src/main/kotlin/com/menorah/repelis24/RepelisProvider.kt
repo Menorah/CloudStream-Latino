@@ -67,7 +67,7 @@ class RepelisProvider : MainAPI() {
     private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val doc = fetch(data)
-        val options = RepelisMarkup.options(doc).take(24)
+        val options = RepelisMarkup.options(doc).ifEmpty { RepelisMarkup.fallbackEpisodeOptions(data) }.take(24)
         val emitted = AtomicBoolean(false)
         val lock = Any()
         withTimeoutOrNull(45_000L) {
