@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['scripts/catalogue_sites_probe.py', '.github/workflows/catalogue-diagnostics.yml']
+    paths: ['scripts/catalogue_sites_probe.py', 'scripts/poseidon_probe.py', '.github/workflows/catalogue-diagnostics.yml']
 permissions:
   contents: read
 jobs:
@@ -14,3 +14,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -m pip install beautifulsoup4
       - run: python3 scripts/catalogue_sites_probe.py
+      - run: python3 scripts/poseidon_probe.py
