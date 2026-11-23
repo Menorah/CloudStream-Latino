@@ -59,4 +59,18 @@ class BrowserSiteTransportTest {
         assertEquals("La API real debe responder desde WebView", 200, api.code)
         assertTrue(org.json.JSONObject(api.text).optString("embed_url").startsWith("https://"))
     }
+    @Test fun livePaginationWhenRequested() = runBlocking {
+        if (InstrumentationRegistry.getArguments().getString("live") != "true") return@runBlocking
+        val browser = BrowserSiteTransport(context)
+        for (path in listOf("/online/", "/pelicula/", "/genero/audio-latino/", "/genero/anime-castellano/", "/genero/audio-latino/page/2/")) {
+            val start = System.currentTimeMillis()
+            val response = browser.get(root + path, emptyMap())
+            assertEquals(200, response.code)
+            val doc = org.jsoup.Jsoup.parse(response.text, response.url)
+            val pageLinks = doc.select("a[href*='/page/']").takeLast(10).map { a ->
+                mapOf("href" to a.attr("href"), "class" to a.className(), "parent" to (a.parent()?.className() ?: ""), "text" to a.text())
+            }
+            android.util.Log.i("AOPaging", org.json.JSONObject(mapOf("path" to path, "ms" to (System.currentTimeMillis() - start), "cards" to SiteMarkup.cards(doc).size, "links" to pageLinks)).toString())
+        }
+    }
 }

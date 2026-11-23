@@ -3,6 +3,7 @@ set +e
 args=()
 if [ "${RUN_LIVE_SITE:-}" = "1" ]; then
   args+=("-Pandroid.testInstrumentationRunnerArguments.live=true")
+  adb logcat -c
 fi
 if [ "${RUN_HOST_DIAGNOSTICS:-}" = "1" ]; then
   args+=("-Pandroid.testInstrumentationRunnerArguments.hostdiag=true")
@@ -11,6 +12,9 @@ fi
 ./gradlew :AnimeOnlineNinja:connectedDebugAndroidTest "${args[@]}" --stacktrace > android-test.log 2>&1
 status=$?
 cat android-test.log
+if [ "${RUN_LIVE_SITE:-}" = "1" ]; then
+  adb logcat -d -v raw -s AOPaging:I '*:S' | python3 -c 'import sys; [print("::notice::" + x.strip().replace("%", "%25")) for x in sys.stdin if x.lstrip().startswith("{")]'
+fi
 if [ "${RUN_HOST_DIAGNOSTICS:-}" = "1" ]; then
   adb logcat -d -v raw -s AOHostProbe:I '*:S' | python3 -c 'import sys; [print("::notice::" + x.strip().replace("%", "%25")) for x in sys.stdin if x.lstrip().startswith("{")]'
 fi
