@@ -51,4 +51,26 @@ class CatalogPagerTest {
         val next = pager.get("/inicio/", 2)
         assertEquals(listOf("Title 2"), next.cards.map { it.title }); assertTrue(next.hasNext)
     }
+    @Test fun `new sections start with one page and continue without gaps`() = runBlocking {
+        val expected = mapOf("/genero/en-emision-1/" to "En emisión", "/genero/blu-ray-dvd-2/" to "Blu-Ray / DVD", "/tendencias/" to "Tendencias", "/ratings/" to "Mejores valorados")
+        assertEquals(expected, CatalogSections.extra.toMap())
+        assertEquals(9, CatalogSections.all.size)
+        for (section in expected.keys) {
+            val seen = mutableListOf<String>()
+            val pager = CatalogPager { path ->
+                seen += path
+                val n = Regex("/page/(\\d+)/").find(path)?.groupValues?.get(1)?.toInt() ?: 1
+                doc(section.trimEnd('/'), n, 4)
+            }
+            val first = pager.get(section, 1, CatalogSections.initialPageCount(section))
+            val second = pager.get(section, 2, CatalogSections.initialPageCount(section))
+            val third = pager.get(section, 3, CatalogSections.initialPageCount(section))
+            assertEquals(listOf("Title 1"), first.cards.map { it.title })
+            assertEquals(listOf("Title 2", "Title 3"), second.cards.map { it.title })
+            assertEquals(listOf("Title 4"), third.cards.map { it.title })
+            assertTrue(first.hasNext); assertTrue(second.hasNext); assertFalse(third.hasNext)
+            assertEquals(listOf(section, section + "page/2/", section + "page/3/", section + "page/4/"), seen)
+        }
+        assertEquals(2, CatalogSections.initialPageCount("/genero/audio-latino/"))
+    }
 }
