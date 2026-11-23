@@ -14,6 +14,7 @@ on:
     branches: ['arena/**']
     paths:
       - 'AnimeOnlineNinja/**'
+      - 'VerAni/**'
       - '.github/workflows/android-browser-test.yml'
 permissions:
   contents: read
@@ -47,5 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pruebas-webview
-          path: AnimeOnlineNinja/build/reports/androidTests/
+          path: |
+            AnimeOnlineNinja/build/reports/androidTests/
+            VerAni/build/reports/androidTests/
           if-no-files-found: ignore
