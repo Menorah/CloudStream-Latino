@@ -1,0 +1,19 @@
+name: Diagnóstico de proveedores de cine
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/film_provider_probe.py', '.github/workflows/film-provider-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/film_provider_probe.py my
+      - run: python3 scripts/film_provider_probe.py am
+      - run: python3 scripts/film_provider_probe.py smart
+      - run: python3 scripts/film_provider_probe.py surf

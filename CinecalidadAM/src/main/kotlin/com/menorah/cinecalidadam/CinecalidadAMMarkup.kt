@@ -1,0 +1,44 @@
+package com.menorah.cinecalidadam
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.net.URI
+
+internal data class Item(val title: String, val url: String, val poster: String?, val movie: Boolean)
+internal data class EpisodeItem(val title: String, val url: String, val season: Int, val number: Int, val poster: String?)
+internal data class Player(val url: String, val language: String)
+internal object CinecalidadAMMarkup {
+    const val BASE = "https://www.cinecalidad.am"
+    fun siteUrl(url: String): Boolean = runCatching { URI(url).let { it.scheme == "https" && it.host.equals("www.cinecalidad.am", true) && it.port in listOf(-1,443) && it.userInfo == null } }.getOrDefault(false)
+    fun safeHost(url: String, host: String): Boolean = runCatching { URI(url).let { it.scheme == "https" && it.host.equals(host, true) && it.port in listOf(-1,443) && it.userInfo == null } }.getOrDefault(false)
+    fun img(e: Element?): String? {
+        if (e == null) return null
+        return listOf(e.attr("data-src"), e.attr("src")).firstNotNullOfOrNull { x -> runCatching { URI(e.baseUri()).resolve(x).toString() }.getOrNull()?.takeIf { x.isNotBlank() && !x.startsWith("data:") && it.startsWith("https://") } }
+    }
+    fun cards(doc: Document): List<Item> = doc.select("article.item:not(.naadb)").mapNotNull { e ->
+        val link = e.select("a[href]").firstOrNull { a -> val url = a.absUrl("href"); siteUrl(url) && (URI(url).path.startsWith("/ver-pelicula/") || URI(url).path.startsWith("/ver-serie/")) } ?: return@mapNotNull null
+        val url = link.absUrl("href"); val title = e.selectFirst(".in_title")?.text()?.trim().orEmpty().ifBlank { e.selectFirst("img")?.attr("alt").orEmpty().trim() }
+        if (title.isEmpty()) return@mapNotNull null
+        Item(title, url, img(e.selectFirst(".poster img")), URI(url).path.startsWith("/ver-pelicula/"))
+    }.distinctBy { it.url }
+    fun hasNext(doc: Document, page: Int): Boolean {
+        val uri = URI(doc.location()); val path = uri.path.orEmpty().replace(Regex("/page/[0-9]+/?$"), "").trimEnd('/') + "/page/${page+1}"
+        return doc.select("a[href]").any { a -> val u=a.absUrl("href"); siteUrl(u) && URI(u).path.trimEnd('/') == path && (uri.rawQuery == null || URI(u).rawQuery == uri.rawQuery) }
+    }
+    fun episodes(doc: Document): List<EpisodeItem> = doc.select("a[href*=/ver-el-episodio/]").mapNotNull { a ->
+        val url = a.absUrl("href"); if (!siteUrl(url)) return@mapNotNull null
+        val path = URI(url).path.orEmpty(); val m = Regex("-s([0-9]+)-e([0-9]+)/?$").find(path) ?: return@mapNotNull null
+        val season = m.groupValues[1].toIntOrNull() ?: return@mapNotNull null; val number = m.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+        val container = a.closest("li") ?: a.parent()
+        EpisodeItem(a.text().trim().ifBlank { "Episodio $number" }, url, season, number, img(container?.selectFirst("img")))
+    }.distinctBy { it.url }.sortedWith(compareBy({ it.season }, { it.number }))
+    fun players(doc: Document): List<Player> = doc.select("#panel_online li.dooplay_player_option[data-option]:not(.dooplay_player_option_trailer)").mapNotNull { e ->
+        val url = e.attr("data-option"); if (!safeHost(url,"vimeos.net") && !safeHost(url,"videoapp.zip")) return@mapNotNull null
+        val text = doc.selectFirst("#panel_online .pane_descripcion")?.text().orEmpty().lowercase()
+        val language = if ("latino" in text) "Latino" else if ("castellano" in text) "Castellano" else if ("subtitul" in text) "Subtitulado" else "Idioma no indicado"
+        Player(url,language)
+    }.distinctBy { it.url }
+    fun vimeosFromWrapper(doc: Document): String? = doc.select("iframe[src]").asSequence().map { it.absUrl("src") }.firstOrNull { safeHost(it,"vimeos.net") }
+    fun title(doc: Document): String? = doc.selectFirst(".single_left h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+    fun poster(doc: Document): String? = img(doc.selectFirst(".single_left table img"))
+    fun plot(doc: Document): String? = doc.select(".single_left table td:nth-child(2) p").firstOrNull { it.text().trim().isNotBlank() }?.text()?.trim()
+}
