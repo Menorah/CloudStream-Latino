@@ -9,11 +9,11 @@ if [ "${RUN_HOST_DIAGNOSTICS:-}" = "1" ]; then
   args+=("-Pandroid.testInstrumentationRunnerArguments.hostdiag=true")
   adb logcat -c
 fi
-./gradlew :AnimeOnlineNinja:connectedDebugAndroidTest "${args[@]}" --stacktrace > android-test.log 2>&1
+./gradlew :AnimeOnlineNinja:connectedDebugAndroidTest :VerAni:connectedDebugAndroidTest "${args[@]}" --stacktrace > android-test.log 2>&1
 status=$?
 cat android-test.log
 if [ "${RUN_LIVE_SITE:-}" = "1" ]; then
-  adb logcat -d -v raw -s AOPaging:I '*:S' | python3 -c 'import sys; [print("::notice::" + x.strip().replace("%", "%25")) for x in sys.stdin if x.lstrip().startswith("{")]'
+  adb logcat -d -v raw -s AOPaging:I VerAniProbe:I '*:S' | python3 -c 'import sys; [print("::notice::" + x.strip().replace("%", "%25")) for x in sys.stdin if x.lstrip().startswith("{")]'
 fi
 if [ "${RUN_HOST_DIAGNOSTICS:-}" = "1" ]; then
   adb logcat -d -v raw -s AOHostProbe:I '*:S' | python3 -c 'import sys; [print("::notice::" + x.strip().replace("%", "%25")) for x in sys.stdin if x.lstrip().startswith("{")]'
@@ -24,7 +24,7 @@ import pathlib, xml.etree.ElementTree as ET
 lines = pathlib.Path('android-test.log').read_text(errors='replace').splitlines()
 relevant = [s for s in lines if s.startswith('e: ') or 'What went wrong:' in s or 'FAILED' in s or 'Exception' in s or 'Error' in s or 'Could not' in s]
 failures = []
-for path in pathlib.Path('AnimeOnlineNinja/build/outputs/androidTest-results').rglob('*.xml'):
+for path in pathlib.Path('.').glob('*/build/outputs/androidTest-results/**/*.xml'):
     try:
         tree = ET.parse(path)
         for case in tree.findall('.//testcase'):
