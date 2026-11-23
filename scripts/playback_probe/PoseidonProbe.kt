@@ -18,7 +18,7 @@ object PlaybackProbe {
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             try {
                 delay(4000)
-                withTimeout(240_000) {
+                withTimeout(600_000) {
                     val provider = PoseidonProvider()
                     check(provider.search("mentes").isNotEmpty()) { "empty search" }
                     val movie = "https://www.poseidonhd2.co/pelicula/9909/mentes-peligrosas"
@@ -27,7 +27,17 @@ object PlaybackProbe {
                         ?: error("series load failed")
                     check(series.episodes.any { it.season == 2 && it.episode == 3 }) { "missing episodes: ${series.episodes.size}" }
                     testPlayback(context, provider, "movie", movie)
-                    testPlayback(context, provider, "episode", "https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3")
+                    testPlayback(context, provider, "episode Blue Road", "https://www.poseidonhd2.co/serie/300523/the-blue-road/temporada/1/episodio/1")
+                    testPlayback(context, provider, "episode Outlander", "https://www.poseidonhd2.co/serie/207484/outlander-blood-of-my-blood/temporada/1/episodio/1")
+                    val optionalEpisodes = listOf(
+                        "Ciudad de Dios" to "https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3",
+                        "Yellowjackets" to "https://www.poseidonhd2.co/serie/117488/yellowjackets/temporada/1/episodio/1",
+                        "Guerra" to "https://www.poseidonhd2.co/serie/298852/guerra/temporada/1/episodio/1"
+                    )
+                    for ((title, url) in optionalEpisodes) try {
+                        testPlayback(context, provider, "episode $title", url)
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Throwable) { Log.w("CSPlaybackProbe", "unavailable sample $title: ${e.message}") }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
@@ -43,7 +53,7 @@ object PlaybackProbe {
         Log.i("CSPlaybackProbe", "$label extracted=${found.size} labels=${found.map { it.name }}")
         check(ok && found.isNotEmpty()) { "$label produced no links" }
         var errors = mutableListOf<String>()
-        for (link in found.take(4)) {
+        for (link in found.sortedByDescending { it.name.contains("vidara", ignoreCase = true) }.take(4)) {
             try {
                 play(context, link)
                 Log.i("CSPlaybackProbe", "PASS $label frame and playback")

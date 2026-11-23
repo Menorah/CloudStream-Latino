@@ -1,0 +1,16 @@
+name: Diagnóstico medios RePelis24.shop
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['scripts/repelis24_shop_media_probe.py', '.github/workflows/repelis24-shop-media.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/repelis24_shop_media_probe.py
