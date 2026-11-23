@@ -7,6 +7,11 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.NiceResponse
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.jsoup.Jsoup
@@ -14,6 +19,8 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AnimeOnlineProvider : MainAPI() {
     override var mainUrl = "https://ww4.animeonline.ninja"
@@ -112,15 +119,18 @@ class AnimeOnlineProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        var emitted = false
-        val emit: (ExtractorLink) -> Unit = { emitted = true; callback(it) }
+        val emitted = AtomicBoolean(false)
+        val callbackLock = Any()
+        val emit: (ExtractorLink) -> Unit = { link ->
+            synchronized(callbackLock) { emitted.set(true); callback(link) }
+        }
         // Stop before CloudStream's default 120-second timeout, even if several hosts are slow.
         withTimeoutOrNull(75_000L) {
             val page = fetch(data)
             val pageUrl = page.url
             val origin = origin(pageUrl) ?: mainUrl
             val doc = document(page)
-            val visited = mutableSetOf<String>()
+            val visited = ConcurrentHashMap.newKeySet<String>()
             for (option in doc.select("#playeroptionsul li[data-post][data-nume]").take(8)) {
                 val post = option.attr("data-post")
                 val nume = option.attr("data-nume")
@@ -140,7 +150,7 @@ class AnimeOnlineProvider : MainAPI() {
             }
             for (frame in doc.select("iframe[src]").take(8)) resolve(frame.absUrl("src"), pageUrl, subtitleCallback, emit, visited, 0)
         }
-        return emitted
+        return emitted.get()
     }
 
     private suspend fun resolve(input: String, referer: String, subtitles: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit, visited: MutableSet<String>, depth: Int) {
@@ -154,19 +164,28 @@ class AnimeOnlineProvider : MainAPI() {
             callback(newExtractorLink(name, name, url, type) { this.referer = referer })
             return
         }
-        var gotLink = false
+        val gotLink = AtomicBoolean(false)
         withTimeoutOrNull(10_000L) {
-            attempt { loadExtractor(url, referer, subtitles) { gotLink = true; callback(it) } }
+            attempt { loadExtractor(url, referer, subtitles) { gotLink.set(true); callback(it) } }
         }
-        if (gotLink) return
+        if (gotLink.get()) return
         val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = SiteClient.REQUEST_SECONDS) } ?: return
         if (!response.isSuccessful) return
         val doc = document(response)
-        for (server in SiteMarkup.playerServers(doc).take(12)) {
-            // Bound each external host separately as well as the overall loadLinks call.
-            withTimeoutOrNull(8_000L) {
-                resolve(server.url, response.url, subtitles, callback, visited, depth + 1)
-            }
+        // Several providers can be slow or offline. Resolve a few at a time so one
+        // dead host cannot consume the whole playback budget or starve a language.
+        val servers = SiteMarkup.playerServers(doc).take(24)
+        if (servers.isNotEmpty()) coroutineScope {
+            val permits = Semaphore(4)
+            servers.map { server ->
+                async {
+                    permits.withPermit {
+                        withTimeoutOrNull(8_000L) {
+                            resolve(server.url, response.url, subtitles, callback, visited, depth + 1)
+                        }
+                    }
+                }
+            }.awaitAll()
         }
         val raw = doc.selectFirst("script#msp-data")?.data()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("#msp[data-api]")?.absUrl("data-api")?.takeIf { it.isNotBlank() }?.let { api ->
