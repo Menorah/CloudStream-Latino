@@ -5,6 +5,7 @@ on:
     branches: ['arena/**']
     paths:
       - scripts/site_probe.py
+      - scripts/animeonline_art_probe.py
       - .github/workflows/site-diagnostics.yml
 permissions:
   contents: read
@@ -13,5 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4 pillow
       - name: Comprobar respuestas públicas sin cookies
         run: python3 scripts/site_probe.py
+      - name: Inspeccionar arte de fichas
+        run: python3 scripts/animeonline_art_probe.py

@@ -80,4 +80,46 @@ class SiteMarkupTest {
         val cards = SiteMarkup.cards(Jsoup.parse(html, "https://ww4.animeonline.ninja/online/"))
         assertEquals(listOf("Actual"), cards.map { it.title })
     }
+    @Test fun `series artwork uses title specific backdrop and real title`() {
+        val html = """
+            <h1>Ver Anime</h1><h1>Ver Anime</h1>
+            <style>.item{background-image:url('/unrelated.jpg')}</style>
+            <style>#dt_contenedor {background-image:url(https://image.tmdb.org/t/p/original/clover.jpg);background-size:cover}</style>
+            <div id="single"><div class="sheader"><div class="poster"><img data-src="/wp-content/uploads/2020/02/clover-185x278.jpg"></div>
+              <div class="data"><h1>Black Clover</h1></div></div></div>
+            <div id="dt_galery"><div class="g-item"><a href="https://image.tmdb.org/t/p/original/other.jpg">other</a></div></div>
+        """
+        val doc = Jsoup.parse(html, "https://ww4.animeonline.ninja/online/black-clover-091124/")
+        assertEquals("Black Clover", SiteMarkup.detailTitle(doc))
+        assertEquals("https://image.tmdb.org/t/p/original/clover.jpg", SiteMarkup.backdrop(doc))
+        val thumb = SiteMarkup.image(doc.selectFirst(".sheader .poster img"))
+        val original = SiteMarkup.originalPoster(thumb)
+        assertEquals("https://ww4.animeonline.ninja/wp-content/uploads/2020/02/clover.jpg", original)
+        assertEquals("file:///high.jpg", SiteMarkup.displayedPoster(thumb, original, mapOf(original!! to "file:///high.jpg", thumb!! to "file:///low.jpg")))
+        assertEquals("file:///low.jpg", SiteMarkup.displayedPoster(thumb, original, mapOf(thumb to "file:///low.jpg")))
+        assertEquals(thumb, SiteMarkup.displayedPoster(thumb, original, emptyMap()))
+    }
+    @Test fun `movie inline artwork and gallery fallback avoid unrelated CSS and unsafe URLs`() {
+        val base = "https://ww4.animeonline.ninja/pelicula/akira/"
+        val inline = Jsoup.parse("""
+          <style>#different {background-image: url('/wrong.jpg')}</style>
+          <div id="dt_contenedor" style="background-image: url('/wp-content/uploads/akira-wide.jpg')"></div>
+          <div id="single"><div class="sheader"><div class="data"><h1>Akira</h1></div></div></div>
+        """, base)
+        assertEquals("Akira", SiteMarkup.detailTitle(inline))
+        assertEquals("https://ww4.animeonline.ninja/wp-content/uploads/akira-wide.jpg", SiteMarkup.backdrop(inline))
+        val gallery = Jsoup.parse("""<style>.x {background-image:url('/wrong.jpg')}</style>
+            <div id="dt_galery"><div class="g-item"><a href="javascript:alert(1)">x</a></div><div class="g-item"><a href="//image.tmdb.org/t/p/original/akira.jpg">image</a></div></div>""", base)
+        assertEquals("https://image.tmdb.org/t/p/original/akira.jpg", SiteMarkup.backdrop(gallery))
+        val none = Jsoup.parse("""<style>#dt_contenedor{background-image:url(javascript:alert(1))}</style><h1>Fallback title</h1>""", base)
+        assertNull(SiteMarkup.backdrop(none))
+        assertEquals("Fallback title", SiteMarkup.detailTitle(none))
+    }
+    @Test fun `original poster is only attempted for protected WordPress thumbnails`() {
+        val base = "https://ww4.animeonline.ninja/wp-content/uploads/a"
+        assertEquals("$base.jpg?x=1", SiteMarkup.originalPoster("$base-185x278.jpg?x=1"))
+        assertNull(SiteMarkup.originalPoster("$base.jpg"))
+        assertNull(SiteMarkup.originalPoster("https://image.tmdb.org/a-185x278.jpg"))
+        assertNull(SiteMarkup.originalPoster("https://ww4.animeonline.ninja.evil.test/wp-content/uploads/a-185x278.jpg"))
+    }
 }

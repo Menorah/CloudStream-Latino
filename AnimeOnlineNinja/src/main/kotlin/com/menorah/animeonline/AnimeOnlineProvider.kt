@@ -95,25 +95,28 @@ class AnimeOnlineProvider(context: Context) : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = document(fetch(url))
-        val title = doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val poster = SiteMarkup.image(doc.selectFirst(".poster img"))
+        val title = SiteMarkup.detailTitle(doc) ?: return null
+        val poster = SiteMarkup.image(doc.selectFirst(".sheader .poster img, #single .poster img") ?: doc.selectFirst(".poster img"))
+        val originalPoster = SiteMarkup.originalPoster(poster)
+        val backdrop = SiteMarkup.backdrop(doc)
         val plot = doc.selectFirst("#info .wp-content, .wp-content, .sinopsis")?.text()?.trim()
         val tags = doc.select(".sgeneros a").map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
         val episodeData = SiteMarkup.episodes(doc)
-        val cached = posters.resolve(listOf(poster) + episodeData.map { it.poster })
+        val cached = posters.resolve(listOf(originalPoster, poster, backdrop) + episodeData.map { it.poster })
         val episodes = episodeData.map { item ->
             newEpisode(item.url) { name = item.title; season = item.season; episode = item.number; posterUrl = cached[item.poster] ?: item.poster }
         }
-        val displayPoster = cached[poster] ?: poster
-        val displayHeaders = poster?.takeIf(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/inicio/") }
+        val displayPoster = SiteMarkup.displayedPoster(poster, originalPoster, cached)
+        val displayBackdrop = cached[backdrop] ?: backdrop
+        val displayHeaders = listOfNotNull(poster, backdrop).firstOrNull(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/inicio/") }
         if (sitePath(url).startsWith("/pelicula/")) {
             return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
-                posterUrl = displayPoster; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
+                posterUrl = displayPoster; backgroundPosterUrl = displayBackdrop; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
             }
         }
         if (episodes.isEmpty()) return null
         return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-            posterUrl = displayPoster; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
+            posterUrl = displayPoster; backgroundPosterUrl = displayBackdrop; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
         }
     }
 
