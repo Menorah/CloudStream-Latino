@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['scripts/verani_probe.py', '.github/workflows/verani-diagnostics.yml']
+    paths: ['scripts/verani_probe.py', 'scripts/verani_layout_probe.py', '.github/workflows/verani-diagnostics.yml']
 permissions:
   contents: read
 jobs:
@@ -13,4 +13,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m pip install beautifulsoup4 jsbeautifier
-      - run: python3 scripts/verani_probe.py
+      - run: python3 scripts/verani_layout_probe.py
