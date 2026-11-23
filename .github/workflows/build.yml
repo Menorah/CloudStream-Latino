@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
           cat build-log.txt
           if [ "$status" -ne 0 ]; then
@@ -42,6 +42,7 @@ jobs:
           mkdir -p output
           cp AnimeOnlineNinja/build/AnimeOnlineNinja.cs3 output/
           cp VerAni/build/VerAni.cs3 output/
+          cp Repelis24CZ/build/Repelis24CZ.cs3 output/
           cp build/plugins.json output/
           cp repo.json output/
           python3 - <<'PY'
@@ -52,6 +53,8 @@ jobs:
           assert (output / 'AnimeOnlineNinja.cs3').stat().st_size > 0
           assert any(p['url'].endswith('/VerAni.cs3') for p in plugins), plugins
           assert (output / 'VerAni.cs3').stat().st_size > 0
+          assert any(p['url'].endswith('/Repelis24CZ.cs3') for p in plugins), plugins
+          assert (output / 'Repelis24CZ.cs3').stat().st_size > 0
           PY
       - uses: actions/upload-artifact@v4
         with:
