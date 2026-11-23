@@ -1,4 +1,4 @@
-import re,json,urllib.request,jsbeautifier
+import re,json,urllib.request,urllib.parse,jsbeautifier
 from jsbeautifier.unpackers import packer
 from bs4 import BeautifulSoup
 
@@ -30,5 +30,13 @@ for url in ['https://vimeos.net/embed-h5hdebq7cuvi.html','https://bysedikamoum.c
   for f in files[:1]:
    try:
     data,end=get(f,url);notice('media',{'status':'ok','manifest':data.startswith('#EXTM3U'),'length':len(data)})
+    lines=[line.strip() for line in data.splitlines() if line.strip() and not line.startswith('#')]
+    if data.startswith('#EXTM3U') and lines:
+     child=urllib.parse.urljoin(end,lines[0]); content,childend=get(child,url)
+     notice('child',{'manifest':content.startswith('#EXTM3U'),'length':len(content)})
+     segs=[line.strip() for line in content.splitlines() if line.strip() and not line.startswith('#')]
+     if segs:
+      segment=urllib.parse.urljoin(childend,segs[0]); req=urllib.request.Request(segment,headers={'User-Agent':'Mozilla/5.0','Referer':url,'Range':'bytes=0-1023'})
+      with urllib.request.urlopen(req,timeout=18) as r: notice('segment',{'status':r.status,'type':r.headers.get('Content-Type'),'bytes':len(r.read(1024))})
    except Exception as e:notice('media-error',str(e))
  except Exception as e:notice('error',{'url':url,'error':str(e)})
