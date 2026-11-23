@@ -36,6 +36,10 @@ internal object CinecalidadAMMarkup {
         if (!value.matches(Regex("[0-9]{4}")) || value.toInt() !in 1888..2100 || page < 1) return null
         return "/release/$value/" + if (page > 1) "page/$page/" else ""
     }
+    fun isYearArchive(doc: Document, year: String): Boolean = runCatching {
+        val u = URI(doc.location())
+        siteUrl(doc.location()) && u.path.orEmpty().matches(Regex("/release/$year/(?:page/[0-9]+/)?"))
+    }.getOrDefault(false)
     fun hasNext(doc: Document, page: Int): Boolean {
         val uri = URI(doc.location()); val path = uri.path.orEmpty().replace(Regex("/page/[0-9]+/?$"), "").trimEnd('/') + "/page/${page+1}"
         return doc.select("a[href]").any { a -> val u=a.absUrl("href"); siteUrl(u) && URI(u).path.trimEnd('/') == path && (uri.rawQuery == null || URI(u).rawQuery == uri.rawQuery) }

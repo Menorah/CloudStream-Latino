@@ -49,17 +49,32 @@ class CinecalidadAMProvider : MainAPI() {
             return newHomePageResponse(HomePageList(request.name, responses(CinecalidadAMMarkup.featured(fetch("/")))), hasNext = false)
         }
         val base = request.data.trimEnd('/')
-        val doc = fetch(if (page == 1) "$base/" else "$base/page/$page/")
+        val requestedYear = Regex("^/release/([0-9]{4})$").matchEntire(base)?.groupValues?.get(1)
+        val doc = try { fetch(if (page == 1) "$base/" else "$base/page/$page/") }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                // A newly started year can be absent from the site; don't break every home section.
+                if (requestedYear != null) return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+                throw e
+            }
+        if (requestedYear != null && !CinecalidadAMMarkup.isYearArchive(doc, requestedYear))
+            return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         return newHomePageResponse(HomePageList(request.name, responses(CinecalidadAMMarkup.cards(doc))), hasNext = CinecalidadAMMarkup.hasNext(doc, page))
     }
-    override suspend fun search(query: String): List<SearchResponse> = if (query.isBlank()) emptyList() else
-        responses(CinecalidadAMMarkup.cards(fetch(CinecalidadAMMarkup.yearQueryPath(query, 1) ?: "/?s=${URLEncoder.encode(query.trim(), "UTF-8")}")))
+    override suspend fun search(query: String): List<SearchResponse> = search(query, 1)?.items.orEmpty()
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         if (query.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
         val yearPath = CinecalidadAMMarkup.yearQueryPath(query, page)
         val path = if (page > 1) "/page/$page/" else "/"
-        val doc = fetch(yearPath ?: "$path?s=${URLEncoder.encode(query.trim(), "UTF-8")}")
+        val doc = try { fetch(yearPath ?: "$path?s=${URLEncoder.encode(query.trim(), "UTF-8")}") }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (yearPath != null) return newSearchResponseList(emptyList(), hasNext = false)
+                throw e
+            }
+        if (yearPath != null && !CinecalidadAMMarkup.isYearArchive(doc, query.trim()))
+            return newSearchResponseList(emptyList(), hasNext = false)
         return newSearchResponseList(responses(CinecalidadAMMarkup.cards(doc)), hasNext = CinecalidadAMMarkup.hasNext(doc, page))
     }
     override suspend fun load(url: String): LoadResponse? {

@@ -21,6 +21,8 @@ class CinecalidadAMMarkupTest {
         assertEquals("/release/2025/", CinecalidadAMMarkup.yearQueryPath("2025", 1))
         assertEquals("/release/1915/page/2/", CinecalidadAMMarkup.yearQueryPath(" 1915 ", 2))
         assertNull(CinecalidadAMMarkup.yearQueryPath("2025/../../", 1)); assertNull(CinecalidadAMMarkup.yearQueryPath("1000", 1))
+        assertTrue(CinecalidadAMMarkup.isYearArchive(Jsoup.parse("", "https://www.cinecalidad.am/release/1915/page/2/"), "1915"))
+        assertFalse(CinecalidadAMMarkup.isYearArchive(Jsoup.parse("", "https://www.cinecalidad.am/ver-pelicula/ano-uno/"), "1915"))
     }
     @Test fun episodesAndPlayers() {
         val d=doc("""<li><img data-src="https://image.tmdb.org/e.jpg"><div class="episodiotitle"><a href="/ver-el-episodio/tmdb-1-s2-e3/">Capítulo</a></div></li><li><a href="https://evil.test/ver-el-episodio/tmdb-1-s2-e4/">Mal</a></li><div id="panel_online"><div class="pane_descripcion">Audio latino</div><ul><li class="dooplay_player_option" data-option="https://vimeos.net/embed-a.html">Vimeos</li><li class="dooplay_player_option" data-option="https://videoapp.zip/e/movie/1">Videoapp</li><li class="dooplay_player_option dooplay_player_option_trailer" data-option="https://youtube.com/x">Trailer</li></ul></div>""")
