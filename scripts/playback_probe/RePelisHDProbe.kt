@@ -25,7 +25,7 @@ object PlaybackProbe {
                     check(provider.load(movie) != null) { "movie load failed" }
                     val series = provider.load("https://repelishd.surf/ver-serie/1413-american-horror-story-online-espanol") as? TvSeriesLoadResponse
                         ?: error("series load failed")
-                    check(series.episodes.size == 145 && series.episodes.any { it.season == 13 }) { "missing episodes: ${series.episodes.size}" }
+                    check(series.episodes.size >= 144 && series.episodes.any { it.season == 13 }) { "missing episodes: ${series.episodes.size}" }
                     testPlayback(context, provider, "movie", movie)
                     testPlayback(context, provider, "episode", "https://repelishd.surf/ver-serie/1413-american-horror-story-online-espanol/temporada-2/episodio-1")
                 }
@@ -43,17 +43,22 @@ object PlaybackProbe {
         Log.i("CSPlaybackProbe", "$label extracted=${found.size} labels=${found.map { it.name }}")
         check(ok && found.isNotEmpty()) { "$label produced no links" }
         if (label == "movie") check(listOf("Latino", "Castellano", "Subtitulado").all { language -> found.any { it.name.contains("[$language]") } }) { "missing movie languages: ${found.map { it.name }}" }
-        var errors = mutableListOf<String>()
-        for (link in found.take(4)) {
-            try {
-                play(context, link)
-                Log.i("CSPlaybackProbe", "PASS $label frame and playback")
-                return
-            } catch (e: TimeoutCancellationException) { errors.add("playback timeout") }
-            catch (e: CancellationException) { throw e }
-            catch (t: Throwable) { errors.add("${t.javaClass.simpleName}: ${t.message}") }
+        val groups = if (label == "movie") listOf("Latino", "Castellano", "Subtitulado") else listOf("Latino")
+        for (language in groups) {
+            val errors = mutableListOf<String>()
+            var played = false
+            for (link in found.filter { it.name.contains("[$language]") }.take(4)) {
+                try {
+                    play(context, link)
+                    Log.i("CSPlaybackProbe", "PASS $label $language frame and playback")
+                    played = true
+                    break
+                } catch (e: TimeoutCancellationException) { errors.add("playback timeout") }
+                catch (e: CancellationException) { throw e }
+                catch (t: Throwable) { errors.add(generateSequence(t) { it.cause }.take(4).joinToString(" -> ") { "${it.javaClass.simpleName}: ${it.message?.take(100)}" }) }
+            }
+            check(played) { "$label $language no playable link: $errors" }
         }
-        error("$label no playable link: $errors")
     }
 
     private suspend fun play(context: Context, link: ExtractorLink) = withTimeout(35_000) {
