@@ -20,3 +20,9 @@ Fecha: 23 de noviembre de 2026. Este documento es una investigación inicial, **
 | pelisjuanita.com | La vista web muestra una verificación humana con CAPTCHA; Actions recibió 403. | No automatizar la resolución del CAPTCHA; determinar si existe una forma de acceso autorizada y viable en CloudStream. |
 
 Siguiente paso: para cada integración, comprobar navegación paginada, búsqueda, ficha, temporadas completas, películas, resolución de servidores por idioma y reproducción con Android. No subir a la release proveedores incompletos como si estuvieran listos.
+
+## Avances del diagnóstico de RePelisHD
+
+La ficha y el episodio de prueba apuntan a PlayLatinSRC. Su página contiene un token temporal y consulta `POST /api/embed-links`: para Iron Man devolvió servidores separados por latino, castellano y subtitulado. Dos de ellos, `dr0pstream.com` y `superplayer.ws`, devolvieron un HLS y un segmento `video/MP2T` desde Actions. Falta probar extractores de CloudStream y reproducción en Android. Las fichas de series muestran inicialmente solo los capítulos de una temporada; se requiere investigar y comprobar la recuperación completa de las restantes.
+
+El catálogo usa `/explorar` con filtros, p. ej. `t=tv` y `page=2`: `/series?page=2` redirige y pierde la página, y `/peliculas` redirige a un listado mixto. No inferir tipo o paginación de esas rutas sin filtros.
