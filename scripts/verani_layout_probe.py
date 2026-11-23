@@ -11,24 +11,6 @@ def page(path):
         data=response.read(); output({'path':path,'url':response.geturl(),'bytes':len(data)})
     return BeautifulSoup(data,'html.parser')
 
-for path in ['/kiniro-no-corda-primo-passo/','/dragon-ball/','/pelicula/el-nino-y-la-bestia/','/tops/animes/','/tops/peliculas/']:
-    try:
-        s=page(path)
-        if '/tops/' not in path:
-            result={'path':path,'images_meta':[dict(x.attrs) for x in s.select('meta[property="og:image"], meta[name="twitter:image"]')], 'images':[],'backgrounds':[]}
-            for element in s.select('.anime-hero-section img, .anime-hero img, .pelicula-hero img, .pelicula-hero-section img, .pelicula-poster img')[:8]:
-                result['images'].append({'attrs':dict(element.attrs),'parents':[(p.name,p.get('class'),p.get('id')) for p in list(element.parents)[:3]]})
-            for element in s.select('[style*="background"]')[:8]:
-                result['backgrounds'].append({'attrs':dict(element.attrs),'name':element.name})
-            output(result)
-        else:
-            result={'path':path,'heads':[(e.name,e.get('id'),e.get('class'),e.get_text(' ',strip=True)[:100]) for e in s.select('h1,h2,h3')[:18]], 'samples':[]}
-            for link in [a for a in s.select('a[href]') if a.select_one('img')][:5]:
-                result['samples'].append({'html':str(link)[:1800], 'parents':[(p.name,p.get('class'),p.get('id'), {k:v for k,v in p.attrs.items() if k.startswith('data-')}) for p in list(link.parents)[:6]]})
-            result['containers']=[{'tag':e.name,'id':e.get('id'),'classes':e.get('class'),'children':len(e.select('a[href]'))} for e in s.select('[id*="ranking"],[class*="ranking"],[id*="top"],[class*="top"]') if len(e.select('a[href]'))>5][:25]
-            result['pagination']=[str(x)[:400] for x in s.select('.pagination a, .page-numbers a, a.next')[:6]]
-            output(result)
-    except Exception as e: output({'path':path,'error':str(e)[:200]})
 try:
     s=page('/tops/peliculas/')
     for section in s.select('section.tops-panel'):
