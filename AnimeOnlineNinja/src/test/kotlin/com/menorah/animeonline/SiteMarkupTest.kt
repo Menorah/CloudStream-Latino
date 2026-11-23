@@ -38,4 +38,16 @@ class SiteMarkupTest {
         assertEquals(2, episodes[0].season)
         assertEquals(5, episodes[0].number)
     }
+
+    @Test fun `multiserver resolves grouped links and interleaves languages`() {
+        val html = """
+          <div class="OD OD_SUB"><li onclick="go_to_player('https://sub.example/e/1')"><span>SUB</span></li></div>
+          <div class="OD OD_LAT"><li onclick="go_to_player('https://lat.example/e/1')"></li><li onclick="go_to_player('/e/2')"></li></div>
+          <div class="OD OD_ES"><li onclick="go_to_player('https://es.example/e/1')"></li><li onclick="go_to_player('javascript:alert(1)')"></li></div>
+        """.trimIndent()
+        val servers = SiteMarkup.playerServers(Jsoup.parse(html, "https://player.example/embed/"))
+        assertEquals(listOf("Latino", "Castellano", "Subtitulado", "Latino"), servers.map { it.language })
+        assertEquals("https://player.example/e/2", servers.last().url)
+        assertEquals("https://lat.example/e/1", servers.first().url)
+    }
 }
