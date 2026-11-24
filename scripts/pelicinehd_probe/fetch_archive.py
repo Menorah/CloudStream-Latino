@@ -21,6 +21,10 @@ PAGES = [
     ("movie-detail2", "https://web.archive.org/web/20250802021153id_/https://pelicinehd.com/movies/28-anos-despues/"),
     ("series-detail", "https://web.archive.org/web/20260306142910id_/https://pelicinehd.com/series/adios-tierra/"),
     ("series-detail2", "https://web.archive.org/web/20260310133114id_/https://pelicinehd.com/series/agatha-en-todas-partes/"),
+    ("episode-detail", "https://web.archive.org/web/2026id_/https://pelicinehd.com/episode/adios-tierra-1x1/"),
+    ("search", "https://web.archive.org/web/2026id_/https://pelicinehd.com/?s=avatar"),
+    ("theme-js", "https://web.archive.org/web/2026id_/https://pelicinehd.com/wp-content/themes/torofilm/public/js/torofilm-public.js?ver=2.5.9"),
+    ("episodes-sitemap", "https://web.archive.org/web/2026id_/https://pelicinehd.com/episodes-sitemap.xml"),
 ]
 
 
@@ -29,7 +33,7 @@ def main() -> int:
     saved = 0
     for label, url in PAGES:
         target = OUT / ("archive-%s.html" % label)
-        if target.exists() and target.stat().st_size > 2000:
+        if target.exists() and target.stat().st_size > 500:
             print("skip", label)
             saved += 1
             continue
