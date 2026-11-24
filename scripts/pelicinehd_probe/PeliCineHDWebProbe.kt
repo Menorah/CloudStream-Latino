@@ -22,7 +22,7 @@ import java.io.File
  */
 @RunWith(AndroidJUnit4::class)
 class PeliCineHDWebProbe {
-    private val tag = "CSPeliCine"
+    private private val tag: String = "CSPeliCine"
     private val requests = mutableListOf<String>()
 
     private fun post(path: String, body: String) {
@@ -69,7 +69,8 @@ class PeliCineHDWebProbe {
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
-                        Log.i(tag, "FINISHED ${url.toString()}")
+                        val safeUrl: String = url
+                        Log.i(tag, "FINISHED $safeUrl")
                     }
 
                     override fun onReceivedError(
@@ -77,7 +78,9 @@ class PeliCineHDWebProbe {
                         request: WebResourceRequest,
                         error: android.webkit.WebResourceError
                     ) {
-                        Log.i(tag, "ERROR ${request.url.toString()} ${error.errorCode.toString()}")
+                        val target: String = request.url.toString()
+                        val code: Int = error.errorCode
+                        Log.i(tag, "ERROR $target $code")
                     }
                 }
             }
