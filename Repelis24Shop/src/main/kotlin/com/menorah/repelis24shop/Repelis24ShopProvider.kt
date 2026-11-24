@@ -50,14 +50,26 @@ class Repelis24ShopProvider : MainAPI() {
         val doc = fetch(request.data + if (page > 1) "/page/$page" else "")
         return newHomePageResponse(HomePageList(request.name, responses(Repelis24ShopMarkup.cards(doc))), hasNext = Repelis24ShopMarkup.hasNext(doc, page))
     }
-    override suspend fun search(query: String): List<SearchResponse> = if (query.isBlank()) emptyList() else
-        responses(Repelis24ShopMarkup.cards(fetch("/buscar/${URLEncoder.encode(query.trim(), "UTF-8")}")))
+    override suspend fun search(query: String): List<SearchResponse> = when {
+        query.isBlank() -> emptyList()
+        query.contains("diag", ignoreCase = true) -> listOf(
+            newMovieSearchResponse("🧪 Diagnóstico de RePelis24.shop (no es contenido)", "diagnostico://repelis24shop", TvType.Movie),
+        )
+        else -> responses(Repelis24ShopMarkup.cards(fetch("/buscar/${URLEncoder.encode(query.trim(), "UTF-8")}")))
+    }
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
     override suspend fun load(url: String): LoadResponse? {
+        if (url.startsWith("diagnostico://")) {
+            return newMovieLoadResponse("🧪 Diagnóstico de RePelis24.shop (no es contenido)", url, TvType.Movie, url) {
+                plot = "Reproduce este título: la lista de fuentes muestra cada paso contra el sitio real."
+            }
+        }
         val doc = fetch(url); val article = doc.selectFirst("article.backdrop-info") ?: return null
         val title = article.selectFirst("h1 [itemprop=name]")?.text()?.replace(Regex("(?i)^ver (película|serie)\\s+"), "")?.trim().orEmpty()
         if (title.isBlank()) return null
         val poster = Repelis24ShopMarkup.img(article.selectFirst("figure.poster img"))
+            ?: Repelis24ShopMarkup.cardImage(article)
+            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.trim()?.takeIf { it.startsWith("https://") }
         val backdrop = article.selectFirst("[style*=background]")?.attr("style")
             ?.let { Regex("url\\(['\"]?(https://[^'\")]+)['\"]?\\)").find(it)?.groupValues?.get(1) }
             ?: Repelis24ShopMarkup.img(article.selectFirst(".backdrop img, img.backdrop"))
@@ -79,6 +91,7 @@ class Repelis24ShopProvider : MainAPI() {
         return newTvSeriesLoadResponse(title, doc.location(), TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = backdrop ?: poster; plot = description; this.year = year; this.tags = tags }
     }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+        if (data.startsWith("diagnostico://")) return diagnose(callback)
         val doc = fetch(data); val players = Repelis24ShopMarkup.players(doc).take(24)
         val emitted = AtomicBoolean(false); val lock = Any()
         coroutineScope {
@@ -142,5 +155,37 @@ class Repelis24ShopProvider : MainAPI() {
         return newExtractorLink(link.source, title, link.url, link.type) {
             referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
         }
+    }
+
+    /** Reports each scraping step as a source entry so failures are visible on-device. */
+    private suspend fun diagnose(callback: (ExtractorLink) -> Unit): Boolean {
+        val steps = mutableListOf<String>()
+        fun step(text: String) { steps.add(text.replace(Regex("\\s+"), " ").trim().take(130)) }
+        try {
+            val list = fetch("/peliculas")
+            val cards = Repelis24ShopMarkup.cards(list)
+            step("catalogo HTTP ok tarjetas=${cards.size} conPoster=${cards.count { it.poster != null }}")
+            val firstImg = list.selectFirst(".movie-item img")
+            if (firstImg != null) {
+                step("img attrs: " + firstImg.attributes().joinToString(" ") { "${it.key}=${it.value.take(40)}" })
+            } else step("sin <img> en las tarjetas (¿inyectado por JS?)")
+            val item = fetch("/pelicula/la-odisea/")
+            val article = item.selectFirst("article.backdrop-info")
+            val poster = article?.let { Repelis24ShopMarkup.img(it.selectFirst("figure.poster img")) }
+                ?: item.selectFirst("meta[property=og:image]")?.attr("content")
+            step("ficha article=${article != null} poster=${poster?.take(50) ?: "NO"} og=${item.selectFirst("meta[property=og:image]")?.attr("content")?.take(40) ?: "no"}")
+            val players = Repelis24ShopMarkup.players(item).take(3)
+            step("jugadores=${players.size} " + players.joinToString(" ") { it.url.take(40) })
+            for (player in players.take(2)) {
+                step("probe ${player.url.take(40)} → playable=${mediaPlayable(player.url, mapOf("User-Agent" to ua, "Referer" to item.location()))}")
+            }
+        } catch (e: CancellationException) { throw e } catch (t: Throwable) {
+            step("error ${t.javaClass.simpleName}: ${t.message?.take(60)}")
+        }
+        step("pasos=${steps.size} (fin)")
+        steps.forEachIndexed { index, text ->
+            callback(newExtractorLink(this.name, "%02d) %s".format(index + 1, text), "$mainUrl/", ExtractorLinkType.VIDEO) {})
+        }
+        return true
     }
 }

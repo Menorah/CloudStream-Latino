@@ -29,12 +29,14 @@ internal object Repelis24ShopMarkup {
     fun img(element: org.jsoup.nodes.Element?): String? {
         if (element == null) return null
         // Lazy-load placeholders put a spinner in src; the real image lives in data-*.
-        for (attr in listOf("data-src", "data-lazy-src", "data-original")) {
+        for (attr in listOf("data-src", "data-lazy-src", "data-original", "data-bg", "data-background")) {
             val raw = element.attr(attr).trim()
             if (raw.isEmpty()) continue
             val value = element.absUrl(attr).ifBlank { raw }
             image(value)?.let { return it }
         }
+        val style = element.attr("style")
+        Regex("url\\([\"']?(https?://[^\"')]+)").find(style)?.groupValues?.get(1)?.let { image(it)?.let { v -> return v } }
         for (entry in element.attr("srcset").split(',')) {
             val raw = entry.trim().split(' ').firstOrNull()?.trim().orEmpty()
             if (raw.isEmpty()) continue
@@ -43,6 +45,21 @@ internal object Repelis24ShopMarkup {
         }
         val src = element.attr("src").trim()
         return if (src.isEmpty()) null else image(element.absUrl("src").ifBlank { src })
+    }
+
+    /** Image of a card: `<img>` in any position, or a background style on the block. */
+    fun cardImage(container: org.jsoup.nodes.Element?): String? {
+        if (container == null) return null
+        img(container.selectFirst("img"))?.let { return it }
+        var node: org.jsoup.nodes.Element? = container
+        var depth = 0
+        while (node != null && depth < 4) {
+            val style = node.attr("style")
+            Regex("url\\([\"']?(https?://[^\"')]+)").find(style)?.groupValues?.get(1)?.let { image(it)?.let { v -> return v } }
+            node = node.parent()
+            depth++
+        }
+        return null
     }
     /** Nuupload's alternative player carries the actual VOE URL as one query parameter. */
     fun voeFromWrapper(url: String): String? = runCatching {
@@ -56,15 +73,30 @@ internal object Repelis24ShopMarkup {
         if (values.size != 1) return null
         values.single().takeIf { host(it, "voe.sx") && URI(it).path.orEmpty().startsWith("/e/") }
     }.getOrNull()
-    fun cards(doc: Document): List<Card> = doc.select(".movie-item").mapNotNull { e ->
-        val a = e.selectFirst("a[href]") ?: return@mapNotNull null
-        val url = a.absUrl("href"); if (!site(url)) return@mapNotNull null
-        val path = URI(url).path.orEmpty(); val movie = path.startsWith("/pelicula/")
-        if (!movie && !path.startsWith("/serie/")) return@mapNotNull null
-        val title = a.selectFirst(".item-detail p")?.text()?.trim().orEmpty()
-        if (title.isBlank()) return@mapNotNull null
-        Card(title, url, img(a.selectFirst("img")), movie)
-    }.distinctBy { it.url }
+    fun cards(doc: Document): List<Card> {
+        val items = doc.select(".movie-item").mapNotNull { e ->
+            val a = e.selectFirst("a[href]") ?: return@mapNotNull null
+            val url = a.absUrl("href"); if (!site(url)) return@mapNotNull null
+            val path = URI(url).path.orEmpty(); val movie = path.startsWith("/pelicula/")
+            if (!movie && !path.startsWith("/serie/")) return@mapNotNull null
+            val title = a.selectFirst(".item-detail p")?.text()?.trim().orEmpty()
+                .ifBlank { a.selectFirst("img")?.attr("alt")?.trim()?.removePrefix("Poster ")?.trim().orEmpty() }
+                .ifBlank { e.selectFirst("h2, h3, .title")?.text()?.trim().orEmpty() }
+            if (title.isBlank()) return@mapNotNull null
+            Card(title, url, cardImage(e) ?: cardImage(a), movie)
+        }.distinctBy { it.url }
+        if (items.isNotEmpty()) return items
+        // Defensive fallback: any link block pointing at a title.
+        return doc.select("a[href]").mapNotNull { a ->
+            val url = a.absUrl("href"); if (!site(url)) return@mapNotNull null
+            val path = URI(url).path.orEmpty(); val movie = path.startsWith("/pelicula/")
+            if (!movie && !path.startsWith("/serie/")) return@mapNotNull null
+            val title = a.attr("title").trim().ifBlank { a.selectFirst("img")?.attr("alt")?.trim()?.removePrefix("Poster ")?.trim().orEmpty() }
+                .ifBlank { a.text().trim() }
+            if (title.isBlank()) return@mapNotNull null
+            Card(title, url, cardImage(a.parent()), movie)
+        }.distinctBy { it.url }
+    }
     fun hasNext(doc: Document, page: Int) = doc.select(".pagination a[href]").any { e ->
         val url = e.absUrl("href")
         site(url) && URI(url).path.orEmpty().trimEnd('/').endsWith("/page/${page + 1}")

@@ -23,7 +23,7 @@ import java.util.concurrent.CancellationException
  *  - Embed69 pages are decrypted locally ([Embed69Servers]) or via the player's
  *    `POST /api/decrypt` fallback ([Embed69Raw]).
  */
-class SoloLatinoProvider : MainAPI() {
+class SoloLatinoProvider(private val context: android.content.Context? = null) : MainAPI() {
     override var mainUrl = SoloLatinoMarkup.BASE
     override var name = "SoloLatino"
     override var lang = "es"
@@ -36,20 +36,37 @@ class SoloLatinoProvider : MainAPI() {
         "/animes" to "Animes",
     )
 
-    /** Browser-like headers: the site may serve degraded markup to bare HTTP clients. */
-    private val browserHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-        "Accept-Language" to "es-419,es;q=0.9",
-    )
+    private val browser by lazy { context?.let { SoloLatinoBrowser(it) } }
+    @Volatile private var clearance: String? = null
+
+    /** Browser-like headers: the site serves degraded markup to bare HTTP clients. */
+    private fun browserHeaders(): Map<String, String> = buildMap {
+        put("User-Agent", "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+        put("Accept-Language", "es-419,es;q=0.9")
+        clearance?.let { put("Cookie", it) }
+    }
+
+    private fun challenged(text: String, code: Int): Boolean =
+        code == 403 || code == 503 || text.contains("Just a moment", true) ||
+            text.contains("cf-chl", true) || text.contains("_cf_chl_opt")
 
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(SoloLatinoMarkup.siteUrl(url)) { "Dirección fuera de SoloLatino" }
-        val res = app.get(url, headers = browserHeaders, timeout = 15)
-        if (!res.isSuccessful || !SoloLatinoMarkup.siteUrl(res.url)) {
-            throw IllegalStateException("SoloLatino no respondió correctamente (HTTP ${res.code}).")
+        val res = app.get(url, headers = browserHeaders(), timeout = 15)
+        var text = res.text
+        var finalUrl = res.url
+        if (!res.isSuccessful || !SoloLatinoMarkup.siteUrl(finalUrl) || challenged(text, res.code)) {
+            val page = browser?.fetch(url)
+            if (page != null && page.text.isNotBlank() && SoloLatinoMarkup.siteUrl(page.url) && !challenged(page.text, 200)) {
+                text = page.text
+                finalUrl = page.url
+                browser?.cookieHeader(url)?.let { clearance = it }
+            } else {
+                throw IllegalStateException("SoloLatino no respondió correctamente (HTTP ${res.code}).")
+            }
         }
-        return Jsoup.parse(res.text, res.url)
+        return Jsoup.parse(text, finalUrl)
     }
 
     private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->
@@ -133,15 +150,27 @@ class SoloLatinoProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         if (data.startsWith("diagnostico://")) return diagnose(callback)
-        val page = fetch(data)
-        val servers = SoloLatinoMarkup.servers(page).take(12)
+        var page = fetch(data)
+        var servers = SoloLatinoMarkup.servers(page)
+        if (servers.isEmpty()) {
+            // The token buttons are injected by JavaScript; the rendered DOM has them.
+            val rendered = browser?.fetch(data)
+            if (rendered != null && rendered.text.isNotBlank()) {
+                browser?.cookieHeader(data)?.let { clearance = it }
+                page = Jsoup.parse(rendered.text, rendered.url)
+                servers = SoloLatinoMarkup.servers(page)
+            }
+        }
         if (servers.isEmpty()) return false
         val session = try {
             app.get("$mainUrl/sanctum/csrf-cookie", timeout = 15)
         } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
         val cookies = session?.cookies ?: emptyMap()
         val xsrf = SoloLatinoChain.csrfToken(cookies)
-        val cookieHeader = cookies.entries.joinToString("; ") { entry -> entry.key + "=" + entry.value }
+        val cookieHeader = listOf(
+            clearance.orEmpty(),
+            cookies.entries.joinToString("; ") { entry -> entry.key + "=" + entry.value },
+        ).filter { it.isNotBlank() }.joinToString("; ")
         var emitted = false
         for (server in servers) {
             withTimeoutOrNull(30_000L) {
@@ -172,6 +201,8 @@ class SoloLatinoProvider : MainAPI() {
         SoloLatinoChain.apiHeaders(xsrf, token, referer, System.currentTimeMillis()) +
             (if (cookieHeader.isBlank()) emptyMap() else mapOf("Cookie" to cookieHeader))
 
+    private fun browserCookie(): String = clearance.orEmpty()
+
     /**
      * Runs the live chain against a known episode and reports each step as a source
      * entry, so the state of every stage is visible on the device without logs.
@@ -184,20 +215,31 @@ class SoloLatinoProvider : MainAPI() {
         }
         val target = "$mainUrl/serie/black-clover/temporada-1/episodio-1"
         try {
-            val res = app.get(target, timeout = 15)
-            step("ficha HTTP ${res.code}")
-            val doc = Jsoup.parse(res.text, res.url)
-            val servers = SoloLatinoMarkup.servers(doc)
+            val res = app.get(target, headers = browserHeaders(), timeout = 15)
+            step("ficha HTTP ${res.code} bytes=${res.text.length} desafio=${challenged(res.text, res.code)}")
+            var doc = Jsoup.parse(res.text, res.url)
+            var servers = SoloLatinoMarkup.servers(doc)
+            if (servers.isEmpty() || challenged(res.text, res.code)) {
+                val rendered = browser?.fetch(target)
+                step("webview bytes=${rendered?.text?.length ?: 0} botones=${rendered?.let { SoloLatinoMarkup.servers(Jsoup.parse(it.text, it.url)).size }}")
+                if (rendered != null && rendered.text.isNotBlank()) {
+                    browser?.cookieHeader(target)?.let { clearance = it }
+                    doc = Jsoup.parse(rendered.text, rendered.url)
+                    servers = SoloLatinoMarkup.servers(doc)
+                }
+            }
             step("botones=${servers.size} idiomas=${servers.map { it.language }.distinct()}")
-            val session = try { app.get("$mainUrl/sanctum/csrf-cookie", timeout = 15) } catch (e: CancellationException) { throw e } catch (t: Throwable) { null }
+            val session = try { app.get("$mainUrl/sanctum/csrf-cookie", headers = browserHeaders(), timeout = 15) } catch (e: CancellationException) { throw e } catch (t: Throwable) { null }
             val cookies = session?.cookies ?: emptyMap()
             val xsrf = SoloLatinoChain.csrfToken(cookies)
             step("csrf HTTP ${session?.code ?: "err"} cookies=${cookies.keys} xsrf=${if (xsrf != null) "sí" else "no"}")
+            val cookieHeader = listOf(clearance.orEmpty(), cookies.entries.joinToString("; ") { e -> e.key + "=" + e.value })
+                .filter { it.isNotBlank() }.joinToString("; ")
             for (server in servers.take(2)) {
                 val attempts = listOf(true to true, false to true, true to false, false to false)
                 var answered = false
                 for ((render, useXsrf) in attempts) {
-                    val resolved = playerUrl(server.token, res.url, xsrf, cookies.entries.joinToString("; ") { e -> e.key + "=" + e.value }, render, useXsrf)
+                    val resolved = playerUrl(server.token, res.url, xsrf, cookieHeader, render, useXsrf)
                     if (resolved != null) {
                         step("api render=$render xsrf=$useXsrf → ${resolved.second} ${resolved.first.take(60)}")
                         answered = true
