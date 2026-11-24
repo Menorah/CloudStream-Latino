@@ -60,12 +60,25 @@ internal object PoseidonMarkup {
         n.takeIf { it >= 0 && s.path("episodes").isArray && s.path("episodes").isEmpty }
     }.distinct().take(30)
     fun players(state: JsonNode): List<Player> {
-        val source = if (!state.path("thisMovie").isMissingNode) state.path("thisMovie") else state.path("episode")
+        val source = when {
+            !state.path("thisMovie").isMissingNode -> state.path("thisMovie")
+            !state.path("episode").isMissingNode -> state.path("episode")
+            else -> state.path("thisEpisode")
+        }
         val videos = source.path("videos")
         return listOf("latino" to "Latino", "spanish" to "Castellano", "english" to "Subtitulado").flatMap { (key,label) ->
             videos.path(key).mapNotNull { x ->
                 val url = x.path("result").asText("")
-                if (wrapperUrl(url)) Player(url, label) else null
+                val uri = runCatching { URI(url) }.getOrNull()
+                val host = uri?.host?.lowercase() ?: return@mapNotNull null
+                if (uri.scheme != "https" || uri.userInfo != null || uri.port !in listOf(-1, 443)) return@mapNotNull null
+                if (host.contains("poseidonhd2")) {
+                    if (!wrapperUrl(url)) return@mapNotNull null
+                } else if (uri.path.orEmpty().contains("player.php")) {
+                    // player.php only means the site wrapper on its own host
+                    return@mapNotNull null
+                }
+                Player(url, label)
             }
         }.distinctBy { it.url to it.language }
     }

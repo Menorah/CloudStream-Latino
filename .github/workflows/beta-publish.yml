@@ -1,0 +1,84 @@
+name: Publicación beta (prueba en la red del usuario)
+# Publica los complementos en una release "beta" aparte para que el usuario pueda
+# agregar https://github.com/Menorah/CloudStream-Latino/releases/download/beta/repo.json
+# como repositorio en CloudStream y verificar los pendientes (SoloLatino, PeliCineHD)
+# desde su red. No toca la release oficial "cloudstream".
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/beta-publish.yml', 'beta-trigger']
+permissions:
+  contents: write
+concurrency:
+  group: beta-publish
+  cancel-in-progress: false
+jobs:
+  beta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compilar todo con los pendientes incluidos
+        shell: bash
+        run: |
+          set +e
+          ./gradlew -PenableSoloLatino=true -PenablePeliCineHD=true \
+            :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest \
+            :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest \
+            :Repelis24Shop:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :SoloLatino:testDebugUnitTest \
+            :PeliCineHD:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+          status=$?
+          tail -40 build-log.txt
+          python3 - <<'PY'
+          import pathlib
+          log = pathlib.Path('build-log.txt').read_text()
+          for line in log.splitlines():
+              if line.startswith('e: ') or 'FAILED' in line:
+                  print('::error::' + line.replace('%', '%25')[:300])
+          PY
+          exit $status
+      - name: Preparar archivos beta
+        shell: bash
+        run: |
+          mkdir -p output
+          cp AnimeOnlineNinja/build/AnimeOnlineNinja.cs3 output/
+          cp VerAni/build/VerAni.cs3 output/
+          cp Repelis24CZ/build/Repelis24CZ.cs3 output/
+          cp CinecalidadAM/build/CinecalidadAM.cs3 output/
+          cp CinecalidadMY/build/CinecalidadMY.cs3 output/
+          cp RePelisHD/build/RePelisHD.cs3 output/
+          cp Repelis24Shop/build/Repelis24Shop.cs3 output/
+          cp PoseidonHD2/build/PoseidonHD2.cs3 output/
+          cp SoloLatino/build/SoloLatino.cs3 output/
+          cp PeliCineHD/build/PeliCineHD.cs3 output/
+          python3 - <<'PY'
+          import json, pathlib
+          plugins = json.loads(pathlib.Path('build/plugins.json').read_text())
+          for plugin in plugins:
+              plugin['url'] = plugin['url'].replace('/releases/download/cloudstream/', '/releases/download/beta/')
+          pathlib.Path('output/plugins.json').write_text(json.dumps(plugins, ensure_ascii=False))
+          repo = json.loads(pathlib.Path('repo.json').read_text())
+          repo['name'] = 'CloudStream Latino (beta)'
+          repo['description'] = 'Versión beta para verificar complementos nuevos antes de la release oficial'
+          repo['pluginLists'] = ['https://github.com/Menorah/CloudStream-Latino/releases/download/beta/plugins.json']
+          pathlib.Path('output/repo.json').write_text(json.dumps(repo, ensure_ascii=False))
+          names = {pathlib.Path(p['url']).name for p in plugins}
+          for expected in ['SoloLatino.cs3', 'PeliCineHD.cs3', 'Repelis24Shop.cs3', 'PoseidonHD2.cs3']:
+              assert expected in names, (expected, names)
+              assert (pathlib.Path('output') / expected).stat().st_size > 0
+          print('beta:', sorted(names))
+          PY
+      - name: Publicar en la release beta
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create beta --title "Extensiones CloudStream beta" --notes "Canal de verificación previo a la release oficial." --prerelease || true
+          gh release upload beta output/* --clobber
+          gh release view beta --json assets --jq '.assets[].name'
