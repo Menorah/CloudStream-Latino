@@ -160,6 +160,28 @@ def coil_simulation():
     print("coil_simulation end", flush=True)
 
 
+def episode_thumbs():
+    """Episode thumbnails cannot carry posterHeaders, so find out whether they need them."""
+    desktop = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+    no_referer = {"User-Agent": desktop}
+    with_referer = {"User-Agent": desktop, "Referer": BASE + "/"}
+    with urllib.request.urlopen(urllib.request.Request(BASE + "/temporada/breaking-bad-zpya-1/",
+                                                       headers=PAGE_HEADERS), timeout=25) as response:
+        html = response.read(4_000_000).decode("utf-8", "replace")
+    thumbs = []
+    for raw in re.findall(r'"([^"]*?/cdn/e/[^"]+)"', html):
+        url = "https:" + raw if raw.startswith("//") else raw
+        if url not in thumbs:
+            thumbs.append(url)
+    report = []
+    for url in thumbs[:3]:
+        report.append({"url": urllib.parse.urlsplit(url).path,
+                       "no_referer": get(url, no_referer),
+                       "with_referer": get(url, with_referer)})
+    notice("episode_thumbs", {"found": len(thumbs), "checks": report})
+
+
 def headers_of_site():
     request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -170,7 +192,8 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    for step in (assets, catalog_backdrop, desktop_matrix, coil_simulation, headers_of_site):
+    steps = (assets, catalog_backdrop, desktop_matrix, coil_simulation, episode_thumbs, headers_of_site)
+    for step in steps:
         try:
             step()
         except Exception as error:  # noqa: BLE001
