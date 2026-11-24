@@ -50,8 +50,11 @@ class SoloLatinoMarkupTest {
     @Test fun languageIsNotGuessedForUnknownGroups() {
         val html = """<div data-lang-group="mx"><button class="server-btn" data-player-token="abc123==">Principal</button></div>
         <div data-lang-group="other"><button class="server-btn" data-player-token="token">Otro</button></div>
-        <div data-lang-group="es"><button class="server-btn" data-player-token="bad&amp;x">Inválido</button></div>"""
-        assertEquals(listOf("Latino", "Idioma no indicado"), SoloLatinoMarkup.servers(doc(html)).map { it.language })
+        <div data-lang-group="es"><button class="server-btn" data-player-token="bad&amp;x">Raro</button></div>"""
+        val servers = SoloLatinoMarkup.servers(doc(html))
+        // Tokens are only rejected for control characters; languages are never invented.
+        assertEquals(listOf("Latino", "Idioma no indicado", "Castellano"), servers.map { it.language })
+        assertEquals("bad&x", servers[2].token)
         assertFalse(SoloLatinoMarkup.siteUrl("https://sololatino.net.evil.test/"))
         assertFalse(SoloLatinoMarkup.siteUrl("https://other@sololatino.net/"))
     }

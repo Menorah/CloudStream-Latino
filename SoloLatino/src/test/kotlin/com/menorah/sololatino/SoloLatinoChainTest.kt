@@ -29,6 +29,21 @@ class SoloLatinoChainTest {
         assertEquals(SoloLatinoChain.PlayerKind.EMBED69, SoloLatinoChain.classify("https://embed69.org/e/xyz"))
         assertEquals(SoloLatinoChain.PlayerKind.EMBED69, SoloLatinoChain.classify("https://www.embed69.com/v/1"))
         assertEquals(SoloLatinoChain.PlayerKind.IFRAME, SoloLatinoChain.classify("https://other.host/embed/1"))
+        // The API type wins over the host guess.
+        assertEquals(SoloLatinoChain.PlayerKind.DIRECT_MP4, SoloLatinoChain.classify("https://cdn.example.com/tokenized", "mp4"))
+        assertEquals(SoloLatinoChain.PlayerKind.EMBED69, SoloLatinoChain.classify("https://weird.host/x", "embed69"))
+    }
+
+    @Test fun extractPlayerUrlAcceptsKnownShapes() {
+        val a = SoloLatinoChain.extractPlayerUrl("""{"url":"https:\/\/player.pelisserieshoy.com\/e\/1","type":"pelisserieshoy"}""")!!
+        assertEquals("https://player.pelisserieshoy.com/e/1", a.first)
+        assertEquals("pelisserieshoy", a.second)
+        val b = SoloLatinoChain.extractPlayerUrl("""{"player_url":"https://embed69.org/e/2","type":"embed69"}""")!!
+        assertEquals("https://embed69.org/e/2", b.first)
+        val c = SoloLatinoChain.extractPlayerUrl("""{"src":"https://other.host/p/3"}""")!!
+        assertEquals("https://other.host/p/3", c.first)
+        assertNull(SoloLatinoChain.extractPlayerUrl("""html without links"""))
+        assertNull(SoloLatinoChain.extractPlayerUrl("""{"url":"http://insecure.example/x"}"""))
     }
 
     @Test fun decryptApiBodyWrapsLinks() {

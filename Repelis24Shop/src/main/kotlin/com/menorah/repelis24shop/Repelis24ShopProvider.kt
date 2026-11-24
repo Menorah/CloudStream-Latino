@@ -57,12 +57,15 @@ class Repelis24ShopProvider : MainAPI() {
         val doc = fetch(url); val article = doc.selectFirst("article.backdrop-info") ?: return null
         val title = article.selectFirst("h1 [itemprop=name]")?.text()?.replace(Regex("(?i)^ver (película|serie)\\s+"), "")?.trim().orEmpty()
         if (title.isBlank()) return null
-        val poster = article.selectFirst("figure.poster img")?.absUrl("src")?.takeIf(Repelis24ShopMarkup::site)
+        val poster = Repelis24ShopMarkup.img(article.selectFirst("figure.poster img"))
+        val backdrop = article.selectFirst("[style*=background]")?.attr("style")
+            ?.let { Regex("url\\(['\"]?(https://[^'\")]+)['\"]?\\)").find(it)?.groupValues?.get(1) }
+            ?: Repelis24ShopMarkup.img(article.selectFirst(".backdrop img, img.backdrop"))
         val description = article.selectFirst("[itemprop=description] p")?.text()?.takeIf { it.isNotBlank() }
         val year = article.selectFirst("[itemprop=datePublished]")?.text()?.trim()?.toIntOrNull()
         val tags = article.select("[itemprop=genre]").map { it.text().trim().trimEnd(',') }.filter { it.isNotBlank() }
         if (URI(url).path.orEmpty().startsWith("/pelicula/"))
-            return newMovieLoadResponse(title, doc.location(), TvType.Movie, doc.location()) { posterUrl = poster; plot = description; this.year = year; this.tags = tags }
+            return newMovieLoadResponse(title, doc.location(), TvType.Movie, doc.location()) { posterUrl = poster; backgroundPosterUrl = backdrop ?: poster; plot = description; this.year = year; this.tags = tags }
         val seasons = Repelis24ShopMarkup.seasons(doc)
         if (seasons.isEmpty()) return null
         val all = coroutineScope {
@@ -73,7 +76,7 @@ class Repelis24ShopProvider : MainAPI() {
             newEpisode(item.url) { name = item.title; season = item.season; episode = item.number; posterUrl = item.poster }
         }
         if (episodes.isEmpty()) return null
-        return newTvSeriesLoadResponse(title, doc.location(), TvType.TvSeries, episodes) { posterUrl = poster; plot = description; this.year = year; this.tags = tags }
+        return newTvSeriesLoadResponse(title, doc.location(), TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = backdrop ?: poster; plot = description; this.year = year; this.tags = tags }
     }
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val doc = fetch(data); val players = Repelis24ShopMarkup.players(doc).take(24)
@@ -89,14 +92,18 @@ class Repelis24ShopProvider : MainAPI() {
                             loadExtractor(voe, player.url, subtitleCallback) { links.add(it) }
                             for (link in synchronized(links) { links.toList() }) {
                                 val labeled = label(link, player.language)
-                                synchronized(lock) { callback(labeled); emitted.set(true) }
+                                if (mediaPlayable(labeled.url, labeled.headers + mapOf("Referer" to labeled.referer))) {
+                                    synchronized(lock) { callback(labeled); emitted.set(true) }
+                                }
                             }
                         } else if (URI(player.url).path.orEmpty().startsWith("/watch/")) {
                             val res = app.get(player.url, headers = mapOf("User-Agent" to ua, "Referer" to doc.location()), timeout = 12)
                             if (!res.isSuccessful || !Repelis24ShopMarkup.nupload(res.url)) return@withTimeout
                             val media = Repelis24ShopMarkup.media(res.text) ?: return@withTimeout
+                            val headers = mapOf("User-Agent" to ua, "Referer" to res.url)
+                            if (!mediaPlayable(media, headers)) return@withTimeout
                             val link = newExtractorLink(name, "[${player.language}] Nuupload", media, ExtractorLinkType.M3U8) {
-                                referer = res.url; headers = mapOf("User-Agent" to ua)
+                                referer = res.url; this.headers = headers
                             }
                             synchronized(lock) { callback(link); emitted.set(true) }
                         }
@@ -107,6 +114,24 @@ class Repelis24ShopProvider : MainAPI() {
             } } }.awaitAll()
         }
         return emitted.get()
+    }
+    /**
+     * Host-side takedowns return HTML where the media should be; probing the first bytes
+     * keeps CONTAINER_MALFORMED links out of the list. Unreachable probes stay optimistic.
+     */
+    private suspend fun mediaPlayable(url: String, headers: Map<String, String>): Boolean {
+        if (!url.startsWith("https://")) return false
+        val probe = try {
+            app.get(url, headers = headers + mapOf("Range" to "bytes=0-1023"), timeout = 10)
+        } catch (e: CancellationException) { throw e } catch (_: Throwable) { return true }
+        if (!probe.isSuccessful) return probe.code in listOf(206, 403, 405, 416)
+        val text = probe.text
+        if (text.isBlank()) return true
+        val head = text.trimStart()
+        if (head.startsWith("#EXTM3U") || head.startsWith("#EXT-X-")) return true
+        val bytes = text.toByteArray(Charsets.ISO_8859_1)
+        if (bytes.size > 12 && (String(bytes, 4, 4) == "ftyp" || bytes[0] == 0x47.toByte() || (bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()))) return true
+        return !(head.startsWith("<") || head.contains("<html", true) || head.contains("Access denied", true))
     }
     private suspend fun label(link: ExtractorLink, language: String): ExtractorLink {
         val title = "[$language] ${link.name}"

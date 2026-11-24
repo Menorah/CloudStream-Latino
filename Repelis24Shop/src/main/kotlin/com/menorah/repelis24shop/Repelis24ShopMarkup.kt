@@ -18,7 +18,24 @@ internal object Repelis24ShopMarkup {
     }.getOrDefault(false)
     fun site(url: String) = host(url, "repelis24.shop")
     fun nupload(url: String) = host(url, "nupload.my")
-    private fun image(url: String): String? = url.takeIf { site(it) }
+    /** Posters live on the site's CDN but any https image is accepted; lazy attrs are tried too. */
+    private fun image(url: String): String? = runCatching {
+        val u = URI(url.trim())
+        url.trim().takeIf {
+            u.scheme.equals("https", true) && !u.host.isNullOrBlank() && u.userInfo == null &&
+                u.port in listOf(-1, 443) && it.length <= 2048 && !it.startsWith("data:")
+        }
+    }.getOrNull()
+    fun img(element: org.jsoup.nodes.Element?): String? {
+        if (element == null) return null
+        for (attr in listOf("src", "data-src", "data-lazy-src", "data-original")) {
+            val value = element.absUrl(attr).ifBlank { element.attr(attr) }
+            image(value)?.let { return it }
+        }
+        val srcset = element.attr("srcset").split(',').map { it.trim().split(' ').first() }
+        for (value in srcset) image(element.absUrl(value).ifBlank { value })?.let { return it }
+        return null
+    }
     /** Nuupload's alternative player carries the actual VOE URL as one query parameter. */
     fun voeFromWrapper(url: String): String? = runCatching {
         if (!nupload(url)) return null
@@ -38,7 +55,7 @@ internal object Repelis24ShopMarkup {
         if (!movie && !path.startsWith("/serie/")) return@mapNotNull null
         val title = a.selectFirst(".item-detail p")?.text()?.trim().orEmpty()
         if (title.isBlank()) return@mapNotNull null
-        Card(title, url, image(a.selectFirst("img")?.absUrl("src").orEmpty()), movie)
+        Card(title, url, img(a.selectFirst("img")), movie)
     }.distinctBy { it.url }
     fun hasNext(doc: Document, page: Int) = doc.select(".pagination a[href]").any { e ->
         val url = e.absUrl("href")
@@ -56,7 +73,7 @@ internal object Repelis24ShopMarkup {
         val number = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
         if (s != season || number < 1) return@mapNotNull null
         val title = a.selectFirst("[itemprop=name]")?.text()?.trim().orEmpty().ifBlank { "Episodio $number" }
-        Episode(title, s, number, url, image(a.selectFirst("img")?.absUrl("src").orEmpty()))
+        Episode(title, s, number, url, img(a.selectFirst("img")))
     }.distinctBy { it.season to it.number }
     fun players(doc: Document): List<Player> = doc.select("#player li[data-server]").mapNotNull { e ->
         val raw = runCatching { String(Base64.decode(e.attr("data-server"), Base64.DEFAULT), Charsets.UTF_8) }.getOrNull() ?: return@mapNotNull null
