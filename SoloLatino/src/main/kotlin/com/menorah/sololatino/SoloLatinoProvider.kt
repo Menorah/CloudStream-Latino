@@ -11,7 +11,6 @@ import java.net.URI
 import java.net.URLEncoder
 import java.util.Collections
 import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * SoloLatino provider. Site mechanics documented from the live site (November 2026) and
@@ -120,25 +119,27 @@ class SoloLatinoProvider : MainAPI() {
         val session = withContext(Dispatchers.IO) {
             runCatching { app.get("$mainUrl/sanctum/csrf-cookie", timeout = 15) }.getOrNull()
         }
-        val cookies = session?.cookies.orEmpty()
-        val xsrf = SoloLatinoChain.csrfToken(cookies)
-        val cookieHeader = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        val emitted = AtomicBoolean(false)
-        val lock = Any()
-        suspend fun emit(link: ExtractorLink) = synchronized(lock) { emitted.set(true); callback(link) }
-
-        coroutineScope {
-            servers.map { server ->
-                async {
-                    withTimeoutOrNull(30_000L) {
-                        try {
-                            resolveServer(server, data, xsrf, cookieHeader, subtitleCallback, ::emit)
-                        } catch (e: CancellationException) { throw e } catch (_: Throwable) { false }
-                    }
+        val cookies = mutableMapOf<String, String>()
+        session?.let { response ->
+            for (name in listOf("set-cookie", "Set-Cookie")) {
+                response.headers[name]?.split(",")?.forEach { part ->
+                    val kv = part.split(";")[0].trim()
+                    val eq = kv.indexOf('=')
+                    if (eq > 0) cookies[kv.substring(0, eq).trim()] = kv.substring(eq + 1).trim()
                 }
-            }.awaitAll()
+            }
         }
-        return emitted.get()
+        val xsrf = SoloLatinoChain.csrfToken(cookies)
+        val cookieHeader = cookies.entries.joinToString("; ") { entry -> entry.key + "=" + entry.value }
+        var emitted = false
+        for (server in servers) {
+            withTimeoutOrNull(30_000L) {
+                try {
+                    if (resolveServer(server, data, xsrf, cookieHeader, subtitleCallback, callback)) emitted = true
+                } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
+            }
+        }
+        return emitted
     }
 
     private fun apiHeaders(xsrf: String?, token: String, referer: String, cookieHeader: String): Map<String, String> =
