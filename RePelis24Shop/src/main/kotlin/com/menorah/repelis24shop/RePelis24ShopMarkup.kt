@@ -126,7 +126,7 @@ internal object RePelis24ShopMarkup {
 
     // ------------------------------------------------------------- catalog
 
-    fun cards(doc: Document): List<Card> = doc.select("div.movie-item a[href]").mapNotNull { link ->
+    fun cards(doc: Element): List<Card> = doc.select("div.movie-item a[href]").mapNotNull { link ->
         val url = resolve(doc.location(), link.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
         val path = URI(url).path.orEmpty()
         val movie = path.startsWith("/pelicula/")
