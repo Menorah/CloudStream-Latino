@@ -134,10 +134,10 @@ class PeliCineProvider : MainAPI() {
             val label = "[${PeliCineMarkup.language(server.language)}] ${server.name}"
             val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
             try {
-                loadExtractor(resolved, data, subtitleCallback) { link -> links.add(relabeled(link, label)) }
+                loadExtractor(resolved, data, subtitleCallback) { link -> links.add(link) }
             } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
             val found = synchronized(links) { links.toList() }
-            found.forEach { callback(it) }
+            for (link in found) callback(relabeled(link, label))
             if (found.isNotEmpty()) emitted = true
         }
         return emitted

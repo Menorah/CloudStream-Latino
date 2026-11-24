@@ -39,13 +39,18 @@ internal object PeliCineMarkup {
         doc.select(".nav-links a, a.nextpostslink").any { it.text().trim().equals("SIGUIENTE", true) || it.hasClass("nextpostslink") }
 
     fun detailTitle(doc: Document): String? = doc.selectFirst("h1.entry-title")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-    fun detailPoster(doc: Document): String? =
-        doc.selectFirst("img[alt*=Image], .poster img, .simg img")?.let { img ->
-            img.attr("src").takeIf { it.startsWith("http") } ?: img.absUrl("src").takeIf { it.startsWith("http") }
-        }
+    fun detailPoster(doc: Document): String? {
+        val img = doc.selectFirst("img[alt*=Image], .poster img, .simg img") ?: return null
+        val direct = img.attr("src").takeIf { it.startsWith("http") }
+        return direct ?: img.absUrl("src").takeIf { it.startsWith("http") }
+    }
     fun detailPlot(doc: Document): String? = doc.selectFirst(".description, .wp-content p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-    fun detailYear(doc: Document): Int? = doc.select("span.fa-calendar, .date, .info1 span").firstNotNullOfOrNull {
-        Regex("\\b(19|20)\\d{2}\\b").find(it.text())?.value?.toIntOrNull()
+    fun detailYear(doc: Document): Int? {
+        for (element in doc.select("span.fa-calendar, .date, .info1 span")) {
+            val year = Regex("\\b(19|20)\\d{2}\\b").find(element.text())?.value?.toIntOrNull()
+            if (year != null) return year
+        }
+        return null
     }
     fun detailGenres(doc: Document): List<String> = doc.select(".genres > a, .sgeneros a").map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
 
