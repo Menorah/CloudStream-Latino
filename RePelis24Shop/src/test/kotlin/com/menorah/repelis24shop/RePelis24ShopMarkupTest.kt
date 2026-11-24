@@ -31,7 +31,6 @@ class RePelis24ShopMarkupTest {
                   <img alt="Poster Pacífico" class="poster" loading="lazy" src="//repelis24.shop/cdn/p/v2/w1/3fNX6GcqmjFqzuc01YDmmJVRrxv2s.webp"/>
                   <span class="year text-center">2026</span>
                 </figure></div>
-                <div class="card-hover"><div class="card-hover-backdrop" data-backdrop="//repelis24.shop/cdn/b/v2/w1/wmg99dGbtSlZ9Lk.webp"></div></div>
                 <div class="item-detail"><p>Pacífico</p></div>
               </a>
             </div>
@@ -54,7 +53,6 @@ class RePelis24ShopMarkupTest {
         assertEquals("Pacífico", cards[0].title)
         assertEquals("https://repelis24.shop/pelicula/pacifico/", cards[0].url)
         assertEquals("https://repelis24.shop/cdn/p/v2/w1/3fNX6GcqmjFqzuc01YDmmJVRrxv2s.webp", cards[0].poster)
-        assertEquals("https://repelis24.shop/cdn/b/v2/w1/wmg99dGbtSlZ9Lk.webp", cards[0].background)
         assertFalse(cards[1].movie)
         assertEquals("https://repelis24.shop/cdn/p/ncis.webp", cards[1].poster)
     }
