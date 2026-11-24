@@ -106,7 +106,7 @@ class RePelis24ShopProvider : MainAPI() {
         val plot = RePelis24ShopMarkup.plot(doc)
         val year = RePelis24ShopMarkup.year(doc)
         val tags = RePelis24ShopMarkup.genres(doc)
-        val actors = RePelis24ShopMarkup.actors(doc)
+        val actors = RePelis24ShopMarkup.actors(doc).map { ActorData(Actor(it)) }
         val recommendations = try {
             responses(RePelis24ShopMarkup.recommendations(doc))
         } catch (e: CancellationException) {
