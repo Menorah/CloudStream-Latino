@@ -2,6 +2,7 @@ package com.menorah.repelis24shop
 
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.util.Base64
 import java.net.URI
 import java.net.URLDecoder
 import java.util.Base64
@@ -138,6 +139,22 @@ internal object RePelis24ShopMarkup {
         val head = html.take(4000).lowercase()
         return "just a moment" in head && ("cf-browser-verification" in html.lowercase() || "challenge-platform" in html.lowercase())
     }
+
+    /**
+     * Headers CloudStream's image loader must send for `repelis24.shop/cdn/**` assets.
+     *
+     * The CDN is behind Cloudflare, which answers an interstitial (HTTP 403, no image) when the
+     * request has no `Referer`. Coil, the app's image loader, sends its own desktop User-Agent but
+     * no Referer, so posters and backdrops only load when the response carries these headers.
+     * `MainAPI.posterHeaders` forwards them to every image the app renders for this provider.
+     */
+    val posterHeaders: Map<String, String> = mapOf(
+        "Referer" to "$BASE/",
+        "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8"
+    )
+
+    fun isSiteAsset(url: String?): Boolean = url != null && url.startsWith("$BASE/cdn/")
 
     fun cards(doc: Element): List<Card> = cards(doc, doc.baseUri())
 

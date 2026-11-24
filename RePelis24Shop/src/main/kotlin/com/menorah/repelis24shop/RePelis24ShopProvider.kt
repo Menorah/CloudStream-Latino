@@ -20,6 +20,13 @@ class RePelis24ShopProvider : MainAPI() {
     override var mainUrl = RePelis24ShopMarkup.BASE
     override var name = "RePelis24.shop"
     override var lang = "es"
+    /**
+     * Cloudflare on `repelis24.shop/cdn/**` answers HTTP 403 to requests without a site `Referer`,
+     * and the app's image loader does not send one by default. Declaring the headers here makes
+     * CloudStream attach them to every poster, backdrop and episode thumbnail it renders.
+     */
+    override var posterHeaders: Map<String, String>? = RePelis24ShopMarkup.posterHeaders
+
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -121,6 +128,7 @@ class RePelis24ShopProvider : MainAPI() {
         if (RePelis24ShopMarkup.isMovie(doc)) {
             return newMovieLoadResponse(title, doc.location(), TvType.Movie, doc.location()) {
                 posterUrl = poster
+                backgroundPosterUrl = poster
                 this.plot = plot
                 this.year = year
                 this.tags = tags
@@ -161,6 +169,7 @@ class RePelis24ShopProvider : MainAPI() {
             }
         }) {
             posterUrl = poster
+            backgroundPosterUrl = poster
             this.plot = plot
             this.year = year
             this.tags = tags
