@@ -289,6 +289,22 @@ class RePelis24ShopMarkupTest {
         assertNull(RePelis24ShopMarkup.nuploadStream(withoutSession, "https://nupload.my/watch/abc"))
     }
 
+    // --------------------------------------------------------- accessibility
+
+    @Test
+    fun challengePagesAreDetectedButNormalPagesAreNot() {
+        val challenge = """
+            <!DOCTYPE html><html><head><title>Just a moment...</title>
+            <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1"></script></head><body></body></html>
+        """.trimIndent()
+        assertTrue(RePelis24ShopMarkup.isChallenge(challenge))
+        val normal = doc(
+            """<html><head><title>RePelis24 » Ver gratis películas y series online en HD</title></head>
+               <body><div class="movie-item"><a href="/pelicula/x/"><div class="item-detail"><p>X</p></div></a></div></body></html>"""
+        ).outerHtml()
+        assertFalse(RePelis24ShopMarkup.isChallenge(normal))
+    }
+
     // ------------------------------------------------------------ url guard
 
     @Test

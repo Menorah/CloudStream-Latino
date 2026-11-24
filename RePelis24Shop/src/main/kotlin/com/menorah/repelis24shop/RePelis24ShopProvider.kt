@@ -57,6 +57,9 @@ class RePelis24ShopProvider : MainAPI() {
         val response = app.get(url, referer = referer, timeout = 20)
         if (!response.isSuccessful) throw IllegalStateException("RePelis24.shop no respondió correctamente (HTTP ${response.code}).")
         if (!RePelis24ShopMarkup.siteUrl(response.url)) throw IllegalStateException("RePelis24.shop redirigió fuera del sitio.")
+        if (RePelis24ShopMarkup.isChallenge(response.text)) {
+            throw ErrorLoadingException("RePelis24.shop pidió una verificación anti-bots. Inténtalo de nuevo en unos minutos.")
+        }
         return Jsoup.parse(response.text, response.url)
     }
 
@@ -179,6 +182,7 @@ class RePelis24ShopProvider : MainAPI() {
         if (options.isEmpty()) return false
         val emitted = AtomicBoolean(false)
         val lock = Any()
+        val seen = Collections.synchronizedSet(mutableSetOf<String>())
 
         withTimeoutOrNull(60_000L) {
             coroutineScope {
@@ -188,6 +192,8 @@ class RePelis24ShopProvider : MainAPI() {
                         permits.withPermit {
                             withTimeoutOrNull(20_000L) {
                                 for (link in resolve(option.url, doc.location(), option.language, subtitleCallback)) {
+                                    // Two tabs can point at the same stream; only report it once.
+                                    if (!seen.add("${link.url}|${link.name}")) continue
                                     synchronized(lock) {
                                         emitted.set(true)
                                         callback(link)

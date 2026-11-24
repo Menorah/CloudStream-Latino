@@ -130,6 +130,15 @@ internal object RePelis24ShopMarkup {
 
     // ------------------------------------------------------------- catalog
 
+    /**
+     * Cloudflare's interstitial answers with HTTP 200 and no catalog, so it has to be detected
+     * from the body instead of the status code.
+     */
+    fun isChallenge(html: String): Boolean {
+        val head = html.take(4000).lowercase()
+        return "just a moment" in head && ("cf-browser-verification" in html.lowercase() || "challenge-platform" in html.lowercase())
+    }
+
     fun cards(doc: Element): List<Card> = cards(doc, doc.baseUri())
 
     fun cards(doc: Element, location: String): List<Card> = doc.select("div.movie-item a[href]").mapNotNull { link ->
