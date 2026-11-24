@@ -21,7 +21,7 @@ class RePelis24ShopProvider : MainAPI() {
     override var name = "RePelis24.shop"
     override var lang = "es"
     /**
-     * Cloudflare on `repelis24.shop/cdn/**` answers HTTP 403 to requests without a site `Referer`,
+     * Cloudflare on the site CDN answers HTTP 403 to requests without a site Referer,
      * and the app's image loader does not send one by default. Declaring the headers here makes
      * CloudStream attach them to every poster, backdrop and episode thumbnail it renders.
      */

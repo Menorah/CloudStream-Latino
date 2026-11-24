@@ -140,7 +140,7 @@ internal object RePelis24ShopMarkup {
     }
 
     /**
-     * Headers CloudStream's image loader must send for `repelis24.shop/cdn/**` assets.
+     * Headers CloudStream's image loader must send for the CDN assets of this site.
      *
      * The CDN is behind Cloudflare, which answers an interstitial (HTTP 403, no image) when the
      * request has no `Referer`. Coil, the app's image loader, sends its own desktop User-Agent but
