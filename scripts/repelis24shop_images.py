@@ -49,15 +49,16 @@ def assets():
     url = "https:" + poster.group(1) if poster and poster.group(1).startswith("//") else (poster.group(1) if poster else None)
     if not url:
         return None
+    desktop = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
     variants = {
-        "site_referer_android": {"User-Agent": PAGE_UA, "Referer": BASE + "/", "Accept": "image/avif,image/webp,*/*"},
-        "no_referer_android": {"User-Agent": PAGE_UA, "Accept": "image/avif,image/webp,*/*"},
-        "crappy_ua": {"User-Agent": "okhttp/4.12.0", "Accept": "*/*"},
-        "cloudstream_ua": {"User-Agent": "CloudStream/4.5.0 (Android)", "Accept": "*/*"},
-        "browser_like": {"User-Agent": PAGE_UA, "Referer": BASE + "/pelicula/la-odisea/",
-                         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-                         "Accept-Language": "es-AR,es;q=0.9", "Sec-Fetch-Dest": "image",
-                         "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "same-origin"},
+        # CloudStream's own image loader: desktop USER_AGENT, no Referer, no Accept.
+        "cloudstream_default": {"User-Agent": desktop},
+        "cloudstream_with_referer": {"User-Agent": desktop, "Referer": BASE + "/"},
+        "desktop_referer_page": {"User-Agent": desktop, "Referer": BASE + "/pelicula/la-odisea/"},
+        "android_referer_absolute": {"User-Agent": PAGE_UA, "Referer": "https://repelis24.shop/"},
+        "android_no_accept": {"User-Agent": PAGE_UA, "Referer": BASE + "/"},
+        "android_accept_star": {"User-Agent": PAGE_UA, "Referer": BASE + "/", "Accept": "*/*"},
     }
     for name, headers in variants.items():
         notice("image_" + name, get(url, headers))
@@ -74,12 +75,38 @@ def catalog_backdrop():
     backdrop = re.search(r'data-backdrop="([^"]+)"', first)
     notice("card_assets", {"poster": poster.group(1) if poster else None,
                            "backdrop": backdrop.group(1) if backdrop else None})
+    icons = re.findall(r'(//repelis24\.shop/cdn/plusdes/static/image/[^"]+)', html)
+    notice("other_assets", {"icons": icons[:3]})
     for label, raw in (("poster", poster), ("backdrop", backdrop)):
         if not raw:
             continue
         url = raw.group(1)
         url = "https:" + url if url.startswith("//") else url
         notice("card_" + label, get(url, {"User-Agent": PAGE_UA, "Referer": BASE + "/peliculas/"}))
+
+
+def desktop_matrix():
+    """Which exact headers make the CDN answer for CloudStream's own image loader."""
+    desktop = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+    with urllib.request.urlopen(urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS), timeout=25) as response:
+        html = response.read(3_000_000).decode("utf-8", "replace")
+    poster = re.search(r'<div class="movie-item">[\s\S]*?<img[^>]+src="([^"]+)"', html)
+    backdrop = re.search(r'<div class="movie-item">[\s\S]*?data-backdrop="([^"]+)"', html)
+    cases = []
+    for label, match in (("poster", poster), ("backdrop", backdrop)):
+        if not match:
+            continue
+        raw = match.group(1)
+        url = "https:" + raw if raw.startswith("//") else raw
+        for name, headers in {
+            "desktop_no_referer": {"User-Agent": desktop},
+            "desktop_referer_root": {"User-Agent": desktop, "Referer": BASE + "/"},
+            "desktop_referer_page": {"User-Agent": desktop, "Referer": BASE + "/peliculas/"},
+        }.items():
+            result = get(url, headers)
+            cases.append({"asset": label, "headers": name, **{k: result.get(k) for k in ("status", "type", "cf")}})
+    notice("desktop_matrix", cases)
 
 
 def headers_of_site():
@@ -92,7 +119,7 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    for step in (assets, catalog_backdrop, headers_of_site):
+    for step in (assets, catalog_backdrop, desktop_matrix, headers_of_site):
         try:
             step()
         except Exception as error:  # noqa: BLE001
