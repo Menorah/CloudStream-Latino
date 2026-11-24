@@ -5,6 +5,9 @@ name: Publicación beta (prueba en la red del usuario)
 # desde su red. No toca la release oficial "cloudstream".
 on:
   workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/beta-publish.yml', 'beta-trigger']
 permissions:
   contents: write
 concurrency:
