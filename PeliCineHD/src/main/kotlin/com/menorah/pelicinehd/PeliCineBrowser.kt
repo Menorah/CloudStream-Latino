@@ -18,7 +18,8 @@ import kotlin.coroutines.resume
  * Same pattern the repository already uses for AnimeOnline.
  */
 internal class PeliCineBrowser(private val context: Context) {
-    private data class Result(val url: String, val text: String)
+    /** HTML produced by the off-screen WebView pass. */
+    data class Result(val url: String, val text: String)
 
     @SuppressLint("SetJavaScriptEnabled")
     suspend fun fetch(target: String): Result = suspendCancellableCoroutine { continuation ->
