@@ -6,7 +6,6 @@ rootProject.name = "CloudstreamPlugins"
 // Experimental providers are kept out of release builds until playback is verified.
 // The opt-in flags keep each one available to its diagnostic workflows.
 val disabled =
-    (if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2")) +
     (if (providers.gradleProperty("enableSoloLatino").orNull == "true") emptyList() else listOf("SoloLatino")) +
     (if (providers.gradleProperty("enablePeliCineHD").orNull == "true") emptyList() else listOf("PeliCineHD"))
 

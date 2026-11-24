@@ -1,6 +1,6 @@
 # CloudStream Latino
 
-Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/) y [Cinecalidad.my](https://www.cinecalidad.my/), en fase beta. Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
+Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/) y [PoseidonHD 2](https://www.poseidonhd2.co/), en fase beta. Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
 
 ## Instalación
 
@@ -54,6 +54,10 @@ La extensión incluye catálogos paginados de películas, series, tendencias y l
 ### RePelis24.shop
 
 La extensión incluye catálogos, búsqueda, fichas de películas y series con temporadas, y enlaces por idioma vía Nuupload (con resolución de sus listas HLS) y VOE. Su reproducción se verificó en CloudStream con Media3 en Android (películas y episodios reproducidos con frames decodificados); los títulos retirados por el servidor se informan como no disponibles y la disponibilidad varía como en el resto de complementos.
+
+### PoseidonHD 2
+
+La extensión incluye catálogos, búsqueda, películas y series con temporadas. Los enlaces se obtienen de los datos del sitio (`__NEXT_DATA__`) y se etiquetan por idioma (latino, castellano, subtitulado); el envoltorio del reproductor del sitio se resuelve al hoster correspondiente. Su reproducción se verificó en CloudStream con Media3 (una película y tres episodios reproducidos con frames decodificados). Algunos hosts piden verificación (Netu, Doodstream) o fallan según la red; esos casos se informan como muestras no disponibles y la disponibilidad varía como en el resto de complementos.
 
 ### Cinecalidad.am y proveedores en investigación
 
