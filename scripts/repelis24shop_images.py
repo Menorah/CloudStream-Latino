@@ -16,9 +16,21 @@ PAGE_HEADERS = {"User-Agent": PAGE_UA,
                 "Referer": BASE + "/"}
 
 
+REPORT = {}
+
+
 def notice(key, value):
-    text = json.dumps({key: value}, ensure_ascii=True).replace("%", "%25").replace("\n", " ")
-    print("::notice::" + text[:6000], flush=True)
+    """Collect every probe result; a check run only publishes 10 annotations, so the whole
+    report is emitted once at the end instead of one annotation per probe."""
+    REPORT[key] = value
+    print(key, "->", json.dumps(value, ensure_ascii=True)[:600], flush=True)
+
+
+def publish():
+    payload = json.dumps(REPORT, ensure_ascii=True).replace("%", "%25").replace("\n", " ")
+    print("report length", len(payload), flush=True)
+    for index in range(0, len(payload), 55000):
+        print("::notice::" + payload[index:index + 55000], flush=True)
 
 
 def get(url, headers):
@@ -144,7 +156,7 @@ def coil_simulation():
             checks.append({"asset": "/".join(urllib.parse.urlsplit(url).path.split("/")[:4]),
                            "status": result.get("status"), "type": result.get("type")})
         results[label] = {"images": len(found), "checks": checks}
-        notice("coil_" + label, results[label])
+    notice("coil_simulation", results)
     print("coil_simulation end", flush=True)
 
 
@@ -162,4 +174,5 @@ if __name__ == "__main__":
         try:
             step()
         except Exception as error:  # noqa: BLE001
-            notice("step_error", {"step": step.__name__, "error": str(error)[:300]})
+            REPORT["error_" + step.__name__] = str(error)[:300]
+    publish()
