@@ -44,6 +44,52 @@ def get(url, headers=None):
         return {"error": str(error)[:300]}
 
 
+BROWSER = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+    "sec-ch-ua": '"Chromium";v="149", "Not)A;Brand";v="24", "Google Chrome";v="149"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
+    "Connection": "keep-alive",
+}
+
+
+def evasions():
+    """Cloudflare answers 403 to datacenter IPs; find which header set (if any) gets through."""
+    variants = {
+        "plain_ua": {"User-Agent": BROWSER["User-Agent"]},
+        "with_accept_language": {"User-Agent": BROWSER["User-Agent"],
+                                 "Accept": BROWSER["Accept"],
+                                 "Accept-Language": BROWSER["Accept-Language"]},
+        "full_browser_no_referer": BROWSER,
+        "full_browser_referer": {**BROWSER, "Referer": BASE + "/"},
+        "googlebot": {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"},
+        "mobile_android": {"User-Agent": ("Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
+                                          "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"),
+                           "Accept": BROWSER["Accept"], "Accept-Language": BROWSER["Accept-Language"]},
+    }
+    report = {}
+    for name, headers in variants.items():
+        page = get(BASE + "/", headers)
+        body = page.get("body", "")
+        report[name] = {"status": page.get("status"), "len": len(body),
+                        "challenge": "Just a moment" in body or "cf-chl" in body}
+    notice("evasions", report)
+
+    # Does the challenge apply to sub-paths or to the WP API only?
+    paths = ["/peliculas/", "/series/", "/?s=avatar", "/api/", "/feed/", "/xmlrpc.php"]
+    notice("paths", {path: {"status": (r := get(BASE + path, BROWSER)).get("status"),
+                            "challenge": "Just a moment" in r.get("body", "")} for path in paths})
+
+
 def structure():
     page = get(BASE + "/")
     body = page.get("body", "")
@@ -97,7 +143,7 @@ def wp_api():
 
 
 if __name__ == "__main__":
-    steps = {"structure": structure, "sitemaps": sitemaps, "wp_api": wp_api}
+    steps = {"evasions": evasions, "structure": structure, "sitemaps": sitemaps, "wp_api": wp_api}
     wanted = sys.argv[1:] or list(steps)
     for name in wanted:
         try:
