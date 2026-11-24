@@ -121,7 +121,7 @@ class RePelis24ShopMarkupTest {
         assertEquals("Una epopeya mitológica que sigue la historia de Odiseo.", RePelis24ShopMarkup.plot(document))
         assertEquals(2026, RePelis24ShopMarkup.year(document))
         assertEquals(listOf("Acción", "Aventura"), RePelis24ShopMarkup.genres(document))
-        assertEquals(listOf("Matt Damon", "Tom Holland"), RePelis24ShopMarkup.actors(document).map { it.name })
+        assertEquals(listOf("Matt Damon", "Tom Holland"), RePelis24ShopMarkup.actors(document).map { it.actor.name })
         assertEquals(173, RePelis24ShopMarkup.durationMinutes(document))
         assertNull(RePelis24ShopMarkup.background(document))
     }

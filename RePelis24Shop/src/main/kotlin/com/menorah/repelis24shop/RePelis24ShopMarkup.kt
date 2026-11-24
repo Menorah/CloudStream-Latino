@@ -1,6 +1,7 @@
 package com.menorah.repelis24shop
 
 import com.lagradost.cloudstream3.Actor
+import com.lagradost.cloudstream3.ActorData
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -185,11 +186,11 @@ internal object RePelis24ShopMarkup {
         ?.filter { it.isNotEmpty() }?.distinct().orEmpty()
 
     /** Actors are plain `a[href=/buscar/<name>]` links in the same info list as the genres. */
-    fun actors(doc: Document): List<Actor> = doc.select(".info-list li")
+    fun actors(doc: Document): List<ActorData> = doc.select(".info-list li")
         .firstOrNull { it.selectFirst("strong")?.text()?.contains("Actores", ignoreCase = true) == true }
         ?.select("a")?.mapNotNull { anchor ->
             val name = anchor.text().trim().trimEnd(',').trim()
-            if (name.isEmpty()) null else Actor(name)
+            if (name.isEmpty()) null else ActorData(Actor(name))
         }?.distinctBy { it.name }.orEmpty()
 
     fun durationMinutes(doc: Document): Int? {
