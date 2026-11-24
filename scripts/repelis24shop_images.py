@@ -194,6 +194,25 @@ def episode_thumbs():
     notice("episode_thumbs", {"found": len(thumbs), "checks": report})
 
 
+def cross_host():
+    """Can another host serve the same CDN objects without a Referer? That would also fix the
+    episode thumbnails, which cannot carry posterHeaders in CloudStream."""
+    desktop = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+    path = "/cdn/e/v2/w0/OOaUaxd7y5zVlwOuRA7Ed2.webp"
+    poster_path = "/cdn/p/v2/w1/3fNX6GcqmjFqzuc01YDmmJVRrxv2s.webp"
+    hosts = ["https://repelis24.shop", "https://repelis24.cz", "https://www.repelis24.shop",
+             "https://cdn.repelis24.shop", "https://repelis24.shop.cdn.cloudflare.net"]
+    report = {}
+    for host in hosts:
+        entry = {}
+        for label, asset in (("thumb", path), ("poster", poster_path)):
+            entry[label] = {k: v for k, v in get(host + asset, {"User-Agent": desktop}).items()
+                            if k in ("status", "type", "cf", "error")}
+        report[host] = entry
+    notice("cross_host", report)
+
+
 def headers_of_site():
     request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -204,7 +223,7 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    steps = (assets, catalog_backdrop, desktop_matrix, coil_simulation, episode_thumbs, headers_of_site)
+    steps = (assets, catalog_backdrop, cross_host, episode_thumbs, headers_of_site)
     for step in steps:
         try:
             step()
