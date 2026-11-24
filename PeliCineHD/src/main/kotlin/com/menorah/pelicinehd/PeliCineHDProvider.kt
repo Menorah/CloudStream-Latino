@@ -100,12 +100,12 @@ class PeliCineHDProvider : MainAPI() {
         if (card.movie) {
             newMovieSearchResponse(card.title, card.url, TvType.Movie) {
                 this.posterUrl = poster
-                card.year?.let { addYear(it) }
+                this.year = card.year
             }
         } else {
             newTvSeriesSearchResponse(card.title, card.url, TvType.TvSeries) {
                 this.posterUrl = poster
-                card.year?.let { addYear(it) }
+                this.year = card.year
             }
         }
     }
@@ -321,22 +321,20 @@ class PeliCineHDProvider : MainAPI() {
     ): List<ExtractorLink> {
         val found = mutableListOf<ExtractorLink>()
         loadExtractor(playerUrl, referer, subtitleCallback) { link ->
-            val labelled = if (language.isBlank() || link.name.contains(language, true)) {
-                link
+            // The audio track lives in the option label, so it is made visible in the link name.
+            val name = if (language.isBlank() || link.name.contains(language, true)) {
+                link.name
             } else {
-                newExtractorLink(
-                    source = link.source,
-                    name = "${link.name} [$language]",
-                    url = link.url
-                ) {
+                "${link.name} [$language]"
+            }
+            found.add(
+                newExtractorLink(source = link.source, name = name, url = link.url, type = link.type) {
                     this.referer = link.referer
                     this.quality = link.quality
                     this.headers = link.headers
                     this.extractorData = link.extractorData
-                    this.type = link.type
                 }
-            }
-            found.add(labelled)
+            )
         }
         return found
     }

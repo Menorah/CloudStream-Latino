@@ -110,10 +110,8 @@ internal object PeliCineHDMarkup {
         if (!siteUrl(url)) return null
         val title = article.selectFirst("h2.entry-title, h3.entry-title")?.text()?.trim()
             ?.takeIf { it.isNotEmpty() } ?: return null
-        val poster = absolute(
-            article.selectFirst("div.post-thumbnail img, figure img")?.let { image(it) },
-            article.baseUri()
-        )
+        val thumbnail: Element? = article.selectFirst("div.post-thumbnail img, figure img")
+        val poster = absolute(thumbnail?.let { image(it) }, article.baseUri())
         val movie = !article.hasClass("series") && !url.contains("/series/")
         return Card(title, url, poster, movie, year(article))
     }
@@ -143,11 +141,12 @@ internal object PeliCineHDMarkup {
         document.selectFirst("article.post.single h1.entry-title, h1.entry-title")
             ?.text()?.trim()?.takeIf { it.isNotEmpty() }
 
-    fun poster(document: Document): String? = absolute(
-        document.selectFirst("article.post.single div.post-thumbnail img, article.post.single figure img")
-            ?.let { image(it) },
-        document.location()
-    )
+    fun poster(document: Document): String? {
+        val thumbnail: Element? = document.selectFirst(
+            "article.post.single div.post-thumbnail img, article.post.single figure img"
+        )
+        return absolute(thumbnail?.let { image(it) }, document.location())
+    }
 
     fun plot(document: Document): String? =
         document.selectFirst("article.post.single div.description")?.text()?.trim()
@@ -243,10 +242,13 @@ internal object PeliCineHDMarkup {
             .sortedBy { it.number }
     }
 
-    fun seasonsPostId(document: Document): Int? =
-        document.selectFirst("div.choose-season li a[data-post]")?.attr("data-post")?.trim()?.toIntOrNull()
-            ?: document.selectFirst("input[name=post_id], meta[name=post_id]")
-                ?.let { it.attr("content").ifBlank { it.attr("value") } }?.trim()?.toIntOrNull()
+    fun seasonsPostId(document: Document): Int? {
+        val season: Element? = document.selectFirst("div.choose-season li a[data-post]")
+        if (season != null) return season.attr("data-post").trim().toIntOrNull()
+        val meta: Element? = document.selectFirst("input[name=post_id], meta[name=post_id]")
+        val raw = meta?.attr("content")?.ifBlank { meta.attr("value") } ?: return null
+        return raw.trim().toIntOrNull()
+    }
 
     /** Episodes rendered in the page (the season the site shows by default). */
     fun episodes(document: Document, seasonFallback: Int = 1): List<EpisodeItem> =
@@ -260,10 +262,8 @@ internal object PeliCineHDMarkup {
                 val number = numbers?.second ?: return@mapNotNull null
                 val title = article.selectFirst("h2.entry-title")?.text()?.trim()
                     ?.takeIf { it.isNotEmpty() } ?: "Episodio $number"
-                val poster = absolute(
-                    article.selectFirst("div.post-thumbnail img, figure img")?.let { image(it) },
-                    article.baseUri()
-                )
+                val thumbnail: Element? = article.selectFirst("div.post-thumbnail img, figure img")
+                val poster = absolute(thumbnail?.let { image(it) }, article.baseUri())
                 EpisodeItem(title, url, season, number, poster)
             }
             .distinctBy { it.url }
