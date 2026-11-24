@@ -18,5 +18,7 @@ for xml in RePelis24Shop/build/outputs/androidTest-results/connected/**/*.xml Re
 done
 adb logcat -d -s CSPeliCine:I '*:S' > probe-webview.log 2>/dev/null || true
 echo "logcat lines: $(wc -l < probe-webview.log)" | emit
-grep 'CSPeliCine:' probe-webview.log | sed -e 's/^.*CSPeliCine: //' | head -90 | cut -c1-330 | emit
+grep 'CSPeliCine:' probe-webview.log | sed -e 's/^.*CSPeliCine: //' > probe-annotations.txt
+# Only the structure reports matter; the raw HTML stays in the artifact.
+grep -E '^\{.*\}$|^html length|^done' probe-annotations.txt | head -60 | cut -c1-330 | emit
 exit 0
