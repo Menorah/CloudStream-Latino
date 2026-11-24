@@ -1,0 +1,17 @@
+name: Diagnóstico imágenes RePelis24.shop
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'scripts/repelis24shop_images.py'
+      - '.github/workflows/repelis24shop-images.yml'
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/repelis24shop_images.py
