@@ -319,23 +319,25 @@ class PeliCineHDProvider : MainAPI() {
         language: String,
         subtitleCallback: (SubtitleFile) -> Unit
     ): List<ExtractorLink> {
-        val found = mutableListOf<ExtractorLink>()
-        loadExtractor(playerUrl, referer, subtitleCallback) { link ->
-            // The audio track lives in the option label, so it is made visible in the link name.
-            val name = if (language.isBlank() || link.name.contains(language, true)) {
-                link.name
+        val raw = mutableListOf<ExtractorLink>()
+        loadExtractor(playerUrl, referer, subtitleCallback) { link -> raw.add(link) }
+        // The audio track lives in the option label, so it is made visible in the link name.
+        return raw.map { link ->
+            if (language.isBlank() || link.name.contains(language, true)) {
+                link
             } else {
-                "${link.name} [$language]"
-            }
-            found.add(
-                newExtractorLink(source = link.source, name = name, url = link.url, type = link.type) {
+                newExtractorLink(
+                    source = link.source,
+                    name = "${link.name} [$language]",
+                    url = link.url,
+                    type = link.type
+                ) {
                     this.referer = link.referer
                     this.quality = link.quality
                     this.headers = link.headers
                     this.extractorData = link.extractorData
                 }
-            )
+            }
         }
-        return found
     }
 }
