@@ -226,18 +226,58 @@ def check_manifest(manifest, referer):
     return result
 
 
+def try_fetch(url, referers):
+    """Returns (referer, status, body) for the first referer that answers with HTTP 200."""
+    errors = []
+    for referer in referers:
+        try:
+            _, status, body = fetch(url, referer)
+            if status == 200:
+                return referer, status, body, errors
+            errors.append(f"{referer}:{status}")
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"{referer}:{error}")
+    return None, None, None, errors
+
+
 def resolve_option(option, page_url):
     """Equivalent of RePelis24ShopProvider.resolve()."""
+    host = urllib.parse.urlsplit(option["url"]).hostname
     target = nupload_target(option["url"])
     if target is None:
-        return {"host": urllib.parse.urlsplit(option["url"]).hostname, "result": "not a player page"}
+        return {"host": host, "result": "not a player page"}
     if target != option["url"]:
         return {"host": urllib.parse.urlsplit(target).hostname, "result": "external embed (extractor)"}
-    _, status, html = fetch(target, NUPLOAD_REFERER)
+    referer, status, html, errors = try_fetch(target, [page_url, NUPLOAD_REFERER, BASE + "/"])
+    if html is None:
+        return {"stage": "watch_page", "host": host, "errors": errors}
     stream = nupload_stream(html, target)
     if not stream:
-        return {"host": "nupload.my", "result": f"decode failed (status {status})"}
-    return {"host": "nupload.my", "result": "manifest", "check": check_manifest(stream["manifest"], NUPLOAD_REFERER)}
+        return {"stage": "decode", "host": host, "referer": referer, "result": "decode failed"}
+    mreferer, mstatus, body, merrors = try_fetch(stream["manifest"], [NUPLOAD_REFERER, referer, BASE + "/"])
+    if body is None:
+        return {"stage": "manifest", "host": host, "referer": referer, "errors": merrors}
+    if not body.startswith("#EXTM3U"):
+        return {"stage": "manifest", "host": host, "result": "not a manifest", "length": len(body)}
+    lines = [l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#")]
+    result = {"stage": "ok", "host": host, "page_referer": referer, "manifest_referer": mreferer,
+              "variants": len(lines)}
+    if lines:
+        child = urllib.parse.urljoin(stream["manifest"], lines[0])
+        _, cstatus, cbody, cerrs = try_fetch(child, [NUPLOAD_REFERER, referer])
+        segs = [l.strip() for l in cbody.splitlines() if l.strip() and not l.startswith("#")] if cbody else []
+        result.update({"child_status": cstatus, "segments": len(segs)})
+        if segs:
+            seg = urllib.parse.urljoin(child, segs[0])
+            try:
+                req = urllib.request.Request(seg, headers={"User-Agent": HEADERS["User-Agent"],
+                                                           "Referer": NUPLOAD_REFERER, "Range": "bytes=0-1023"})
+                with urllib.request.urlopen(req, timeout=25) as r:
+                    result.update({"seg_status": r.status, "seg_type": (r.headers.get("Content-Type") or "")[:40],
+                                   "seg_bytes": len(r.read(1024))})
+            except Exception as error:  # noqa: BLE001
+                result.update({"seg_error": str(error)[:120]})
+    return result
 
 
 RESULTS = []
@@ -292,10 +332,16 @@ def main():
                           "genres": [g.get_text(strip=True) for g in mdoc.select(".info-list span[itemprop=genre]")][:6],
                           "players": [{"l": o["language"], "h": urllib.parse.urlsplit(o["url"]).hostname} for o in options]})
     if options:
-        step("movie_first_option", resolve_option(options[0], mfinal))
+        try:
+            step("movie_first_option", resolve_option(options[0], mfinal))
+        except Exception as error:  # noqa: BLE001
+            step("movie_first_option_error", str(error)[:200])
         embed = next((o for o in options if "/iframe/" in o["url"]), None)
         if embed:
-            step("movie_embed_option", resolve_option(embed, mfinal))
+            try:
+                step("movie_embed_option", resolve_option(embed, mfinal))
+            except Exception as error:  # noqa: BLE001
+                step("movie_embed_option_error", str(error)[:200])
 
     # 4. series
     series_url = next((c["url"] for c in cards(shtml, BASE + "/series/") if not c["movie"]), BASE + "/serie/from-zeqm/")
@@ -316,7 +362,10 @@ def main():
                                      "tabs": sorted({o["language"] for o in ep_options}),
                                      "count": len(ep_options)})
             if ep_options:
-                step("episode_first_option", resolve_option(ep_options[0], eps[0]["url"]))
+                try:
+                    step("episode_first_option", resolve_option(ep_options[0], eps[0]["url"]))
+                except Exception as error:  # noqa: BLE001
+                    step("episode_first_option_error", str(error)[:200])
 
     # 5. multi-season series sanity (first and last season reachable)
     for url in ("https://repelis24.shop/serie/los-simpsons-zegw/", "https://repelis24.shop/serie/breaking-bad-zpya/"):
