@@ -69,7 +69,7 @@ class PeliCineHDWebProbe {
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
-                        Log.i(tag, "FINISHED $url")
+                        Log.i(tag, "FINISHED ${url.toString()}")
                     }
 
                     override fun onReceivedError(
@@ -77,7 +77,7 @@ class PeliCineHDWebProbe {
                         request: WebResourceRequest,
                         error: android.webkit.WebResourceError
                     ) {
-                        Log.i(tag, "ERROR ${request.url} ${error.errorCode}")
+                        Log.i(tag, "ERROR ${request.url.toString()} ${error.errorCode.toString()}")
                     }
                 }
             }
