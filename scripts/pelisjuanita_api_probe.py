@@ -6,7 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
 
 def emit(tag, obj):
@@ -32,14 +32,36 @@ FULL = {"Accept": "application/json", "Referer": "https://pelisjuanita.com/"}
 
 def main():
     b64slug = base64.b64encode(b"breeder").decode()
+    # Session flow: home.php may issue the cookie that authorizes the other endpoints.
+    jar = {}
+    req = urllib.request.Request(f"{APP}/home.php", headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            r.read(2000)
+            for name, value in r.headers.items():
+                if name.lower() == "set-cookie":
+                    for part in value.split(","):
+                        kv = part.split(";")[0].strip()
+                        if "=" in kv:
+                            k, v = kv.split("=", 1)
+                            jar[k.strip()] = v.strip()
+    except Exception as e:
+        print("home session error:", str(e)[:100], flush=True)
+    print("cookies:", list(jar), flush=True)
+    cookie = "; ".join(f"{k}={v}" for k, v in jar.items())
+    AUTH_HEADERS = {
+        "Accept": "application/json",
+        "Referer": "https://pelisjuanita.com/",
+        "X-Requested-With": "XMLHttpRequest",
+        **({"Cookie": cookie} if cookie else {}),
+    }
     checks = [
         ("home-bare", f"{APP}/home.php", None),
-        ("home-full", f"{APP}/home.php", FULL),
-        ("buscar-bare", f"{APP}/buscar.php?q=shrek", None),
         ("buscar-full", f"{APP}/buscar.php?q=shrek", FULL),
-        ("movies-full", f"{APP}/movies.php?slug=breeder", FULL),
-        ("series-full", f"{APP}/series.php?slug=dig", FULL),
-        ("serie-t-full", f"{APP}/series.php?slug=dig&t=1", FULL),
+        ("buscar-auth", f"{APP}/buscar.php?q=shrek", AUTH_HEADERS),
+        ("movies-auth", f"{APP}/movies.php?slug=breeder", AUTH_HEADERS),
+        ("series-auth", f"{APP}/series.php?slug=dig", AUTH_HEADERS),
+        ("serie-t-auth", f"{APP}/series.php?slug=dig&t=1", AUTH_HEADERS),
         ("hzplayer", f"https://pelisjuanita.com/tv/hzplayer.php?id={urllib.parse.quote(b64slug)}", {"Referer": "https://pelisjuanita.com/"}),
     ]
     results = []
