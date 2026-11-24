@@ -66,9 +66,6 @@ class PeliCineHDWebProbe {
             web.settings.javaScriptEnabled = true
             web.settings.domStorageEnabled = true
             web.settings.cacheMode = WebSettings.LOAD_DEFAULT
-            web.settings.userAgentString =
-                "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
             web.webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(
                     view: WebView?,
@@ -163,7 +160,7 @@ class PeliCineHDWebProbe {
     fun probe() {
         create()
         load("https://pelicinehd.com/movies/pacifico/")
-        waitForPage(45)
+        waitForPage(60)
         dump("detail")
         load("https://pelicinehd.com/peliculas/")
         waitForPage(35)
