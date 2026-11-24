@@ -70,8 +70,9 @@ class RePelis24ShopMarkupTest {
 
     @Test
     fun paginationUsesThemesPathAndNextLinkOnly() {
-        assertEquals("https://repelis24.shop/peliculas", RePelis24ShopMarkup.pageUrl("/peliculas/", 1))
-        assertEquals("https://repelis24.shop/peliculas/page/3", RePelis24ShopMarkup.pageUrl("/peliculas/", 3))
+        assertEquals("/peliculas", RePelis24ShopMarkup.pageUrl("/peliculas/", 1))
+        assertEquals("/peliculas/page/3", RePelis24ShopMarkup.pageUrl("/peliculas/", 3))
+        assertEquals("/peliculas/estrenos/page/2", RePelis24ShopMarkup.pageUrl("/peliculas/estrenos", 2))
         val withNext = doc(
             """<a class="page-link" href="/peliculas/page/2">2</a><a class="next page-numbers" href="https://repelis24.shop/peliculas/page/2">Siguiente</a>""",
             site("/peliculas/")
