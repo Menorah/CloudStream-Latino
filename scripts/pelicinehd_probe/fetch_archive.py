@@ -24,19 +24,15 @@ def fetch(url, timeout=90):
 
 
 def cdx(pattern, limit=8):
-    query = {
-        "url": pattern,
-        "output": "json",
-        "limit": str(limit),
-        "filter": ["statuscode:200", "mimetype:text/html"],
-        "collapse": "urlkey",
-        "from": "2024",
-    }
-    url = CDX + "?" + urllib.parse.urlencode(query)
+    # Hand-built query: urlencode would encode the ":" in filter and the archive rejects it.
+    url = (CDX + "?url=" + urllib.parse.quote(pattern, safe="/*")
+           + "&output=json&limit=" + str(limit)
+           + "&filter=statuscode:200&filter=mimetype:text/html"
+           + "&collapse=urlkey&from=2024")
     try:
         rows = json.loads(fetch(url, timeout=60).decode("utf-8", "replace"))
     except Exception as error:  # noqa: BLE001
-        print("cdx error", pattern, error)
+        print("cdx error", pattern, url, error)
         return []
     return [dict(zip(rows[0], row)) for row in rows[1:]] if rows else []
 
