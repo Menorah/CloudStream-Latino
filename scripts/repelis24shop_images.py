@@ -125,6 +125,7 @@ def coil_simulation():
         "episode": BASE + "/episodio/breaking-bad-zpya-1x1/",
     }
     results = {}
+    print("coil_simulation start", flush=True)
     for label, page in pages.items():
         try:
             with urllib.request.urlopen(urllib.request.Request(page, headers=PAGE_HEADERS), timeout=25) as response:
@@ -143,7 +144,8 @@ def coil_simulation():
             checks.append({"asset": "/".join(urllib.parse.urlsplit(url).path.split("/")[:4]),
                            "status": result.get("status"), "type": result.get("type")})
         results[label] = {"images": len(found), "checks": checks}
-    notice("coil_simulation", results)
+        notice("coil_" + label, results[label])
+    print("coil_simulation end", flush=True)
 
 
 def headers_of_site():
