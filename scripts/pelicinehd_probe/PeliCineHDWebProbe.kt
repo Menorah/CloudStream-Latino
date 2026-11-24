@@ -31,8 +31,10 @@ class PeliCineHDWebProbe {
     private val requests = mutableListOf<String>()
     private val ready = AtomicReference<WebView?>(null)
 
+    /** Instrumentation stdout lands in the JUnit XML, which the workflow can read. */
     private fun note(body: String) {
-        body.chunked(350).forEach { Log.i(tag, it) }
+        println("CSPELI " + body.replace("\n", " "))
+        Log.i(tag, body)
     }
 
     private fun post(path: String, body: String) {
