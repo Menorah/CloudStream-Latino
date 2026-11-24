@@ -1,0 +1,22 @@
+name: Diagnóstico repelis24.shop (3)
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'scripts/repelis24shop_probe3.py'
+      - '.github/workflows/repelis24shop-probe3.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        section: [hosts_samples, nupload_page, nupload_ids, home_sections, genres_all, series_variety]
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install beautifulsoup4
+      - run: python3 scripts/repelis24shop_probe3.py ${{ matrix.section }}
