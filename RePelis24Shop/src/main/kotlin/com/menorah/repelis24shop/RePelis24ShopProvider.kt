@@ -66,8 +66,10 @@ class RePelis24ShopProvider : MainAPI() {
     private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->
         if (card.movie) newMovieSearchResponse(card.title, card.url, TvType.Movie) {
             posterUrl = card.poster
+            backgroundPosterUrl = card.background
         } else newTvSeriesSearchResponse(card.title, card.url, TvType.TvSeries) {
             posterUrl = card.poster
+            backgroundPosterUrl = card.background
         }
     }
 

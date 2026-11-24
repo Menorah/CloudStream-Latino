@@ -180,9 +180,6 @@ internal object RePelis24ShopMarkup {
             ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
     )
 
-    /** The site only publishes a poster; the hero "backdrop" node is an ad container, not an image. */
-    fun background(doc: Document): String? = null
-
     fun plot(doc: Document): String? = doc.selectFirst(".description p")?.text()?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
