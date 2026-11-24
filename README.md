@@ -57,7 +57,9 @@ Dominio nuevo del mismo catálogo que RePelis24.cz, con HTML propio: catálogos 
 
 Los reproductores no se enlazan directamente: cada opción es un `li[data-server]` con un Base64 que apunta a un envoltorio propio (`nupload.my`). El complemento lo resuelve: los enlaces `/iframe/?url=` se envían al extractor correspondiente del host embebido y las páginas `/watch/<uid>` se decodifican para obtener el manifiesto HLS firmado, que se etiqueta con el idioma del panel (`Latino`, `Español Castellano`, `Subtitulado`). El manifiesto exige `Referer: https://nupload.my/`, así que ese encabezado se fija en el enlace resultante. La disponibilidad de cada servidor varía por título y por red; si una opción falla, prueba otra.
 
-Los cambios del sitio pueden requerir ajustes: el flujo **Verificación real RePelis24.shop** recorre catálogo, búsqueda, ficha, reproductores, temporadas, episodios y manifiesto contra el sitio real y publica el resumen en las anotaciones del chequeo.
+Las imágenes (portadas, fondos de las fichas y miniaturas de episodios) se sirven desde `/cdn/` detrás de Cloudflare, que responde 403 con una página de verificación si la petición no lleva `Referer` del sitio. Como el cargador de imágenes de CloudStream no envía `Referer` por su cuenta, cada respuesta del complemento adjunta los encabezados necesarios (`Referer`, `Accept` y `Accept-Language`) con `addPoster(...)`, de modo que las portadas y los fondos se muestran. Si alguna imagen queda en blanco tras actualizar, borra la caché de imágenes de CloudStream, ya que una respuesta 403 anterior puede estar guardada.
+
+Los cambios del sitio pueden requerir ajustes: los flujos **Verificación real RePelis24.shop** y **Diagnóstico imágenes RePelis24.shop** (este último solo manual, desde la pestaña Actions) recorren catálogo, búsqueda, ficha, reproductores, temporadas, episodios, manifiesto y entrega de imágenes contra el sitio real y publican el resumen en las anotaciones del chequeo.
 
 ### PoseidonHD 2
 
