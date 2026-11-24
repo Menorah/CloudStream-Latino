@@ -21,7 +21,7 @@ import java.util.Collections
  * Cloudflare fronts the site; like the rest of the web it must be reached from a
  * residential network (the browser extension ecosystem reaches it the same way).
  */
-class PeliCineProvider : MainAPI() {
+class PeliCineProvider(private val context: android.content.Context? = null) : MainAPI() {
     override var mainUrl = PeliCineMarkup.BASE
     override var name = "PeliCineHD"
     override var lang = "es"
@@ -33,14 +33,28 @@ class PeliCineProvider : MainAPI() {
         "/series" to "Series",
     )
 
+    private val browser by lazy { context?.let { PeliCineBrowser(it) } }
+
+    private fun challenged(text: String, code: Int): Boolean =
+        code == 403 || code == 503 || text.contains("Just a moment", true) || text.contains("cf-chl", true)
+
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(PeliCineMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD" }
         val res = app.get(url, timeout = 15)
-        if (!res.isSuccessful || !PeliCineMarkup.siteUrl(res.url)) {
-            throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${res.code}).")
+        var text = res.text
+        var finalUrl = res.url
+        if (!res.isSuccessful || !PeliCineMarkup.siteUrl(finalUrl) || challenged(text, res.code)) {
+            // Cloudflare fronts the site; the device WebView passes its interactive check.
+            val page = browser?.fetch(url)
+            if (page != null && page.text.isNotBlank() && PeliCineMarkup.siteUrl(page.url)) {
+                text = page.text
+                finalUrl = page.url
+            } else {
+                throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${res.code}).")
+            }
         }
-        return Jsoup.parse(res.text, res.url)
+        return Jsoup.parse(text, finalUrl)
     }
 
     private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->

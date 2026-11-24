@@ -64,6 +64,9 @@ class SoloLatinoProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val text = query.trim()
         if (text.isEmpty()) return emptyList()
+        if (text.equals("diagnostico", true) || text.equals("diagnóstico", true)) {
+            return listOf(newMovieSearchResponse("🧪 Diagnóstico de enlaces (no es contenido)", "diagnostico://sololatino", TvType.Movie))
+        }
         return responses(SoloLatinoMarkup.cards(fetch("/buscar?q=${URLEncoder.encode(text, "UTF-8")}")))
     }
 
@@ -82,6 +85,11 @@ class SoloLatinoProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        if (url.startsWith("diagnostico://")) {
+            return newMovieLoadResponse("🧪 Diagnóstico de enlaces (no es contenido)", url, TvType.Movie, url) {
+                plot = "Reproduce este título para ver en la lista de fuentes el resultado de cada paso de la cadena de servidores de SoloLatino. No transmite vídeo."
+            }
+        }
         val doc = fetch(url)
         val detail = SoloLatinoDetails.detail(doc) ?: return null
         val chapters = SoloLatinoMarkup.episodes(doc)
@@ -113,6 +121,7 @@ class SoloLatinoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
+        if (data.startsWith("diagnostico://")) return diagnose(callback)
         val page = fetch(data)
         val servers = SoloLatinoMarkup.servers(page).take(12)
         if (servers.isEmpty()) return false
@@ -130,12 +139,71 @@ class SoloLatinoProvider : MainAPI() {
                 } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
             }
         }
+        if (!emitted) {
+            // Fallback: direct embeds that the page carries outside the token buttons.
+            val embeds = page.select("iframe[src], [data-iframe], [data-embed]").mapNotNull { element ->
+                val value = sequenceOf("src", "data-iframe", "data-embed").map { element.absUrl(it).ifBlank { element.attr(it) } }
+                    .firstOrNull { it.startsWith("https://") } ?: return@mapNotNull null
+                value.takeIf { SoloLatinoMarkup.siteUrl(it) || !it.contains("sololatino.net.") }
+            }.distinct().take(6)
+            for (embed in embeds) {
+                val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                try { loadExtractor(embed, data, subtitleCallback) { links.add(it) } } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
+                val found = synchronized(links) { links.toList() }
+                found.forEach { callback(relabeled(it, "[Embebido]")) }
+                if (found.isNotEmpty()) emitted = true
+            }
+        }
         return emitted
     }
 
     private fun apiHeaders(xsrf: String?, token: String, referer: String, cookieHeader: String): Map<String, String> =
         SoloLatinoChain.apiHeaders(xsrf, token, referer, System.currentTimeMillis()) +
             (if (cookieHeader.isBlank()) emptyMap() else mapOf("Cookie" to cookieHeader))
+
+    /**
+     * Runs the live chain against a known episode and reports each step as a source
+     * entry, so the state of every stage is visible on the device without logs.
+     */
+    private suspend fun diagnose(callback: (ExtractorLink) -> Unit): Boolean {
+        val steps = mutableListOf<String>()
+        fun step(text: String) {
+            val clean = text.replace(Regex("\\s+"), " ").trim().take(110)
+            steps.add(clean)
+        }
+        val target = "$mainUrl/serie/black-clover/temporada-1/episodio-1"
+        try {
+            val res = app.get(target, timeout = 15)
+            step("ficha HTTP ${res.code}")
+            val doc = Jsoup.parse(res.text, res.url)
+            val servers = SoloLatinoMarkup.servers(doc)
+            step("botones=${servers.size} idiomas=${servers.map { it.language }.distinct()}")
+            val session = try { app.get("$mainUrl/sanctum/csrf-cookie", timeout = 15) } catch (e: CancellationException) { throw e } catch (t: Throwable) { null }
+            val cookies = session?.cookies ?: emptyMap()
+            val xsrf = SoloLatinoChain.csrfToken(cookies)
+            step("csrf HTTP ${session?.code ?: "err"} cookies=${cookies.keys} xsrf=${if (xsrf != null) "sí" else "no"}")
+            for (server in servers.take(2)) {
+                val attempts = listOf(true to true, false to true, true to false, false to false)
+                var answered = false
+                for ((render, useXsrf) in attempts) {
+                    val resolved = playerUrl(server.token, res.url, xsrf, cookies.entries.joinToString("; ") { e -> e.key + "=" + e.value }, render, useXsrf)
+                    if (resolved != null) {
+                        step("api render=$render xsrf=$useXsrf → ${resolved.second} ${resolved.first.take(60)}")
+                        answered = true
+                        break
+                    }
+                }
+                if (!answered) step("api render=todo falló para token ${server.token.take(12)}…")
+            }
+        } catch (e: CancellationException) { throw e } catch (t: Throwable) {
+            step("error ${t.javaClass.simpleName}: ${t.message?.take(60)}")
+        }
+        step("pasos=${steps.size} (fin)")
+        steps.forEachIndexed { index, text ->
+            callback(newExtractorLink(this.name, "%02d) %s".format(index + 1, text), "https://sololatino.net/", ExtractorLinkType.VIDEO) {})
+        }
+        return true
+    }
 
     private suspend fun resolveServer(
         server: ServerOption,
@@ -145,27 +213,40 @@ class SoloLatinoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         emit: suspend (ExtractorLink) -> Unit,
     ): Boolean {
-        var resolved = playerUrl(server.token, referer, xsrf, cookieHeader)
-        if (resolved == null) resolved = playerUrl(server.token, referer, xsrf = null, cookieHeader, withRender = false)
+        var resolved = playerUrl(server.token, referer, xsrf, cookieHeader, withRender = true, withXsrf = true)
+            ?: playerUrl(server.token, referer, xsrf, cookieHeader, withRender = false, withXsrf = true)
+            ?: playerUrl(server.token, referer, xsrf, cookieHeader, withRender = true, withXsrf = false)
+            ?: playerUrl(server.token, referer, xsrf, cookieHeader, withRender = false, withXsrf = false)
         val (player, kind) = resolved ?: return false
         val label = "[${server.language}] ${server.title.ifBlank { "Servidor" }}"
-        return when (kind) {
+        var any = false
+        when (kind) {
             SoloLatinoChain.PlayerKind.DIRECT_MP4 -> {
-                emit(newExtractorLink(this.name, label, player, ExtractorLinkType.VIDEO) { this.referer = referer })
-                true
+                val type = if (player.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                emit(newExtractorLink(this.name, label, player, type) { this.referer = referer })
+                any = true
             }
             SoloLatinoChain.PlayerKind.PELIS_SERIES_HOY ->
-                resolvePrincipal(player, referer, label, subtitleCallback, emit)
+                any = resolvePrincipal(player, referer, label, subtitleCallback, emit)
             SoloLatinoChain.PlayerKind.EMBED69 ->
-                resolveEmbed69(player, referer, label, subtitleCallback, emit)
+                any = resolveEmbed69(player, referer, label, subtitleCallback, emit)
             SoloLatinoChain.PlayerKind.IFRAME -> {
                 val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
                 try { loadExtractor(player, referer, subtitleCallback) { links.add(it) } } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
                 val found = synchronized(links) { links.toList() }
                 found.forEach { emit(relabeled(it, label)) }
-                found.isNotEmpty()
+                any = found.isNotEmpty()
             }
         }
+        if (!any && kind != SoloLatinoChain.PlayerKind.IFRAME) {
+            // Last resort: the player URL may still be a generic embed CloudStream knows.
+            val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+            try { loadExtractor(player, referer, subtitleCallback) { links.add(it) } } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
+            val found = synchronized(links) { links.toList() }
+            found.forEach { emit(relabeled(it, label)) }
+            any = found.isNotEmpty()
+        }
+        return any
     }
 
     private suspend fun playerUrl(
@@ -173,22 +254,19 @@ class SoloLatinoProvider : MainAPI() {
         referer: String,
         xsrf: String?,
         cookieHeader: String,
-        withRender: Boolean = true,
+        withRender: Boolean,
+        withXsrf: Boolean,
     ): Pair<String, SoloLatinoChain.PlayerKind>? {
-        val headers = (if (withRender) apiHeaders(xsrf, token, referer, cookieHeader)
-        else SoloLatinoChain.apiHeaders(xsrf, token, referer, System.currentTimeMillis()).filterKeys { it != "X-SL-Render" } +
-            (if (cookieHeader.isBlank()) emptyMap() else mapOf("Cookie" to cookieHeader)))
+        var headers = SoloLatinoChain.apiHeaders(if (withXsrf) xsrf else null, token, referer, System.currentTimeMillis())
+        if (!withRender) headers = headers.filterKeys { it != "X-SL-Render" }
+        if (cookieHeader.isNotBlank()) headers = headers + mapOf("Cookie" to cookieHeader)
         val res = try {
             app.post("$mainUrl/api/player-url", headers = headers,
                 requestBody = SoloLatinoChain.apiBody(token).toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
         } catch (e: CancellationException) { throw e } catch (_: Throwable) { return null }
         if (!res.isSuccessful) return null
-        val body = res.text
-        val url = Regex(""""url"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)?.replace("\\/", "/")
-            ?: Regex(""""player_url"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)?.replace("\\/", "/")
-            ?: return null
-        if (!url.startsWith("https://") || url.length > 2048) return null
-        return url to SoloLatinoChain.classify(url)
+        val (url, type) = SoloLatinoChain.extractPlayerUrl(res.text) ?: return null
+        return url to SoloLatinoChain.classify(url, type)
     }
 
     private suspend fun resolvePrincipal(

@@ -42,7 +42,12 @@ internal object SoloLatinoChain {
 
     enum class PlayerKind { DIRECT_MP4, PELIS_SERIES_HOY, EMBED69, IFRAME }
 
-    fun classify(playerUrl: String): PlayerKind {
+    /** The API answers `{url, type}`; the type is authoritative and the host is a fallback. */
+    fun classify(playerUrl: String, apiType: String? = null): PlayerKind {
+        val declared = apiType?.trim()?.lowercase().orEmpty()
+        if (declared == "mp4" || declared == "video") return PlayerKind.DIRECT_MP4
+        if (declared.contains("pelisserieshoy")) return PlayerKind.PELIS_SERIES_HOY
+        if (declared.contains("embed69")) return PlayerKind.EMBED69
         val host = runCatching { URI(playerUrl).host?.lowercase() }.getOrNull().orEmpty()
         val path = runCatching { URI(playerUrl).path.orEmpty() }.getOrNull().orEmpty()
         return when {
@@ -51,6 +56,16 @@ internal object SoloLatinoChain {
             host.contains("embed69") -> PlayerKind.EMBED69
             else -> PlayerKind.IFRAME
         }
+    }
+
+    /** Accepts the field names seen in public implementations plus a bare player URL. */
+    fun extractPlayerUrl(body: String): Pair<String, String?>? {
+        val field = Regex(""""(?:url|player_url|link|src)"\s*:\s*"([^"]+)"""").find(body)
+            ?.groupValues?.get(1)?.replace("\\/", "/")
+        val bare = Regex("""https?://[^\s"'\\]+""").find(body)?.value?.replace("\\/", "/")
+        val url = (field ?: bare)?.takeIf { it.startsWith("https://") && it.length <= 2048 } ?: return null
+        val type = Regex(""""type"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)
+        return url to type
     }
 
     /** The Embed69 player can decrypt server-side; the local key path stays as fallback. */

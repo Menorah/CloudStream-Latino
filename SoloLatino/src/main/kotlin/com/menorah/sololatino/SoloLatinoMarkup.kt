@@ -72,16 +72,21 @@ internal object SoloLatinoMarkup {
         }.distinctBy { it.season to it.number }.sortedWith(compareBy({ it.season }, { it.number }))
     }
 
-    fun servers(doc: Document): List<ServerOption> = doc.select("div[data-lang-group]").flatMap { group ->
-        val language = when (group.attr("data-lang-group").lowercase()) {
-            "mx" -> "Latino"
-            "es" -> "Castellano"
-            "sub" -> "Subtitulado"
-            else -> "Idioma no indicado"
-        }
-        group.select("button.server-btn[data-player-token]").mapNotNull { button ->
-            val token = button.attr("data-player-token").trim().takeIf { it.length in 1..4096 && it.matches(Regex("[A-Za-z0-9_+=/.-]+")) } ?: return@mapNotNull null
+    fun servers(doc: Document): List<ServerOption> {
+        val buttons = doc.select("[data-player-token]")
+        if (buttons.isEmpty()) return emptyList()
+        return buttons.mapNotNull { button ->
+            val token = button.attr("data-player-token").trim()
+                .takeIf { it.length in 1..4096 && it.none(Char::isISOControl) } ?: return@mapNotNull null
+            val group = button.closest("[data-lang-group]") ?: button.parent()
+            val raw = group?.attr("data-lang-group").orEmpty().ifBlank { group?.attr("data-lang").orEmpty() }
+            val language = when (raw.lowercase()) {
+                "mx", "latino", "lat", "1" -> "Latino"
+                "es", "castellano", "esp", "2" -> "Castellano"
+                "sub", "subtitulado", "vose", "3" -> "Subtitulado"
+                else -> "Idioma no indicado"
+            }
             ServerOption(token, language, button.text().trim())
-        }
-    }.distinctBy { it.token to it.language }
+        }.distinctBy { it.token to it.language }
+    }
 }
