@@ -1,163 +1,104 @@
 #!/usr/bin/env python3
-"""Inspect the Pelisplus/Cuevana trap-family player pages without submitting forms.
-
-Outputs base64 JSON annotations (safe for Actions annotation mangling) with:
-- DOM/script structure of play pages (movie and episode) per site
-- the media URLs a browser would play, plus HEAD metadata and a decoded frame
-"""
+"""Round 2: sample older titles and dump 123pelispop scripts. Small annotations."""
 import base64
 import json
 import re
 import subprocess
-import urllib.parse
 import urllib.request
 
 UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
 
+def emit(tag, obj):
+    payload = base64.b64encode(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()).decode()
+    print(f"::notice::TRAPB64 {tag} {payload}", flush=True)
+
+
 def fetch(url, timeout=25):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": url})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read(), r.url, r.status
+        return r.read().decode("utf-8", "replace"), r.url, r.status
 
 
-def b64(obj, tag):
-    raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    enc = base64.b64encode(raw).decode("ascii")
-    print(f"::notice::TRAPB64 {tag} {enc}", flush=True)
-
-
-def head_media(url):
+def media_info(url):
     info = {"url": url}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA}, method="HEAD")
-        with urllib.request.urlopen(req, timeout=20) as r:
-            info["status"] = r.status
-            info["length"] = r.headers.get("Content-Length")
-            info["type"] = r.headers.get("Content-Type")
-            info["final"] = r.url
-    except Exception as e:
-        info["headError"] = str(e)[:120]
-    try:
         out = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format",
-             "-read_intervals", "%+#1", url],
-            capture_output=True, timeout=60,
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", url],
+            capture_output=True, timeout=90,
         )
-        if out.stdout:
-            fmt = json.loads(out.stdout).get("format", {})
-            info["duration"] = fmt.get("duration")
-            info["size"] = fmt.get("size")
-            info["bitrate"] = fmt.get("bit_rate")
-            info["tags"] = {k: v for k, v in (fmt.get("tags") or {}).items() if k.lower() in ("title", "encoder", "comment", "handler_name")}
+        fmt = json.loads(out.stdout or b"{}").get("format", {})
+        info["dur"] = fmt.get("duration")
+        info["size"] = fmt.get("size")
     except Exception as e:
-        info["ffprobeError"] = str(e)[:120]
+        info["err"] = str(e)[:100]
     return info
 
 
-def grab_frame(url, label, at="00:01:00"):
-    """Decode one frame mid-video as base64 JPEG so results survive annotations."""
-    try:
-        out = subprocess.run(
-            ["ffmpeg", "-nostdin", "-ss", at, "-i", url, "-frames:v", "1",
-             "-vf", "scale=480:-1", "-q:v", "6", "-f", "mjpeg", "-"],
-            capture_output=True, timeout=120,
-        )
-        if out.stdout and len(out.stdout) > 1000:
-            b64({"label": label, "frame": base64.b64encode(out.stdout).decode("ascii")}, "FRAME")
-            return True
-    except Exception as e:
-        b64({"label": label, "frameError": str(e)[:150]}, "FRAME")
-    return False
-
-
-def page_report(name, url, media_probe=True):
-    report = {"site": name, "url": url}
-    try:
-        raw, final, status = fetch(url)
-    except Exception as e:
-        report["error"] = str(e)[:200]
-        b64(report, name)
-        return
-    html = raw.decode("utf-8", "replace")
-    report["final"] = final
-    report["status"] = status
-    report["length"] = len(html)
-    # sources and players
+def sources_of(html):
     srcs = []
-    for m in re.finditer(r"<(?:source|video|audio)\b[^>]*>", html, re.I):
-        tag = m.group(0)
-        s = re.search(r"\bsrc=[\"']([^\"']+)[\"']", tag)
-        if s:
-            srcs.append(urllib.parse.urljoin(final, s.group(1)))
-    for m in re.finditer(r"<iframe\b[^>]*>", html, re.I):
+    for m in re.finditer(r"<(?:source|video)\b[^>]*>", html, re.I):
         s = re.search(r"\bsrc=[\"']([^\"']+)[\"']", m.group(0))
-        if s:
-            srcs.append(urllib.parse.urljoin(final, s.group(1)))
-    report["sources"] = list(dict.fromkeys(srcs))
-    # data-url / data-server style attributes
-    attrs = []
-    for m in re.finditer(r"<[^>]+>", html):
-        tag = m.group(0)
-        keep = {}
-        for k in ("data-url", "data-server", "data-src", "data-post", "data-nume",
-                  "data-type", "data-id", "data-lang", "class", "id"):
-            am = re.search(rf"\b{k}=[\"']([^\"']*)[\"']", tag)
-            if am:
-                keep[k] = am.group(1)[:160]
-        if any(k in keep for k in ("data-url", "data-server", "data-src", "data-post", "data-nume", "data-id")):
-            keep["tag"] = re.match(r"<(\w+)", tag).group(1) if re.match(r"<(\w+)", tag) else "?"
-            attrs.append(keep)
-        if len(attrs) >= 25:
-            break
-    report["dataAttrs"] = attrs
-    # external scripts
-    report["scriptSrcs"] = list(dict.fromkeys(
-        urllib.parse.urljoin(final, s) for s in re.findall(r"<script[^>]+src=[\"']([^\"']+)[\"']", html, re.I)
-    ))[:20]
-    # inline scripts: keep the interesting ones, fully
-    inline = []
-    for m in re.finditer(r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.I | re.S):
-        text = m.group(1).strip()
-        if not text:
-            continue
-        if re.search(r"createplayer|playsss|player\.src|videojs|sources\s*:|file\s*:|\.m3u8|\.mp4|data-url|jsonResponse|cuevana", text, re.I):
-            inline.append(text[:4000])
-        if len(inline) >= 8:
-            break
-    report["inline"] = inline
-    # play/link hints
-    report["playLinks"] = list(dict.fromkeys(
-        urllib.parse.urljoin(final, h) for h in re.findall(r"href=[\"']([^\"']*(?:/play/|ver\.html|\?vod=)[^\"']*)[\"']", html, re.I)
-    ))[:10]
-    b64(report, name)
-    # media verification
-    if media_probe:
-        for media in report["sources"][:3]:
-            info = head_media(media)
-            info["for"] = name
-            b64(info, "MEDIA")
-            if media_probe and info.get("length") and info["length"].isdigit() and int(info["length"]) > 200000:
-                grab_frame(media, f"{name}:{media}")
+        if s and not s.group(1).startswith("data:"):
+            srcs.append(s.group(1))
+    for m in re.finditer(r"player\.src\(\s*\{\s*src:\s*[\"']([^\"']+)[\"']", html):
+        srcs.append(m.group(1))
+    return list(dict.fromkeys(srcs))
+
+
+def page(name, url):
+    try:
+        html, final, status = fetch(url)
+    except Exception as e:
+        emit("PAGE", {"name": name, "error": str(e)[:150]})
+        return
+    srcs = sources_of(html)
+    emit("PAGE", {"name": name, "status": status, "len": len(html), "final": final, "srcs": srcs})
+    for src in srcs[:2]:
+        info = media_info(src)
+        info["for"] = name
+        emit("MEDIA", info)
 
 
 def main():
-    targets = [
-        ("pelissmart-movie", "https://pelissmart.com/pelicula/hermanastras_E9q9EbN/?vod=1080p"),
-        ("pelissmart-episode", "https://pelissmart.com/serie/padre-de-familia_U1434_24_1/?vod=1080p"),
-        ("pelisplusfit-movie", "https://pelisplus.fit/peliculas/la-otra-madre-2026-l1400837s/play/"),
-        ("pelisplusfit-episode", "https://pelisplus.fit/serie/1434-24-1/padre-de-familia/play/"),
-        ("pelisplusto-movie", "https://pelisplus-to.com/peliculas/en-el-corazon-de-la-bestia-A1263337Bx2/ver/"),
-        ("cuevana3me-movie", "https://cuevana3me.info/pelicula/en-el-corazon-de-la-bestia-11263337Z/ver.html"),
-        ("cuevana3me-episode", "https://cuevana3me.info/tv/1434-24-1/padre-de-familia/"),
-        ("pelispop-movie", "https://123pelispop.pro/pelicula/la-odisea-m1368337e/"),
-        ("pelispop-series", "https://123pelispop.pro/series/1434/padre-de-familia/"),
+    samples = [
+        ("ps-old-grantorino", "https://pelissmart.com/pelicula/gran-torino_E4bb4/?vod=1080p"),
+        ("ps-old-momia", "https://pelissmart.com/pelicula/la-momia-la-tumba-del-emperador-dragon_EK49/?vod=1080p"),
+        ("ps-old-episode", "https://pelissmart.com/serie/padre-de-familia_U1434_1_1/?vod=1080p"),
+        ("pf-old-semilla", "https://pelisplus.fit/peliculas/la-semilla-del-diablo-1968-l805s/play/"),
+        ("pf-old-episode", "https://pelisplus.fit/serie/1434-1-1/padre-de-familia/play/"),
+        ("pt-movie-otra", "https://pelisplus-to.com/peliculas/la-otra-madre-A1400837Bx2/ver/"),
+        ("pt-old-gremlins", "https://pelisplus-to.com/peliculas/gremlins-A927Bx2/ver/"),
+        ("cv-movie-otra", "https://cuevana3me.info/pelicula/la-otra-madre-11400837Z/ver.html"),
+        ("cv-old-gremlins", "https://cuevana3me.info/pelicula/gremlins-1927Z/ver.html"),
+        ("cv-episode-ver", "https://cuevana3me.info/tv/1434-24-1/padre-de-familia/ver.html"),
     ]
-    for name, url in targets:
-        try:
-            page_report(name, url)
-        except Exception as e:
-            b64({"site": name, "fatal": str(e)[:200]}, name)
+    for name, url in samples:
+        page(name, url)
+
+    # 123pelispop: full script picture of a movie page
+    try:
+        html, final, status = fetch("https://123pelispop.pro/pelicula/iron-man-m1726e/")
+        srcs = re.findall(r"<script[^>]+src=[\"']([^\"']+)[\"']", html, re.I)
+        emit("POP-SCRIPTS", {"srcs": srcs})
+        inline = [m.group(1).strip() for m in re.finditer(r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.I | re.S) if m.group(1).strip()]
+        emit("POP-INLINE-COUNT", {"count": len(inline)})
+        for index, text in enumerate(inline):
+            for chunk_start in range(0, min(len(text), 12000), 2500):
+                emit(f"POP-INLINE-{index}", {"t": text[chunk_start:chunk_start + 2500]})
+        data = []
+        for m in re.finditer(r"<[^>]+>", html):
+            tag = m.group(0)
+            keep = {k: v for k, v in re.findall(r"\b(data-[a-z-]+)=[\"']([^\"']*)[\"']", tag)}
+            if keep:
+                keep["tag"] = (re.match(r"<(\w+)", tag) or [None, "?"])[1] if re.match(r"<(\w+)", tag) else "?"
+                data.append(keep)
+            if len(data) >= 15:
+                break
+        emit("POP-DATA", {"data": data})
+        emit("POP-SOURCES", {"srcs": sources_of(html)})
+    except Exception as e:
+        emit("POP-FATAL", {"error": str(e)[:200]})
 
 
 if __name__ == "__main__":
