@@ -8,8 +8,32 @@ adb logcat -c || true
   -Pandroid.testInstrumentationRunnerArguments.class=com.menorah.repelis24shop.PeliCineHDWebProbe \
   --stacktrace > probe-gradle.log 2>&1
 echo "gradle status $?" | emit
-grep -E "^e: |FAILED|Caused by|Exception|A WebView method" probe-gradle.log | grep -v 'WARNING: D8' | head -6 | emit
 adb logcat -d -s CSPeliCine:I '*:S' > probe-logcat.txt 2>/dev/null || true
-echo "logcat lines $(wc -l < probe-logcat.txt) chunks $(grep -c CHUNK probe-logcat.txt || true)" | emit
-grep -E 'FILE |END ' probe-logcat.txt | head -10 | sed -e 's/^.*CSPeliCine: //' | emit
+rm -rf probe-results && mkdir -p probe-results
+python3 - <<'PY'
+import base64
+import re
+from collections import defaultdict
+
+parts = defaultdict(dict)
+for line in open("probe-logcat.txt", encoding="utf-8", errors="replace"):
+    match = re.search(r"CSPeliCine: CHUNK (\S+) (\d+) (\S+)\s*$", line)
+    if match:
+        parts[match.group(1)][int(match.group(2))] = match.group(3)
+for name, chunks in parts.items():
+    data = "".join(chunks[index] for index in sorted(chunks))
+    try:
+        text = base64.b64decode(data).decode("utf-8", errors="replace")
+    except Exception as error:  # noqa: BLE001
+        print("decode error", name, error)
+        continue
+    open("probe-results/" + name, "w", encoding="utf-8").write(text)
+    print("wrote", name, len(text))
+PY
+ls -la probe-results | emit
+if [ -n "$(ls -A probe-results 2>/dev/null)" ]; then
+  git config user.name "probe" && git config user.email "probe@example.com"
+  git add -f probe-results && git commit -q -m "Probe output: pelicinehd DOM" || true
+  git push origin HEAD:arena/77383897-cloudstream-latino 2>&1 | tail -2 | emit
+fi
 exit 0
