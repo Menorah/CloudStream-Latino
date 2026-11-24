@@ -1,0 +1,45 @@
+name: Pruebas de PeliCineHD
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['PeliCineHD/**', '.github/workflows/pelicinehd-tests.yml']
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Pruebas de análisis en JVM
+        run: |
+          set +e
+          ./gradlew -PenablePeliCineHD=true :PeliCineHD:testDebugUnitTest --stacktrace > pj-build.log 2>&1
+          status=$?
+          tail -60 pj-build.log
+          python3 - <<'PY'
+          import pathlib
+          log = pathlib.Path('pj-build.log').read_text()
+          for line in log.splitlines():
+              if line.startswith('e: ') or 'FAILED' in line or 'failing tests' in line:
+                  print('::error::' + line.replace('%', '%25')[:300])
+          for report in pathlib.Path('.').glob('PeliCineHD/build/test-results/testDebugUnitTest/TEST-*.xml'):
+              text = report.read_text()
+              if '<failure' in text or '<error' in text:
+                  import re
+                  for m in re.finditer(r'<(?:failure|error)[^>]*message="([^"]{0,300})"', text):
+                      print('::error::' + m.group(1).replace('%', '%25'))
+          PY
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: PeliCineHD-test-results
+          path: PeliCineHD/build/test-results/
+          if-no-files-found: ignore
