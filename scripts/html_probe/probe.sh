@@ -110,3 +110,7 @@ if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}" ]; then
   gh issue create --repo "${GITHUB_REPOSITORY:-Menorah/CloudStream-Latino}" \
     --title "sonda-html $(date -u +%FT%TZ)" --body-file docs/sonda-html.md || true
 fi
+
+echo '==================== 7) Proxy de imágenes weserv ===================='
+curl -s -o /dev/null -w 'weserv→webp repelis24: http %{http_code} tipo %{content_type} bytes %{size_download}\n' \
+  -A "$UA" 'https://images.weserv.nl/?url=repelis24.shop%2Fcdn%2Fp%2Fv2%2Fw1%2Fty7zfdlgY2HU3eopy3SLV8JJIODoGd5ZB3oH.webp'

@@ -21,10 +21,17 @@ internal object Repelis24ShopMarkup {
     /** Posters live on the site's CDN but any https image is accepted; lazy attrs are tried too. */
     private fun image(url: String): String? = runCatching {
         val u = URI(url.trim())
-        url.trim().takeIf {
+        val clean = url.trim().takeIf {
             u.scheme.equals("https", true) && !u.host.isNullOrBlank() && u.userInfo == null &&
                 u.port in listOf(-1, 443) && it.length <= 2048 && !it.startsWith("data:")
-        }
+        } ?: return@runCatching null
+        // The site's image CDN is behind the same Cloudflare wall as the HTML: the app's
+        // image loader would receive a challenge page instead of pixels. Route those
+        // through a public image proxy; other hosts (TMDB…) work directly.
+        val host = u.host.orEmpty()
+        if (host.equals("repelis24.shop", true) || host.endsWith(".repelis24.shop", true)) {
+            "https://images.weserv.nl/?url=" + java.net.URLEncoder.encode(clean.removePrefix("https://"), "UTF-8")
+        } else clean
     }.getOrNull()
     fun img(element: org.jsoup.nodes.Element?): String? {
         if (element == null) return null

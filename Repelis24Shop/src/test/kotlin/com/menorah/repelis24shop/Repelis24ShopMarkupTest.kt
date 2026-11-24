@@ -21,7 +21,10 @@ class Repelis24ShopMarkupTest {
     }
     @Test fun imagesAcceptLazyAndExternalHttps() {
         val lazy = Jsoup.parse("""<div class="movie-item"><a href="/pelicula/x/"><img class="lazyload" src="/loader.gif" data-src="/cdn/p/v2/w1/abc.webp"><div class="item-detail"><p>X</p></div></a></div>""", "https://repelis24.shop/peliculas/")
-        assertEquals("https://repelis24.shop/cdn/p/v2/w1/abc.webp", Repelis24ShopMarkup.cards(lazy).single().poster)
+        val proxied = Repelis24ShopMarkup.cards(lazy).single().poster
+        // Site-CDN images are routed through the image proxy (Cloudflare serves a
+        // challenge page instead of pixels on the raw URL).
+        assertTrue("era $proxied", proxied!!.startsWith("https://images.weserv.nl/?url=") && proxied.contains("abc.webp"))
         val external = Jsoup.parse("""<div class="movie-item"><a href="/pelicula/y/"><img src="https://image.tmdb.org/t/p/w500/y.jpg"><div class="item-detail"><p>Y</p></div></a></div>""", "https://repelis24.shop/peliculas/")
         assertEquals("https://image.tmdb.org/t/p/w500/y.jpg", Repelis24ShopMarkup.cards(external).single().poster)
         val bad = Jsoup.parse("""<img src="data:image/gif;base64,AAAA">""", "https://repelis24.shop/")
