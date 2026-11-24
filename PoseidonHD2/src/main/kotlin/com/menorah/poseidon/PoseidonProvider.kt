@@ -84,9 +84,11 @@ class PoseidonProvider : MainAPI() {
                 val permits = Semaphore(5)
                 players.map { player -> async { permits.withPermit {
                     withTimeoutOrNull(12_000L) {
-                        val response = attempt { app.get(player.url, headers = mapOf("Referer" to doc.location()), timeout = 8) } ?: return@withTimeoutOrNull
-                        if (!response.isSuccessful || !PoseidonMarkup.wrapperUrl(response.url)) return@withTimeoutOrNull
-                        val target = PoseidonMarkup.destination(response.text) ?: return@withTimeoutOrNull
+                        val target = if (PoseidonMarkup.wrapperUrl(player.url)) {
+                            val response = attempt { app.get(player.url, headers = mapOf("Referer" to doc.location()), timeout = 8) } ?: return@withTimeoutOrNull
+                            if (!response.isSuccessful) return@withTimeoutOrNull
+                            PoseidonMarkup.destination(response.text) ?: return@withTimeoutOrNull
+                        } else player.url
                         val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
                         attempt { loadExtractor(target, player.url, subtitleCallback) { links.add(it) } }
                         for (link in synchronized(links) { links.toList() }) {
