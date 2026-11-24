@@ -36,10 +36,16 @@ class SoloLatinoProvider : MainAPI() {
         "/animes" to "Animes",
     )
 
+    /** Browser-like headers: the site may serve degraded markup to bare HTTP clients. */
+    private val browserHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "Accept-Language" to "es-419,es;q=0.9",
+    )
+
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(SoloLatinoMarkup.siteUrl(url)) { "Dirección fuera de SoloLatino" }
-        val res = app.get(url, timeout = 15)
+        val res = app.get(url, headers = browserHeaders, timeout = 15)
         if (!res.isSuccessful || !SoloLatinoMarkup.siteUrl(res.url)) {
             throw IllegalStateException("SoloLatino no respondió correctamente (HTTP ${res.code}).")
         }
@@ -75,6 +81,11 @@ class SoloLatinoProvider : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val text = query.trim()
         if (text.isEmpty()) return newSearchResponseList(emptyList(), hasNext = false)
+        if (page == 1 && text.contains("diag", ignoreCase = true)) {
+            // La app usa esta variante paginada; el 🧪 debe aparecer aquí también.
+            val card = newMovieSearchResponse("🧪 Diagnóstico de enlaces (no es contenido)", "diagnostico://sololatino", TvType.Movie)
+            return newSearchResponseList(listOf(card), hasNext = false)
+        }
         val path = if (page == 1) "/buscar?q=${URLEncoder.encode(text, "UTF-8")}"
         else "/buscar?q=${URLEncoder.encode(text, "UTF-8")}&page=$page"
         val doc = fetch(path)

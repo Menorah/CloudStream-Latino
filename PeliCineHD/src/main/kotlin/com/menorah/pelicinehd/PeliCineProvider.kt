@@ -41,7 +41,10 @@ class PeliCineProvider(private val context: android.content.Context? = null) : M
     private suspend fun fetch(input: String): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(PeliCineMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD" }
-        val res = app.get(url, timeout = 15)
+        val res = app.get(url, headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+            "Accept-Language" to "es-419,es;q=0.9",
+        ), timeout = 15)
         var text = res.text
         var finalUrl = res.url
         if (!res.isSuccessful || !PeliCineMarkup.siteUrl(finalUrl) || challenged(text, res.code)) {
