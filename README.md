@@ -1,18 +1,18 @@
 # CloudStream Latino
 
-Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/) y [PoseidonHD 2](https://www.poseidonhd2.co/), en fase beta. Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
+Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/) y [PoseidonHD 2](https://www.poseidonhd2.co/). Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
 
 ## Instalación
 
-El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json`, `AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3` y `CinecalidadMY.cs3` en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
+El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json` y los siete complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `PoseidonHD2.cs3`) en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
 
-1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los seis complementos.
+1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los siete complementos.
 2. En CloudStream abre **Ajustes → Extensiones → Repositorios → Añadir repositorio**.
 3. Pega esta URL:
 
    `https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo.json`
 
-4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY** o los que desees y activa los proveedores en español si es necesario.
+4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **PoseidonHD2** o los que desees y activa los proveedores en español si es necesario.
 
 Como alternativa para pruebas privadas, descarga el artefacto `AnimeOnlineNinja` desde la ejecución de Actions, extrae el `.cs3` deseado e impórtalo localmente en CloudStream si tu versión admite instalación de archivos locales. La descarga del artefacto requiere iniciar sesión en GitHub.
 
@@ -51,10 +51,6 @@ VerAni incluye páginas de anime y películas con paginación, búsqueda, fichas
 
 La extensión incluye catálogos paginados de películas, series, tendencias y los géneros del sitio, además de búsqueda y fichas. Los enlaces de películas y episodios se etiquetan según el idioma de cada opción en la web. Si no se puede recuperar la lista de un episodio, se intenta la búsqueda alternativa y se conservan como «Idioma no indicado», sin adivinarlo. La disponibilidad de los reproductores externos depende de la red y de los extractores de CloudStream.
 
-### RePelis24.shop
-
-La extensión incluye catálogos, búsqueda, fichas de películas y series con temporadas, y enlaces por idioma vía Nuupload (con resolución de sus listas HLS) y VOE. Su reproducción se verificó en CloudStream con Media3 en Android (películas y episodios reproducidos con frames decodificados); los títulos retirados por el servidor se informan como no disponibles y la disponibilidad varía como en el resto de complementos.
-
 ### PoseidonHD 2
 
 La extensión incluye catálogos, búsqueda, películas y series con temporadas. Los enlaces se obtienen de los datos del sitio (`__NEXT_DATA__`) y se etiquetan por idioma (latino, castellano, subtitulado); el envoltorio del reproductor del sitio se resuelve al hoster correspondiente. Su reproducción se verificó en CloudStream con Media3 (una película y tres episodios reproducidos con frames decodificados). Algunos hosts piden verificación (Netu, Doodstream) o fallan según la red; esos casos se informan como muestras no disponibles y la disponibilidad varía como en el resto de complementos.
@@ -63,7 +59,7 @@ La extensión incluye catálogos, búsqueda, películas y series con temporadas.
 
 Cinecalidad.am incluye películas, series, búsqueda y catálogo paginado. La versión 3 admite tanto enlaces de episodios `1x1` como los enlaces `s1-e1`. En CloudStream pre-release se comprobaron las cuatro series reportadas y la reproducción de sus primeros episodios con Media3. Esto no garantiza que todos los títulos o servidores funcionen en todas las redes o dispositivos.
 
-PoseidonHD 2 se mantiene como prototipo fuera del índice y de la release: la prueba en CloudStream reprodujo una película, pero no pudo reproducir un episodio de muestra. Se puede compilar solo para diagnóstico con `./gradlew -PenablePoseidon=true :PoseidonHD2:make`. Cinecalidad.my ofrece películas con búsqueda, paginación y géneros; en CloudStream pre-release se reprodujeron cuatro películas mediante VOE. Los enlaces están etiquetados con el idioma indicado por el sitio y la disponibilidad de cada servidor puede variar.
+Cinecalidad.my ofrece películas con búsqueda, paginación y géneros; en CloudStream pre-release se reprodujeron cuatro películas mediante VOE. Los enlaces están etiquetados con el idioma indicado por el sitio y la disponibilidad de cada servidor puede variar.
 
 ### RePelisHD
 
