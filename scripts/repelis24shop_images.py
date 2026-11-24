@@ -297,6 +297,30 @@ def mirror_timings():
     notice("mirror_timings", report)
 
 
+def page_header_matrix():
+    """The provider only sends User-Agent + Referer today; check what the site does with that."""
+    import time
+    desktop = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+    variants = {
+        "provider_today_ua_referer": {"User-Agent": desktop, "Referer": BASE + "/"},
+        "plus_accept": {"User-Agent": desktop, "Referer": BASE + "/",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+        "plus_accept_language": {"User-Agent": desktop, "Referer": BASE + "/",
+                                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                                 "Accept-Language": "es-AR,es;q=0.9,en;q=0.8"},
+        "browser_full": PAGE_HEADERS,
+    }
+    report = {}
+    for name, headers in variants.items():
+        begin = time.time()
+        result = get(BASE + "/peliculas/", headers)
+        entry = {"ms": int((time.time() - begin) * 1000)}
+        entry.update({k: v for k, v in result.items() if k in ("status", "type", "cf", "error", "body")})
+        report[name] = entry
+    notice("page_header_matrix", report)
+
+
 def headers_of_site():
     request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -307,7 +331,7 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    steps = (mirror_timings, headers_of_site)
+    steps = (page_header_matrix, headers_of_site)
     for step in steps:
         try:
             step()
