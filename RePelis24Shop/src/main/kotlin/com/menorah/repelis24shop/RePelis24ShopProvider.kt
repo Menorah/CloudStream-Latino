@@ -20,13 +20,6 @@ class RePelis24ShopProvider : MainAPI() {
     override var mainUrl = RePelis24ShopMarkup.BASE
     override var name = "RePelis24.shop"
     override var lang = "es"
-    /**
-     * Cloudflare on the site CDN answers HTTP 403 to requests without a site Referer,
-     * and the app's image loader does not send one by default. Declaring the headers here makes
-     * CloudStream attach them to every poster, backdrop and episode thumbnail it renders.
-     */
-    override var posterHeaders: Map<String, String>? = RePelis24ShopMarkup.posterHeaders
-
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -70,11 +63,16 @@ class RePelis24ShopProvider : MainAPI() {
         return Jsoup.parse(response.text, response.url)
     }
 
+    /**
+     * Every response carries the headers the CDN needs. Cloudflare serves these images only when
+     * the request has a site `Referer`, and CloudStream's image loader does not send one unless a
+     * response provides `posterHeaders`, so without this the posters and backdrops stay blank.
+     */
     private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->
         if (card.movie) newMovieSearchResponse(card.title, card.url, TvType.Movie) {
-            posterUrl = card.poster
+            addPoster(card.poster, RePelis24ShopMarkup.posterHeaders)
         } else newTvSeriesSearchResponse(card.title, card.url, TvType.TvSeries) {
-            posterUrl = card.poster
+            addPoster(card.poster, RePelis24ShopMarkup.posterHeaders)
         }
     }
 
@@ -127,7 +125,7 @@ class RePelis24ShopProvider : MainAPI() {
 
         if (RePelis24ShopMarkup.isMovie(doc)) {
             return newMovieLoadResponse(title, doc.location(), TvType.Movie, doc.location()) {
-                posterUrl = poster
+                addPoster(poster, RePelis24ShopMarkup.posterHeaders)
                 backgroundPosterUrl = poster
                 this.plot = plot
                 this.year = year
@@ -166,9 +164,10 @@ class RePelis24ShopProvider : MainAPI() {
                 season = item.season
                 episode = item.number
                 posterUrl = item.poster
+                posterHeaders = RePelis24ShopMarkup.posterHeaders
             }
         }) {
-            posterUrl = poster
+            addPoster(poster, RePelis24ShopMarkup.posterHeaders)
             backgroundPosterUrl = poster
             this.plot = plot
             this.year = year
