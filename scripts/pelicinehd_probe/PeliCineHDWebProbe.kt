@@ -37,8 +37,16 @@ class PeliCineHDWebProbe {
         Log.i(tag, body)
     }
 
+    private fun outDir(): File {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val dir = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "probe")
+        dir.mkdirs()
+        return dir
+    }
+
     private fun post(path: String, body: String) {
-        runCatching { File(path).writeText(body) }
+        runCatching { File(outDir(), path).writeText(body) }
+        note(path + " bytes=" + body.length)
         note(body)
     }
 
