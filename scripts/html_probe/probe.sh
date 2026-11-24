@@ -84,3 +84,22 @@ grep -o 'class="[^"]*"' out/rs-list.html | sort | uniq -c | sort -rn | head -8
 echo '---- PeliCineHD: enlaces de tarjeta ----'
 grep -o 'href="https://pelicinehd.com/pelicula/[^"]*"' out/pc-list.html | head -4
 grep -o 'href="https://pelicinehd.com/[^"]*"' out/pc-list.html | sort -u | head -8
+
+# Publicar el resumen: los logs de Actions son inalcanzables desde el sandbox; git y
+# los issues sí. Push con GITHUB_TOKEN no dispara más workflows (anti-recursión).
+{
+  echo "## Sonda HTML $(date -u +%FT%TZ) commit ${GITHUB_SHA:-local}"
+  echo
+  echo '```text'
+  cat /tmp/probe-full.log 2>/dev/null || true
+  echo '```'
+} > docs/sonda-html.md
+git config user.name "sonda-html[bot]"
+git config user.email "sonda-html@users.noreply.github.com"
+git add docs/sonda-html.md
+git commit -m "sonda-html: $(date -u +%FT%TZ)" || true
+git push origin "HEAD:${GITHUB_REF_NAME}" || true
+if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}" ]; then
+  gh issue create --repo "${GITHUB_REPOSITORY:-Menorah/CloudStream-Latino}" \
+    --title "sonda-html $(date -u +%FT%TZ)" --body-file docs/sonda-html.md || true
+fi
