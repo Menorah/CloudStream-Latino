@@ -104,8 +104,11 @@ internal object RePelis24ShopMarkup {
         URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
     }.getOrDefault(value)
 
-    fun seasonNumber(url: String): Int? = seasonPattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault(""))
-        ?.groupValues?.get(2)?.toIntOrNull()?.takeIf { it in 0..MAX_SEASONS }
+    fun seasonNumber(url: String): Int? {
+        if (!siteUrl(url)) return null
+        return seasonPattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault(""))
+            ?.groupValues?.get(2)?.toIntOrNull()?.takeIf { it in 0..MAX_SEASONS }
+    }
 
     fun seasonIsSeries(url: String, slug: String): Boolean {
         val match = seasonPattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault("")) ?: return false
@@ -118,6 +121,7 @@ internal object RePelis24ShopMarkup {
     }
 
     fun episodeKey(url: String): Pair<Int, Int>? {
+        if (!siteUrl(url)) return null
         val match = episodePattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault("")) ?: return null
         val season = match.groupValues[2].toIntOrNull() ?: return null
         val number = match.groupValues[3].toIntOrNull() ?: return null
@@ -304,6 +308,9 @@ internal object RePelis24ShopMarkup {
             if (host.equals("nupload.my", true) || host.equals("nupload.me", true)) return null
             return target.takeIf { it.startsWith("https://") || it.startsWith("http://") }
         }
+        // Only `/watch/<uid>` pages hold a decodable player; an empty uid can never play.
+        val path = uri.path.orEmpty()
+        if (!path.startsWith("/watch/") || path.removePrefix("/watch/").trim('/').isEmpty()) return null
         return url
     }
 
