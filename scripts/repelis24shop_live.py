@@ -240,8 +240,18 @@ def resolve_option(option, page_url):
     return {"host": "nupload.my", "result": "manifest", "check": check_manifest(stream["manifest"], NUPLOAD_REFERER)}
 
 
+RESULTS = []
+
+
 def step(name, value):
-    notice(name, value)
+    """Collect results; GitHub caps workflow annotations, so everything is printed once."""
+    RESULTS.append((name, value))
+    print(name, json.dumps(value, ensure_ascii=True)[:800], flush=True)
+
+
+def report():
+    payload = json.dumps(dict(RESULTS), ensure_ascii=True).replace("%", "%25").replace("\n", " ")
+    print("::notice::" + payload[:6000], flush=True)
 
 
 def main():
@@ -325,5 +335,15 @@ def main():
 
 
 if __name__ == "__main__":
-    print("live verification:", sys.argv[0], flush=True)
-    main()
+    print("live verification", flush=True)
+    try:
+        main()
+    except Exception as error:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        RESULTS.append(("exception", {"error": str(error)[:400],
+                                      "steps": [name for name, _ in RESULTS]}))
+        report()
+        print("::error::" + json.dumps(dict(RESULTS), ensure_ascii=True).replace("%", "%25")[:5000], flush=True)
+        sys.exit(1)
+    report()
