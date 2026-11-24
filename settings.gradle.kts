@@ -3,11 +3,7 @@ rootProject.name = "CloudstreamPlugins"
 // This file sets what projects are included.
 // All new projects should get automatically included unless specified in the "disabled" variable.
 
-// Experimental providers are kept out of release builds until playback is verified.
-// The opt-in flags keep each one available to its diagnostic workflows.
-val disabled =
-    (if (providers.gradleProperty("enableSoloLatino").orNull == "true") emptyList() else listOf("SoloLatino")) +
-    (if (providers.gradleProperty("enablePeliCineHD").orNull == "true") emptyList() else listOf("PeliCineHD"))
+val disabled = emptyList<String>()
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
