@@ -2,7 +2,6 @@ package com.menorah.repelis24shop
 
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.util.Base64
 import java.net.URI
 import java.net.URLDecoder
 import java.util.Base64
