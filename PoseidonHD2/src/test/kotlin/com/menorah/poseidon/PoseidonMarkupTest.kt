@@ -16,11 +16,14 @@ class PoseidonMarkupTest {
         assertTrue(PoseidonMarkup.hasNext(d, 1)); assertFalse(PoseidonMarkup.hasNext(d, 2))
     }
     @Test fun seasonsAndLanguageGroups() {
-        val d = doc("""<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"thisSerie":{"seasons":[{"number":1,"episodes":[{"number":2,"title":"Segundo"},{"number":1,"title":"Primero"}]},{"number":2,"episodes":[]}]},"episode":{"videos":{"latino":[{"result":"https://player.poseidonhd2.co/player.php?h=abc"}],"english":[{"result":"https://evil.test/player.php?h=123"}]}}}}}</script>""")
+        val d = doc("""<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"thisSerie":{"seasons":[{"number":1,"episodes":[{"number":2,"title":"Segundo"},{"number":1,"title":"Primero"}]},{"number":2,"episodes":[]}]},"episode":{"videos":{"latino":[{"result":"https://player.poseidonhd2.co/player.php?h=abc"}],"english":[{"result":"https://evil.test/player.php?h=123"}],"spanish":[{"result":"https://streamwish.to/e/direct1"}]}}}}}</script>""")
         val state = PoseidonMarkup.state(d)!!; val series = state.path("thisSerie")
         assertEquals(listOf(1,2), PoseidonMarkup.episodes(series).map { it.number })
         assertEquals(listOf(2), PoseidonMarkup.missingSeasons(series))
-        assertEquals(listOf("Latino"), PoseidonMarkup.players(state).map { it.language })
+        assertEquals(listOf("Latino", "Castellano"), PoseidonMarkup.players(state).map { it.language })
+        // thisEpisode variant used by some episode pages
+        val alt = doc("""<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"thisEpisode":{"videos":{"english":[{"result":"https://player.poseidonhd2.co/player.php?h=zzz"}]}}}}}</script>""")
+        assertEquals(listOf("Subtitulado"), PoseidonMarkup.players(PoseidonMarkup.state(alt)!!).map { it.language })
     }
     @Test fun wrapperUsesExplicitUrlNotAdFrames() {
         assertEquals("https://voe.sx/e/abc", PoseidonMarkup.destination("""<iframe src="https://ad.test"></iframe><script>var url = 'https://voe.sx/e/abc';</script>"""))
