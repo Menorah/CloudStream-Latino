@@ -126,8 +126,11 @@ internal object RePelis24ShopMarkup {
 
     // ------------------------------------------------------------- catalog
 
-    fun cards(doc: Element): List<Card> = doc.select("div.movie-item a[href]").mapNotNull { link ->
-        val url = resolve(doc.location(), link.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
+    fun cards(doc: Element): List<Card> = cards(doc, doc.baseUri())
+
+    fun cards(doc: Element, location: String): List<Card> = doc.select("div.movie-item a[href]").mapNotNull { link ->
+        val base = doc.baseUri().ifBlank { location }
+        val url = resolve(base, link.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
         val path = URI(url).path.orEmpty()
         val movie = path.startsWith("/pelicula/")
         if (!movie && !path.startsWith("/serie/")) return@mapNotNull null
@@ -139,8 +142,8 @@ internal object RePelis24ShopMarkup {
         Card(
             title = title,
             url = url,
-            poster = image(image?.baseUri() ?: doc.location(), image?.attr("src") ?: image?.attr("data-src")),
-            background = link.selectFirst(".card-hover-backdrop")?.attr("data-backdrop")?.let { image(doc.location(), it) },
+            poster = image(image?.baseUri() ?: base, image?.attr("src") ?: image?.attr("data-src")),
+            background = link.selectFirst(".card-hover-backdrop")?.attr("data-backdrop")?.let { image(base, it) },
             movie = movie
         )
     }.distinctBy { it.url }
