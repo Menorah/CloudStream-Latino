@@ -164,7 +164,6 @@ class RePelis24ShopProvider : MainAPI() {
                 season = item.season
                 episode = item.number
                 posterUrl = item.poster
-                posterHeaders = RePelis24ShopMarkup.posterHeaders
             }
         }) {
             addPoster(poster, RePelis24ShopMarkup.posterHeaders)
