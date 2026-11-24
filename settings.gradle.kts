@@ -7,7 +7,8 @@ rootProject.name = "CloudstreamPlugins"
 // The opt-in flags keep each one available to its diagnostic workflows.
 val disabled =
     (if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2")) +
-    (if (providers.gradleProperty("enableSoloLatino").orNull == "true") emptyList() else listOf("SoloLatino"))
+    (if (providers.gradleProperty("enableSoloLatino").orNull == "true") emptyList() else listOf("SoloLatino")) +
+    (if (providers.gradleProperty("enablePeliCineHD").orNull == "true") emptyList() else listOf("PeliCineHD"))
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
