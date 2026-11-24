@@ -13,10 +13,10 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | RePelisHD | **Publicado** | Película reproducida en los tres idiomas + episodio en CloudStream. |
 | Cinecalidad.am | **Publicado** | Película y episodio reproducidos con CloudStream+Media3. |
 | Cinecalidad.my | **Publicado** | Cuatro películas reproducidas vía VOE. |
-| RePelis24.shop | **Publicado** | Reproducción real verificada el 24-nov (abajo). |
+| RePelis24.shop | **Descartado** (decisión del usuario, 24-nov) | Reproducción verificada en CI el 24-nov (abajo), pero en la red del usuario fallaron imágenes (el CDN `/cdn/` devuelve reto 403 de Cloudflare) y aparecieron enlaces CONTAINER_MALFORMED; tras varias rondas de arreglos el usuario decidió retirarlo. |
 | AnimeOnlineNinja / VerAni | Publicados (tareas previas) | Pendientes conocidos: error 3003 y servidores de AnimeOnline. |
-| SoloLatino | Implementado, pendiente verificación de reproducción | Cadena de red completa + pruebas de análisis; el sitio está bloqueado desde la red de CI. |
-| PeliCineHD | Implementado, pendiente verificación de reproducción | Mecánica Dooplay documentada de implementaciones públicas; Cloudflare bloquea la red de CI. |
+| SoloLatino | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario siempre mostró «Enlaces no encontrados»: los botones `data-player-token` los inserta JavaScript y el sitio va tras Cloudflare; el usuario decidió retirarlo tras varias rondas de arreglos. |
+| PeliCineHD | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario devolvió HTTP 403 (Cloudflare) y, con el respaldo WebView, no cargaba contenido; el usuario decidió retirarlo. |
 | PoseidonHD2 | **Publicado** | Reproducción representativa verificada el 24-nov: película + 3 episodios reproducidos con Media3; se corrigieron episodios sin enlaces (variante `thisEpisode` y fuentes directas). Ciudad de Dios 2x3 y Yellowjackets 1x1 se informan como no disponibles por sus hosts (DNS/403/JS) desde la red de CI. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
 | pelisplus.fit | **Sin complemento viable** | Ídem. |
