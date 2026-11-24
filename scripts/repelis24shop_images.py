@@ -9,6 +9,10 @@ import urllib.request
 BASE = "https://repelis24.shop"
 PAGE_UA = ("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) "
            "Chrome/131.0.0.0 Mobile Safari/537.36")
+PAGE_HEADERS = {"User-Agent": PAGE_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+                "Referer": BASE + "/"}
 
 
 def notice(key, value):
@@ -35,7 +39,7 @@ def get(url, headers):
 
 def assets():
     with urllib.request.urlopen(urllib.request.Request(BASE + "/pelicula/la-odisea/",
-                                                       headers={"User-Agent": PAGE_UA}), timeout=25) as response:
+                                                       headers=PAGE_HEADERS), timeout=25) as response:
         html = response.read(3_000_000).decode("utf-8", "replace")
     poster = re.search(r'itemprop="image"[^>]*src="([^"]+)"', html) or re.search(r'src="(//repelis24\.shop/cdn/[^"]+)"', html)
     sample = re.findall(r'(?:src|data-backdrop)="([^"]*cdn[^"]+)"', html)
@@ -62,7 +66,7 @@ def assets():
 
 def catalog_backdrop():
     with urllib.request.urlopen(urllib.request.Request(BASE + "/peliculas/",
-                                                       headers={"User-Agent": PAGE_UA}), timeout=25) as response:
+                                                       headers=PAGE_HEADERS), timeout=25) as response:
         html = response.read(3_000_000).decode("utf-8", "replace")
     cards = re.findall(r'<div class="movie-item">.*?</div>\s*</div>', html, re.S)
     first = cards[0] if cards else ""
@@ -79,7 +83,7 @@ def catalog_backdrop():
 
 
 def headers_of_site():
-    request = urllib.request.Request(BASE + "/peliculas/", headers={"User-Agent": PAGE_UA})
+    request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
         notice("page_headers", {k.lower(): v for k, v in response.headers.items()
                                 if k.lower() in ("content-type", "server", "cf-cache-status",
