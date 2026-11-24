@@ -121,8 +121,8 @@ class RePelis24ShopProvider : MainAPI() {
                 this.plot = plot
                 this.year = year
                 this.tags = tags
-                addActors(actors)
-                addDuration(RePelis24ShopMarkup.durationMinutes(doc))
+                this.actors = actors
+                this.duration = RePelis24ShopMarkup.durationMinutes(doc)
                 this.recommendations = recommendations
             }
         }
@@ -161,7 +161,7 @@ class RePelis24ShopProvider : MainAPI() {
             this.plot = plot
             this.year = year
             this.tags = tags
-            addActors(actors)
+            this.actors = actors
             this.recommendations = recommendations
         }
     }
