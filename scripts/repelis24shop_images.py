@@ -213,6 +213,31 @@ def cross_host():
     notice("cross_host", report)
 
 
+def reachability():
+    """Does the site answer slowly or drop connections for some networks? Also look for mirrors."""
+    import time
+    report = {}
+    for label, url in (("home", BASE + "/"), ("catalog", BASE + "/peliculas/")):
+        for attempt in (1, 2):
+            start = time.time()
+            result = get(url, PAGE_HEADERS)
+            report[label + "_try" + str(attempt)] = {"ms": int((time.time() - start) * 1000),
+                                                     **{k: v for k, v in result.items()
+                                                        if k in ("status", "type", "cf", "error")}}
+    # Alternate domains advertised by the site, if any.
+    with urllib.request.urlopen(urllib.request.Request(BASE + "/", headers=PAGE_HEADERS),
+                                timeout=25) as response:
+        html = response.read(2_000_000).decode("utf-8", "replace")
+    hosts = sorted(set(re.findall(r"https?://([a-z0-9.-]*repelis[0-9]*\.[a-z]{2,})", html)))
+    report["hosts"] = hosts
+    for host in hosts:
+        if host == "repelis24.shop":
+            continue
+        report["mirror_" + host] = {k: v for k, v in get("https://" + host + "/", PAGE_HEADERS).items()
+                                    if k in ("status", "type", "error")}
+    notice("reachability", report)
+
+
 def headers_of_site():
     request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -223,7 +248,7 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    steps = (assets, catalog_backdrop, cross_host, episode_thumbs, headers_of_site)
+    steps = (reachability, cross_host, episode_thumbs, headers_of_site)
     for step in steps:
         try:
             step()
