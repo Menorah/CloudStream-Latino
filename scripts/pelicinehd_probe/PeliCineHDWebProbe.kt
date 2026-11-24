@@ -22,12 +22,16 @@ import java.io.File
  */
 @RunWith(AndroidJUnit4::class)
 class PeliCineHDWebProbe {
-    private private val tag: String = "CSPeliCine"
+    private val tag: String = "CSPeliCine"
     private val requests = mutableListOf<String>()
+
+    private fun note(body: String) {
+        body.chunked(350).forEach { Log.i(tag, it) }
+    }
 
     private fun post(path: String, body: String) {
         runCatching { File(path).writeText(body) }
-        body.chunked(350).forEach { Log.i(tag, it) }
+        note(body)
     }
 
     private fun dump(webView: WebView, label: String, file: String) = runBlocking {
@@ -68,19 +72,16 @@ class PeliCineHDWebProbe {
                         return super.shouldInterceptRequest(view, request)
                     }
 
-                    override fun onPageFinished(view: WebView, url: String) {
-                        val safeUrl: String = url
-                        Log.i(tag, "FINISHED $safeUrl")
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        note("FINISHED " + (url ?: "?"))
                     }
 
                     override fun onReceivedError(
-                        view: WebView,
-                        request: WebResourceRequest,
-                        error: android.webkit.WebResourceError
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                        error: android.webkit.WebResourceError?
                     ) {
-                        val target: String = request.url.toString()
-                        val code: Int = error.errorCode
-                        Log.i(tag, "ERROR $target $code")
+                        note("ERROR " + (request?.url?.toString() ?: "?") + " " + (error?.errorCode ?: 0))
                     }
                 }
             }
