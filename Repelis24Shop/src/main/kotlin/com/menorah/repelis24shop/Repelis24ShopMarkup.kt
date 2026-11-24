@@ -28,13 +28,15 @@ internal object Repelis24ShopMarkup {
     }.getOrNull()
     fun img(element: org.jsoup.nodes.Element?): String? {
         if (element == null) return null
-        for (attr in listOf("src", "data-src", "data-lazy-src", "data-original")) {
+        // Lazy-load placeholders put a spinner in src; the real image lives in data-*.
+        for (attr in listOf("data-src", "data-lazy-src", "data-original")) {
             val value = element.absUrl(attr).ifBlank { element.attr(attr) }
             image(value)?.let { return it }
         }
         val srcset = element.attr("srcset").split(',').map { it.trim().split(' ').first() }
         for (value in srcset) image(element.absUrl(value).ifBlank { value })?.let { return it }
-        return null
+        val src = element.absUrl("src").ifBlank { element.attr("src") }
+        return image(src)
     }
     /** Nuupload's alternative player carries the actual VOE URL as one query parameter. */
     fun voeFromWrapper(url: String): String? = runCatching {
