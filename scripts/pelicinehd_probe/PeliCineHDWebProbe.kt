@@ -47,7 +47,10 @@ class PeliCineHDWebProbe {
     private fun post(path: String, body: String) {
         runCatching { File(outDir(), path).writeText(body) }
         note(path + " bytes=" + body.length)
-        note(body)
+        // Base64 keeps the text on one line so it comes back intact.
+        note("DATA " + path + " " + android.util.Base64.encodeToString(
+            body.toByteArray(), android.util.Base64.NO_WRAP
+        ))
     }
 
     private fun main(block: () -> Unit) =

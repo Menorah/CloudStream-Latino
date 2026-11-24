@@ -5,25 +5,33 @@ cp scripts/pelicinehd_probe/PeliCineHDWebProbe.kt RePelis24Shop/src/androidTest/
 ./gradlew :RePelis24Shop:connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.class=com.menorah.repelis24shop.PeliCineHDWebProbe \
   --stacktrace > probe-gradle.log 2>&1
-echo "gradle status $?" | sed -e 's/^/::notice::/'
-# Where did the probe write? Show the test package's data dirs (and a broad find as fallback).
-adb shell ls -la /sdcard/Android/data 2>/dev/null | head -30 || true
-adb shell find /sdcard -name 'probe-*' 2>/dev/null | head -20 || true
-adb shell ls /sdcard/Download 2>/dev/null | head || true
-rm -rf pulled && mkdir -p pulled
-adb pull /sdcard/Android/data pulled 2>/dev/null | tail -3 || true
-find pulled -type f | head -20
+echo "gradle status $?"
+rm -rf probe-out && mkdir -p probe-out
 python3 - <<'PY'
+import base64
 import glob
-lines = []
-for path in sorted(glob.glob("pulled/**/*", recursive=True)):
-    if path.endswith("/") or not __import__("os").path.path.isfile(path):
-        continue
-    text = open(path, encoding="utf-8", errors="replace").read()
-    lines.append(path + " :: " + text)
-print("captured", len(lines), "files")
-for line in lines[:140]:
-    for index in range(0, len(line), 340):
-        print("::notice::" + line[index:index + 340].replace("%", "%25"))
+import xml.etree.ElementTree as ET
+
+found = 0
+for path in glob.glob("RePelis24Shop/build/outputs/androidTest-results/connected/**/*.xml", recursive=True):
+    root = ET.parse(path).getroot()
+    for out in root.iter("system-out"):
+        for line in (out.text or "").splitlines():
+            line = line.strip()
+            if not line.startswith("CSPELI DATA "):
+                if line.startswith("CSPELI "):
+                    print("MSG", line[:200])
+                continue
+            _, _, name, payload = line.split(" ", 3)
+            try:
+                data = base64.b64decode(payload, validate=False).decode("utf-8", "replace")
+            except Exception as error:  # noqa: BLE001
+                print("DECODE ERROR", name, error)
+                continue
+            open("probe-out/" + name, "w", encoding="utf-8").write(data)
+            print("WROTE", name, len(data))
+            found += 1
+print("files", found)
 PY
+ls -la probe-out | head
 exit 0
