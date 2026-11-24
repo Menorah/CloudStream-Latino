@@ -31,10 +31,8 @@ class PeliCineHDWebProbe {
     private val requests = mutableListOf<String>()
     private val ready = AtomicReference<WebView?>(null)
 
-    /** Instrumentation stdout lands in the JUnit XML, which the workflow can read. */
     private fun note(body: String) {
         println("CSPELI " + body.replace("\n", " "))
-        Log.i(tag, body)
     }
 
     private fun outDir(): File {
@@ -44,13 +42,18 @@ class PeliCineHDWebProbe {
         return dir
     }
 
+    /** Writes the file for the artifact and streams it through logcat for the workflow. */
     private fun post(path: String, body: String) {
         runCatching { File(outDir(), path).writeText(body) }
-        note(path + " bytes=" + body.length)
-        // Base64 keeps the text on one line so it comes back intact.
-        note("DATA " + path + " " + android.util.Base64.encodeToString(
-            body.toByteArray(), android.util.Base64.NO_WRAP
-        ))
+        Log.i(tag, "FILE $path bytes=${body.length}")
+        val encoded = android.util.Base64.encodeToString(body.toByteArray(), android.util.Base64.NO_WRAP)
+        var index = 0
+        while (index < encoded.length) {
+            val end = minOf(index + 700, encoded.length)
+            Log.i(tag, "CHUNK $path $index ${encoded.substring(index, end)}")
+            index = end
+        }
+        Log.i(tag, "END $path")
     }
 
     private fun main(block: () -> Unit) =
