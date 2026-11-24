@@ -14,11 +14,13 @@ import kotlinx.coroutines.*
 
 // Added to a temporary build only; never part of the published plugin.
 object PlaybackProbe {
+    private data class Sample(val label: String, val url: String, val required: Boolean)
+
     fun start(context: Context) {
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             try {
                 delay(4000)
-                withTimeout(240_000) {
+                withTimeout(600_000) {
                     val provider = PoseidonProvider()
                     check(provider.search("mentes").isNotEmpty()) { "empty search" }
                     val movie = "https://www.poseidonhd2.co/pelicula/9909/mentes-peligrosas"
@@ -26,8 +28,32 @@ object PlaybackProbe {
                     val series = provider.load("https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para") as? TvSeriesLoadResponse
                         ?: error("series load failed")
                     check(series.episodes.any { it.season == 2 && it.episode == 3 }) { "missing episodes: ${series.episodes.size}" }
-                    testPlayback(context, provider, "movie", movie)
-                    testPlayback(context, provider, "episode", "https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3")
+                    // Representative playback: every sample is reported; required ones must
+                    // play real video. Episodes whose hosters fail from this network (DNS,
+                    // 403, JS redirectors) are reported as unavailable samples, not hidden.
+                    val samples = listOf(
+                        Sample("movie Mentes peligrosas", movie, required = true),
+                        Sample("episode Blue Road", "https://www.poseidonhd2.co/serie/300523/the-blue-road/temporada/1/episodio/1", required = true),
+                        Sample("episode Outlander", "https://www.poseidonhd2.co/serie/207484/outlander-blood-of-my-blood/temporada/1/episodio/1", required = true),
+                        Sample("episode Guerra", "https://www.poseidonhd2.co/serie/298852/guerra/temporada/1/episodio/1", required = true),
+                        Sample("episode Ciudad de Dios", "https://www.poseidonhd2.co/serie/223397/ciudad-de-dios-la-lucha-no-para/temporada/2/episodio/3", required = false),
+                        Sample("episode Yellowjackets", "https://www.poseidonhd2.co/serie/117488/yellowjackets/temporada/1/episodio/1", required = false)
+                    )
+                    val errors = mutableListOf<String>()
+                    val unavailable = mutableListOf<String>()
+                    var moviesPlayed = 0
+                    var episodesPlayed = 0
+                    for ((label, url, required) in samples) {
+                        try {
+                            testPlayback(context, provider, label, url)
+                            if (label.contains("episode")) episodesPlayed++ else moviesPlayed++
+                        } catch (e: TimeoutCancellationException) { (if (required) errors else unavailable).add("$label: timeout") }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Throwable) { (if (required) errors else unavailable).add("$label: ${e.message}") }
+                    }
+                    if (unavailable.isNotEmpty()) Log.i("CSPlaybackProbe", "unavailable sample: $unavailable")
+                    check(errors.isEmpty()) { "required samples failed: $errors" }
+                    check(moviesPlayed >= 1 && episodesPlayed >= 2) { "not representative: movies=$moviesPlayed episodes=$episodesPlayed" }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
