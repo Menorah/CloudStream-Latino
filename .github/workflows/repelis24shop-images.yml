@@ -1,11 +1,7 @@
 name: Diagnóstico imágenes RePelis24.shop
+# Diagnóstico manual: no se ejecuta en cada push, solo desde la pestaña Actions.
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths:
-      - 'scripts/repelis24shop_images.py'
-      - '.github/workflows/repelis24shop-images.yml'
 permissions:
   contents: read
 jobs:
