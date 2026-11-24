@@ -171,8 +171,9 @@ class Repelis24ShopProvider : MainAPI() {
             } else step("sin <img> en las tarjetas (¿inyectado por JS?)")
             val item = fetch("/pelicula/la-odisea/")
             val article = item.selectFirst("article.backdrop-info")
-            val poster = article?.let { Repelis24ShopMarkup.img(it.selectFirst("figure.poster img")) }
-                ?: item.selectFirst("meta[property=og:image]")?.attr("content")
+            var poster: String? = null
+            if (article != null) poster = Repelis24ShopMarkup.img(article.selectFirst("figure.poster img"))
+            if (poster == null) poster = item.selectFirst("meta[property=og:image]")?.attr("content")
             step("ficha article=${article != null} poster=${poster?.take(50) ?: "NO"} og=${item.selectFirst("meta[property=og:image]")?.attr("content")?.take(40) ?: "no"}")
             val players = Repelis24ShopMarkup.players(item).take(3)
             step("jugadores=${players.size} " + players.joinToString(" ") { it.url.take(40) })

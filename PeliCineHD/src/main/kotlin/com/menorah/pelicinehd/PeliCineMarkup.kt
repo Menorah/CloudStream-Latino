@@ -55,7 +55,9 @@ internal object PeliCineMarkup {
         val pool = if (containers.isNotEmpty()) containers else doc.select("a[href]")
         for (container in pool) {
             if (container.`is`("a")) {
-                val card = cardFrom(container.parent() ?: continue, container, seen) ?: continue
+                val parent = container.parent()
+                if (parent == null) continue
+                val card = cardFrom(parent, container, seen) ?: continue
                 out.add(card)
             } else {
                 val link = container.selectFirst("a[href]") ?: continue
@@ -152,11 +154,13 @@ internal object PeliCineMarkup {
     /** The trembed page embeds the hoster with an iframe; VOE inlines `data-options` JSON. */
     fun trembedTarget(html: String, base: String = BASE): String? {
         val doc = org.jsoup.Jsoup.parse(html, base)
-        doc.selectFirst("iframe[src]")?.let { iframe ->
+        val iframe = doc.selectFirst("iframe[src]")
+        if (iframe != null) {
             val src = iframe.absUrl("src").ifBlank { iframe.attr("src") }
             if (src.startsWith("http")) return src
         }
-        manifest(html)?.let { return it }
+        val inline = manifest(html)
+        if (inline != null) return inline
         return Regex("http-equiv=[\"']refresh[\"'][^>]*url=([^\"'>\\s]+)").find(html)?.groupValues?.get(1)
             ?.takeIf { it.startsWith("http") }
     }
