@@ -158,12 +158,14 @@ class RePelis24ShopProvider : MainAPI() {
         }
         if (episodes.isEmpty()) return null
 
+        // Episode thumbnails are intentionally left out: `Episode` has no header field, the CDN
+        // rejects every request without the site `Referer`, and a broken thumbnail looks worse
+        // than none, so the list falls back to plain rows.
         return newTvSeriesLoadResponse(title, doc.location(), TvType.TvSeries, episodes.map { item ->
             newEpisode(item.url) {
                 name = item.title
                 season = item.season
                 episode = item.number
-                posterUrl = item.poster
             }
         }) {
             addPoster(poster, RePelis24ShopMarkup.posterHeaders)
