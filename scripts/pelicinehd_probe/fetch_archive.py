@@ -1,73 +1,51 @@
 #!/usr/bin/env python3
-"""Download archived raw HTML of pelicinehd.com pages (Cloudflare blocks the runners directly).
+"""Download archived raw HTML of pelicinehd.com pages (Cloudflare blocks the runner IPs).
 
-The archived HTML keeps the theme markup, the player tabs and the asset URLs, so the parser can be
-written against the real DOM instead of guesses.
+The archived markup is the site's own HTML, so the parser and the selectors can be written and
+tested against the real DOM.
 """
-import json
 import pathlib
-import re
 import sys
-import urllib.parse
 import urllib.request
 
-CDX = "http://web.archive.org/cdx/search/cdx"
+OUT = pathlib.Path("probe-results")
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-OUT = pathlib.Path("probe-results")
+
+# (label, timestamped archive URL)
+PAGES = [
+    ("movie-catalog", "https://web.archive.org/web/20250213063258id_/https://pelicinehd.com/peliculas/"),
+    ("movies-home", "https://web.archive.org/web/20250213063258id_/https://pelicinehd.com/movies/"),
+    ("series-catalog", "https://web.archive.org/web/20260306233809id_/https://pelicinehd.com/series/"),
+    ("movie-detail", "https://web.archive.org/web/20260210030247id_/https://pelicinehd.com/movies/28-anos-despues-el-templo-de-los-huesos/"),
+    ("movie-detail2", "https://web.archive.org/web/20250802021153id_/https://pelicinehd.com/movies/28-anos-despues/"),
+    ("series-detail", "https://web.archive.org/web/20260306142910id_/https://pelicinehd.com/series/adios-tierra/"),
+    ("series-detail2", "https://web.archive.org/web/20260310133114id_/https://pelicinehd.com/series/agatha-en-todas-partes/"),
+]
 
 
-def fetch(url, timeout=90):
-    request = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
-
-
-def cdx(pattern, limit=8):
-    # Hand-built query: urlencode would encode the ":" in filter and the archive rejects it.
-    url = (CDX + "?url=" + urllib.parse.quote(pattern, safe="/*")
-           + "&output=json&limit=" + str(limit)
-           + "&filter=statuscode:200&filter=mimetype:text/html"
-           + "&collapse=urlkey&from=2024")
-    try:
-        rows = json.loads(fetch(url, timeout=60).decode("utf-8", "replace"))
-    except Exception as error:  # noqa: BLE001
-        print("cdx error", pattern, url, error)
-        return []
-    return [dict(zip(rows[0], row)) for row in rows[1:]] if rows else []
-
-
-def main():
+def main() -> int:
     OUT.mkdir(exist_ok=True)
-    wanted = [
-        ("movies/*", "movie"),
-        ("series/*", "series"),
-    ]
     saved = 0
-    for pattern, kind in wanted:
-        for row in cdx(pattern, limit=10):
-            original = row.get("original", "")
-            timestamp = row.get("timestamp", "")
-            if not original or not timestamp:
-                continue
-            slug = re.sub(r"[^a-z0-9]+", "-", urllib.parse.urlsplit(original).path.lower()).strip("-")
-            target = OUT / ("archive-%s-%s.html" % (kind, slug[:60]))
-            if target.exists():
-                continue
-            raw_url = "https://web.archive.org/web/%sid_/%s" % (timestamp, original)
-            try:
-                data = fetch(raw_url)
-            except Exception as error:  # noqa: BLE001
-                print("fetch error", raw_url, error)
-                continue
-            text = data.decode("utf-8", "replace")
-            target.write_text(text, encoding="utf-8")
-            print("saved", target.name, len(text))
+    for label, url in PAGES:
+        target = OUT / ("archive-%s.html" % label)
+        if target.exists() and target.stat().st_size > 2000:
+            print("skip", label)
             saved += 1
-            if saved >= 8:
-                break
-        if saved >= 8:
-            break
+            continue
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(request, timeout=120) as response:
+                text = response.read().decode("utf-8", "replace")
+        except Exception as error:  # noqa: BLE001
+            print("error", label, url, error)
+            continue
+        if "Just a moment" in text:
+            print("challenge", label)
+            continue
+        target.write_text(text, encoding="utf-8")
+        print("saved", target.name, len(text))
+        saved += 1
     print("total", saved)
     return 0 if saved else 1
 
