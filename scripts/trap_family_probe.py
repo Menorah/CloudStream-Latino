@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Round 2: sample older titles and dump 123pelispop scripts. Small annotations."""
+"""Round 3: remaining trap-family gaps + access recheck. Max ~10 small annotations."""
 import base64
 import json
 import re
@@ -21,18 +21,15 @@ def fetch(url, timeout=25):
 
 
 def media_info(url):
-    info = {"url": url}
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", url],
             capture_output=True, timeout=90,
         )
         fmt = json.loads(out.stdout or b"{}").get("format", {})
-        info["dur"] = fmt.get("duration")
-        info["size"] = fmt.get("size")
+        return {"url": url, "dur": fmt.get("duration"), "size": fmt.get("size")}
     except Exception as e:
-        info["err"] = str(e)[:100]
-    return info
+        return {"url": url, "err": str(e)[:80]}
 
 
 def sources_of(html):
@@ -46,59 +43,62 @@ def sources_of(html):
     return list(dict.fromkeys(srcs))
 
 
-def page(name, url):
-    try:
-        html, final, status = fetch(url)
-    except Exception as e:
-        emit("PAGE", {"name": name, "error": str(e)[:150]})
-        return
-    srcs = sources_of(html)
-    emit("PAGE", {"name": name, "status": status, "len": len(html), "final": final, "srcs": srcs})
-    for src in srcs[:2]:
-        info = media_info(src)
-        info["for"] = name
-        emit("MEDIA", info)
-
-
 def main():
-    samples = [
-        ("ps-old-grantorino", "https://pelissmart.com/pelicula/gran-torino_E4bb4/?vod=1080p"),
-        ("ps-old-momia", "https://pelissmart.com/pelicula/la-momia-la-tumba-del-emperador-dragon_EK49/?vod=1080p"),
-        ("ps-old-episode", "https://pelissmart.com/serie/padre-de-familia_U1434_1_1/?vod=1080p"),
-        ("pf-old-semilla", "https://pelisplus.fit/peliculas/la-semilla-del-diablo-1968-l805s/play/"),
-        ("pf-old-episode", "https://pelisplus.fit/serie/1434-1-1/padre-de-familia/play/"),
+    media = []
+    pages = []
+    for name, url in [
         ("pt-movie-otra", "https://pelisplus-to.com/peliculas/la-otra-madre-A1400837Bx2/ver/"),
         ("pt-old-gremlins", "https://pelisplus-to.com/peliculas/gremlins-A927Bx2/ver/"),
         ("cv-movie-otra", "https://cuevana3me.info/pelicula/la-otra-madre-11400837Z/ver.html"),
         ("cv-old-gremlins", "https://cuevana3me.info/pelicula/gremlins-1927Z/ver.html"),
         ("cv-episode-ver", "https://cuevana3me.info/tv/1434-24-1/padre-de-familia/ver.html"),
-    ]
-    for name, url in samples:
-        page(name, url)
+    ]:
+        try:
+            html, final, status = fetch(url)
+            srcs = sources_of(html)
+            pages.append({"name": name, "status": status, "final": final, "srcs": srcs})
+            for src in srcs[:1]:
+                info = media_info(src)
+                info["for"] = name
+                media.append(info)
+        except Exception as e:
+            pages.append({"name": name, "error": str(e)[:120]})
+    emit("PAGES", pages)
+    emit("MEDIA", media)
 
-    # 123pelispop: full script picture of a movie page
+    # 123pelispop full script picture
     try:
         html, final, status = fetch("https://123pelispop.pro/pelicula/iron-man-m1726e/")
         srcs = re.findall(r"<script[^>]+src=[\"']([^\"']+)[\"']", html, re.I)
-        emit("POP-SCRIPTS", {"srcs": srcs})
         inline = [m.group(1).strip() for m in re.finditer(r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.I | re.S) if m.group(1).strip()]
-        emit("POP-INLINE-COUNT", {"count": len(inline)})
+        emit("POP-A", {"srcs": srcs, "inlineCount": len(inline), "srcsInPage": sources_of(html)})
         for index, text in enumerate(inline):
-            for chunk_start in range(0, min(len(text), 12000), 2500):
-                emit(f"POP-INLINE-{index}", {"t": text[chunk_start:chunk_start + 2500]})
+            emit(f"POP-S{index}", {"t": text[:3200]})
         data = []
         for m in re.finditer(r"<[^>]+>", html):
-            tag = m.group(0)
-            keep = {k: v for k, v in re.findall(r"\b(data-[a-z-]+)=[\"']([^\"']*)[\"']", tag)}
+            keep = dict(re.findall(r"\b(data-[a-z-]+)=[\"']([^\"']*)[\"']", m.group(0)))
             if keep:
-                keep["tag"] = (re.match(r"<(\w+)", tag) or [None, "?"])[1] if re.match(r"<(\w+)", tag) else "?"
                 data.append(keep)
-            if len(data) >= 15:
+            if len(data) >= 12:
                 break
-        emit("POP-DATA", {"data": data})
-        emit("POP-SOURCES", {"srcs": sources_of(html)})
+        emit("POP-D", {"data": data})
     except Exception as e:
-        emit("POP-FATAL", {"error": str(e)[:200]})
+        emit("POP-E", {"error": str(e)[:150]})
+
+    # access recheck for the three blocked sites
+    checks = []
+    for name, url in [
+        ("sololatino", "https://sololatino.net/"),
+        ("pelicine", "https://pelicinehd.com/movies/matrix/"),
+        ("pelisjuanita", "https://pelisjuanita.com/movies/"),
+    ]:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                checks.append({"name": name, "status": r.status, "len": len(r.read())})
+        except Exception as e:
+            checks.append({"name": name, "error": str(e)[:100]})
+    emit("ACCESS", checks)
 
 
 if __name__ == "__main__":
