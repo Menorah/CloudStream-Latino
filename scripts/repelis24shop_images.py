@@ -31,8 +31,8 @@ def publish():
     print("report length", len(payload), flush=True)
     # GitHub stores only a short prefix of an annotation, so print in small chunks
     # (at most ten annotations are published per run, the debug log keeps the rest).
-    for index in range(0, len(payload), 900):
-        print("::notice::" + payload[index:index + 900], flush=True)
+    for index in range(0, len(payload), 380):
+        print("::notice::" + payload[index:index + 380], flush=True)
 
 
 def get(url, headers):
