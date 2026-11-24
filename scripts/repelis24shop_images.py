@@ -238,6 +238,47 @@ def reachability():
     notice("reachability", report)
 
 
+PAGES = ["/peliculas/", "/series/", "/peliculas/estrenos", "/genero/accion", "/genero/animacion",
+         "/genero/anime", "/genero/aventura", "/genero/ciencia-ficcion", "/genero/comedia",
+         "/genero/crimen", "/genero/documental", "/genero/drama", "/genero/familia",
+         "/genero/fantasia", "/genero/belica", "/genero/marvel", "/genero/dc", "/genero/disney",
+         "/genero/musical", "/genero/romance", "/genero/suspense", "/genero/terror"]
+
+
+def concurrency():
+    """CloudStream asks for all 22 catalog pages at the same time; measure that load and the
+    per-request latency, plus how a longer NiceHttp timeout behaves."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    started = time.time()
+
+    def one(path):
+        begin = time.time()
+        result = get(BASE + path, PAGE_HEADERS)
+        return {"path": path, "ms": int((time.time() - begin) * 1000),
+                **{k: v for k, v in result.items() if k in ("status", "type", "error")}}
+
+    with ThreadPoolExecutor(max_workers=22) as pool:
+        rows = list(pool.map(one, PAGES))
+    ok = [r for r in rows if r.get("status") == 200]
+    errors = [r for r in rows if r.get("status") != 200]
+    notice("concurrency", {
+        "total_ms": int((time.time() - started) * 1000),
+        "ok": len(ok), "errors": errors,
+        "max_ms": max((r["ms"] for r in rows), default=None),
+        "min_ms": min((r["ms"] for r in rows), default=None),
+        "mean_ms": int(sum(r["ms"] for r in rows) / len(rows)) if rows else None,
+    })
+    # Retry behaviour: does an immediate repeat of a slow page help or hurt?
+    retries = []
+    for attempt in range(3):
+        begin = time.time()
+        result = get(BASE + "/peliculas/", PAGE_HEADERS)
+        retries.append({"attempt": attempt + 1, "ms": int((time.time() - begin) * 1000),
+                        **{k: v for k, v in result.items() if k in ("status", "error")}})
+    notice("retries", retries)
+
+
 def headers_of_site():
     request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -248,7 +289,7 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    steps = (reachability, cross_host, episode_thumbs, headers_of_site)
+    steps = (reachability, concurrency, headers_of_site)
     for step in steps:
         try:
             step()
