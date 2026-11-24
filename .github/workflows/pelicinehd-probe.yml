@@ -1,6 +1,11 @@
 name: Sondeo PeliCineHD
 on:
   workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'scripts/pelicinehd_probe.py'
+      - '.github/workflows/pelicinehd-probe.yml'
 permissions:
   contents: read
 jobs:
