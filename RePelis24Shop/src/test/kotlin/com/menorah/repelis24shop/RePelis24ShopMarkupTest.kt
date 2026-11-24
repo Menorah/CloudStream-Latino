@@ -302,6 +302,20 @@ class RePelis24ShopMarkupTest {
         assertFalse(RePelis24ShopMarkup.isChallenge(normal))
     }
 
+    // -------------------------------------------------------------- images
+
+    @Test
+    fun imageHeadersCarryTheSiteRefererCloudflareNeeds() {
+        val headers = RePelis24ShopMarkup.posterHeaders
+        // Without a site Referer the CDN answers HTTP 403 with a Cloudflare interstitial.
+        assertEquals("https://repelis24.shop/", headers["Referer"])
+        assertTrue(headers["Accept"]!!.startsWith("image/"))
+        assertTrue(RePelis24ShopMarkup.isSiteAsset("https://repelis24.shop/cdn/p/v2/w1/a.webp"))
+        assertTrue(RePelis24ShopMarkup.isSiteAsset("https://repelis24.shop/cdn/b/v2/w1/b.webp"))
+        assertFalse(RePelis24ShopMarkup.isSiteAsset("https://image.tmdb.org/t/p/w500/a.jpg"))
+        assertFalse(RePelis24ShopMarkup.isSiteAsset(null))
+    }
+
     // ------------------------------------------------------------ url guard
 
     @Test
