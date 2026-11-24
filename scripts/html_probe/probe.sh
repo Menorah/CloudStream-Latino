@@ -85,6 +85,13 @@ echo '---- PeliCineHD: enlaces de tarjeta ----'
 grep -o 'href="https://pelicinehd.com/pelicula/[^"]*"' out/pc-list.html | head -4
 grep -o 'href="https://pelicinehd.com/[^"]*"' out/pc-list.html | sort -u | head -8
 
+
+echo '==================== 6) CDN de imágenes: ¿también tras Cloudflare? ===================='
+curl -s -o /dev/null -w 'webp repelis24: http %{http_code} tipo %{content_type} bytes %{size_download}\n' \
+  -A "$UA" 'https://repelis24.shop/cdn/p/v2/w1/ty7zfdlgY2HU3eopy3SLV8JJIODoGd5ZB3oH.webp'
+curl -s -o /dev/null -w 'tmdb poster: http %{http_code} tipo %{content_type}\n' \
+  -A "$UA" 'https://image.tmdb.org/t/p/w500/gr2v2nt0isUhTqnvNKeNQYpX0sO.jpg'
+
 # Publicar el resumen: los logs de Actions son inalcanzables desde el sandbox; git y
 # los issues sí. Push con GITHUB_TOKEN no dispara más workflows (anti-recursión).
 {
@@ -103,9 +110,3 @@ if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}" ]; then
   gh issue create --repo "${GITHUB_REPOSITORY:-Menorah/CloudStream-Latino}" \
     --title "sonda-html $(date -u +%FT%TZ)" --body-file docs/sonda-html.md || true
 fi
-
-echo '==================== 6) CDN de imágenes: ¿también tras Cloudflare? ===================='
-curl -s -o /dev/null -w 'webp repelis24: http %{http_code} tipo %{content_type} bytes %{size_download}\n' \
-  -A "$UA" 'https://repelis24.shop/cdn/p/v2/w1/ty7zfdlgY2HU3eopy3SLV8JJIODoGd5ZB3oH.webp'
-curl -s -o /dev/null -w 'tmdb poster: http %{http_code} tipo %{content_type}\n' \
-  -A "$UA" 'https://image.tmdb.org/t/p/w500/gr2v2nt0isUhTqnvNKeNQYpX0sO.jpg'
