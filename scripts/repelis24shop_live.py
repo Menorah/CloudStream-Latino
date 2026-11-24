@@ -84,6 +84,12 @@ def cards(html, location):
     return unique
 
 
+def is_challenge(html):
+    head = html[:4000].lower()
+    body = html.lower()
+    return "just a moment" in head and ("cf-browser-verification" in body or "challenge-platform" in body)
+
+
 def has_next(html, location):
     doc = BeautifulSoup(html, "html.parser")
     return any(site(urllib.parse.urljoin(location, a.get("href") or "")) for a in doc.select("a.next.page-numbers"))
@@ -304,6 +310,7 @@ def report():
 def main():
     # 1. catalog
     final, status, html = fetch(BASE + "/peliculas/")
+    step("challenge", {"peliculas": is_challenge(html)})
     catalog = cards(html, final)
     step("catalog", {"status": status, "cards": len(catalog), "has_next": has_next(html, final),
                      "first": catalog[0] if catalog else None})
