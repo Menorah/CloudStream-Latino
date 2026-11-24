@@ -16,9 +16,19 @@ HEADERS = {
 }
 
 
+OUT = []
+
+
 def notice(key, value):
-    text = json.dumps({key: value}, ensure_ascii=True).replace("%", "%25")
-    print("::notice::" + text[:3900], flush=True)
+    OUT.append({"key": key, "value": value})
+    print("::notice::" + json.dumps({key: str(value)[:180]}, ensure_ascii=True)[:900], flush=True)
+
+
+def dump():
+    import os
+    os.makedirs("probe-output", exist_ok=True)
+    with open("probe-output/repelis24shop.json", "w", encoding="utf-8") as f:
+        json.dump(OUT, f, ensure_ascii=False, indent=1)
 
 
 def fetch(path):
@@ -126,3 +136,4 @@ for path in ("/robots.txt", "/sitemap.xml"):
         notice("misc_" + re.sub(r"\W+", "_", path), {"status": status, "body": body[:1200]})
     except Exception as error:  # noqa: BLE001
         notice("misc_error", {"path": path, "error": str(error)[:200]})
+dump()
