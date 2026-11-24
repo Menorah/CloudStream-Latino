@@ -30,13 +30,19 @@ internal object Repelis24ShopMarkup {
         if (element == null) return null
         // Lazy-load placeholders put a spinner in src; the real image lives in data-*.
         for (attr in listOf("data-src", "data-lazy-src", "data-original")) {
-            val value = element.absUrl(attr).ifBlank { element.attr(attr) }
+            val raw = element.attr(attr).trim()
+            if (raw.isEmpty()) continue
+            val value = element.absUrl(attr).ifBlank { raw }
             image(value)?.let { return it }
         }
-        val srcset = element.attr("srcset").split(',').map { it.trim().split(' ').first() }
-        for (value in srcset) image(element.absUrl(value).ifBlank { value })?.let { return it }
-        val src = element.absUrl("src").ifBlank { element.attr("src") }
-        return image(src)
+        for (entry in element.attr("srcset").split(',')) {
+            val raw = entry.trim().split(' ').firstOrNull()?.trim().orEmpty()
+            if (raw.isEmpty()) continue
+            val value = element.absUrl(raw).ifBlank { raw }
+            image(value)?.let { return it }
+        }
+        val src = element.attr("src").trim()
+        return if (src.isEmpty()) null else image(element.absUrl("src").ifBlank { src })
     }
     /** Nuupload's alternative player carries the actual VOE URL as one query parameter. */
     fun voeFromWrapper(url: String): String? = runCatching {
