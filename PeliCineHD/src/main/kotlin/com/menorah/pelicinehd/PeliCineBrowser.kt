@@ -4,71 +4,87 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
+import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.suspendCancellableCoroutine
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
 /**
- * Off-screen WebView used when Cloudflare rejects plain HTTP (403 or the
- * «Just a moment» interstitial). Returns the final page HTML; never cookies.
- * Same pattern the repository already uses for AnimeOnline.
+ * Off-screen WebView used to pierce Cloudflare's managed challenge: a real WebView
+ * passes it like any browser, plain HTTP clients get a ~5 KB interstitial
+ * (`window._cf_chl_opt`) instead of the page. The captured HTML is the DOM after
+ * JavaScript ran, so player buttons injected at runtime are present too.
  */
-internal class PeliCineBrowser(private val context: Context) {
+class PeliCineBrowser(private val context: Context) {
     /** HTML produced by the off-screen WebView pass. */
     data class Result(val url: String, val text: String)
 
     @SuppressLint("SetJavaScriptEnabled")
-    suspend fun fetch(target: String): Result = suspendCancellableCoroutine { continuation ->
-        val handler = Handler(Looper.getMainLooper())
-        val finished = AtomicBoolean(false)
-        var webView: WebView? = null
+    suspend fun fetch(target: String): Result? {
+        val main = Handler(Looper.getMainLooper())
+        return suspendCancellableCoroutine { cont ->
+            var done = false
+            lateinit var web: WebView
+            val deadline = System.currentTimeMillis() + 28_000
 
-        fun finish(result: Result?) {
-            if (!finished.compareAndSet(false, true)) return
-            handler.post {
-                webView?.stopLoading()
-                webView?.destroy()
-                webView = null
-            }
-            if (result != null && continuation.isActive) continuation.resume(result)
-            else if (continuation.isActive) continuation.resume(Result(target, ""))
-        }
-
-        handler.post {
-            val view = WebView(context.applicationContext)
-            webView = view
-            view.settings.javaScriptEnabled = true
-            view.settings.domStorageEnabled = true
-            view.settings.userAgentString = UA
-            view.webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? = null
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    handler.postDelayed({
-                        view?.evaluateJavascript(
-                            "document.documentElement ? document.documentElement.outerHTML : ''"
-                        ) { html ->
-                            val text = try {
-                                org.json.JSONTokener(html ?: "null").nextValue() as? String ?: ""
-                            } catch (_: Exception) { "" }
-                            finish(Result(url ?: target, text))
-                        }
-                    }, 2_500)
+            fun finish(result: Result?) {
+                if (done || !cont.isActive) return
+                done = true
+                main.post {
+                    runCatching { web.stopLoading() }
+                    runCatching { web.destroy() }
                 }
-                override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceError?) {
-                    if (request?.isForMainFrame == true) finish(Result(target, ""))
+                cont.resume(result ?: Result(target, ""))
+            }
+
+            fun grab() {
+                web.evaluateJavascript(
+                    "document.documentElement ? document.documentElement.outerHTML : ''"
+                ) { html ->
+                    val text = try {
+                        org.json.JSONTokener(html ?: "null").nextValue() as? String ?: ""
+                    } catch (_: Exception) { "" }
+                    val challenged = text.contains("_cf_chl_opt") || text.contains("Just a moment", true)
+                    when {
+                        text.isNotBlank() && text.length > 2500 && !challenged -> finish(Result(web.url ?: target, text))
+                        System.currentTimeMillis() >= deadline -> finish(Result(web.url ?: target, text))
+                        else -> main.postDelayed({ if (!done && cont.isActive) grab() }, 1_000)
+                    }
                 }
             }
-            view.loadUrl(target, mapOf("User-Agent" to UA, "Referer" to "${PeliCineMarkup.BASE}/"))
-            handler.postDelayed({ finish(null) }, 30_000)
+
+            main.post {
+                web = WebView(context)
+                with(web.settings) {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                }
+                CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
+                web.webViewClient = object : WebViewClient() {
+                    @Deprecated("Deprecated in Java")
+                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        // Give lazy players a moment, then poll until the challenge is gone.
+                        main.postDelayed({ if (!done && cont.isActive) grab() }, 1_500)
+                    }
+                }
+                web.loadUrl(target)
+            }
+            cont.invokeOnCancellation {
+                if (!done) {
+                    done = true
+                    main.post { runCatching { web.destroy() } }
+                }
+            }
         }
     }
 
-    companion object {
-        private const val UA =
-            "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-    }
+    /** Cookie jar of the WebView session (Cloudflare clearance), for plain HTTP calls. */
+    fun cookieHeader(url: String): String? = runCatching {
+        CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 }
