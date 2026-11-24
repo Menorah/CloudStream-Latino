@@ -88,6 +88,8 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    assets()
-    catalog_backdrop()
-    headers_of_site()
+    for step in (assets, catalog_backdrop, headers_of_site):
+        try:
+            step()
+        except Exception as error:  # noqa: BLE001
+            notice("step_error", {"step": step.__name__, "error": str(error)[:300]})
