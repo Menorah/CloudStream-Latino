@@ -191,7 +191,7 @@ internal object RePelis24ShopMarkup {
         ?.select("a")?.mapNotNull { anchor ->
             val name = anchor.text().trim().trimEnd(',').trim()
             if (name.isEmpty()) null else ActorData(Actor(name))
-        }?.distinctBy { it.name }.orEmpty()
+        }?.distinctBy { it.actor.name }.orEmpty()
 
     fun durationMinutes(doc: Document): Int? {
         val text = doc.selectFirst("[itemprop=duration]")?.text()?.trim() ?: return null
