@@ -61,20 +61,15 @@ jobs:
           import json, pathlib
           output = pathlib.Path('output')
           plugins = json.loads((output / 'plugins.json').read_text())
-          assert any(p['url'].endswith('/AnimeOnlineNinja.cs3') for p in plugins), plugins
-          assert (output / 'AnimeOnlineNinja.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/VerAni.cs3') for p in plugins), plugins
-          assert (output / 'VerAni.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/Repelis24CZ.cs3') for p in plugins), plugins
-          assert (output / 'Repelis24CZ.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/PoseidonHD2.cs3') for p in plugins), plugins
-          assert (output / 'PoseidonHD2.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/CinecalidadMY.cs3') for p in plugins), plugins
-          assert (output / 'CinecalidadMY.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/RePelisHD.cs3') for p in plugins), plugins
-          assert (output / 'RePelisHD.cs3').stat().st_size > 0
-          assert any(p['url'].endswith('/CinecalidadAM.cs3') for p in plugins), plugins
-          assert (output / 'CinecalidadAM.cs3').stat().st_size > 0
+          names = {pathlib.Path(p['url']).name for p in plugins}
+          expected = {
+              'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
+              'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3',
+          }
+          assert names == expected, (sorted(names), sorted(expected))
+          for name in expected:
+              assert (output / name).stat().st_size > 0
+          print('cloudstream:', sorted(names))
           PY
       - uses: actions/upload-artifact@v4
         with:
