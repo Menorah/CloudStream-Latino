@@ -6,7 +6,7 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.Base64
 
-internal data class Card(val title: String, val url: String, val poster: String?, val background: String?, val movie: Boolean)
+internal data class Card(val title: String, val url: String, val poster: String?, val movie: Boolean)
 internal data class SeasonLink(val url: String, val number: Int)
 internal data class EpisodeItem(val title: String, val url: String, val season: Int, val number: Int, val poster: String?)
 internal data class PlayerOption(val url: String, val language: String, val position: Int)
@@ -156,7 +156,6 @@ internal object RePelis24ShopMarkup {
             title = title,
             url = url,
             poster = image(image?.baseUri() ?: base, image?.attr("src") ?: image?.attr("data-src")),
-            background = link.selectFirst(".card-hover-backdrop")?.attr("data-backdrop")?.let { image(base, it) },
             movie = movie
         )
     }.distinctBy { it.url }
