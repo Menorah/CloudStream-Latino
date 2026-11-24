@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Sonda de HTML crudo: vuelca los fragmentos reales de los sitios para fijar selectores.
 set -u
+exec > >(tee /tmp/probe-full.log) 2>&1
 UA='Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
 mkdir -p out
 
@@ -69,3 +70,17 @@ grep -o '.\{600\}movie-item.\{500\}' out/rs-list.html | head -c 1800
 
 echo
 echo '==================== FIN ===================='
+
+echo
+echo '==================== 5) EXTRA ===================='
+echo '---- SoloLatino: scripts con datos embebidos ----'
+grep -o 'window\.[A-Za-z_]*\s*=' out/sl-ep.html | sort | uniq -c | head
+grep -c '<template' out/sl-ep.html
+echo '---- SoloLatino: botones completos ----'
+grep -o '<button[^>]*data-[a-z-]*="[^"]*"[^>]*>[^<]*' out/sl-ep.html | head -8
+echo '---- Repelis24Shop: style backgrounds ----'
+grep -o 'background-image[^;")]*' out/rs-list.html | head -4
+grep -o 'class="[^"]*"' out/rs-list.html | sort | uniq -c | sort -rn | head -8
+echo '---- PeliCineHD: enlaces de tarjeta ----'
+grep -o 'href="https://pelicinehd.com/pelicula/[^"]*"' out/pc-list.html | head -4
+grep -o 'href="https://pelicinehd.com/[^"]*"' out/pc-list.html | sort -u | head -8
