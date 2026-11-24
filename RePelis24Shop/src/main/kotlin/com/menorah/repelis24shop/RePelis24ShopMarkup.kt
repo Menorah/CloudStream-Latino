@@ -215,7 +215,7 @@ internal object RePelis24ShopMarkup {
     /** The series page links to each season as `/temporada/<slug>-<number>/`. */
     fun seasons(doc: Document): List<SeasonLink> {
         val slug = seriesSlug(doc.location())
-        return doc.select("p.item-season-title a[href*=/temporada/]").mapNotNull { anchor ->
+        return doc.select("p.item-season-title a[href*='/temporada/']").mapNotNull { anchor ->
             val url = resolve(doc.location(), anchor.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
             val number = seasonNumber(url) ?: return@mapNotNull null
             if (slug != null && !seasonIsSeries(url, slug)) return@mapNotNull null
@@ -228,7 +228,7 @@ internal object RePelis24ShopMarkup {
     )?.groupValues?.get(1)
 
     fun episodes(doc: Document, season: Int): List<EpisodeItem> =
-        doc.select("div.item-season-episodes a[href*=/episodio/]").mapNotNull { anchor ->
+        doc.select("div.item-season-episodes a[href*='/episodio/']").mapNotNull { anchor ->
             val url = resolve(doc.location(), anchor.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
             val key = episodeKey(url) ?: return@mapNotNull null
             if (key.first != season) return@mapNotNull null

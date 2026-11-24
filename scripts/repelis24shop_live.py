@@ -102,7 +102,7 @@ def seasons(html, location):
     slug = re.search(r"/serie/([^/]+)/?", urllib.parse.urlsplit(location).path)
     slug = slug.group(1) if slug else None
     out = []
-    for a in doc.select("p.item-season-title a[href*=/temporada/]"):
+    for a in doc.select("p.item-season-title a[href*='/temporada/']"):
         url = urllib.parse.urljoin(location, a.get("href"))
         if not site(url):
             continue
@@ -119,7 +119,7 @@ def seasons(html, location):
 def episodes(html, location, season):
     doc = BeautifulSoup(html, "html.parser")
     out = []
-    for a in doc.select("div.item-season-episodes a[href*=/episodio/]"):
+    for a in doc.select("div.item-season-episodes a[href*='/episodio/']"):
         url = urllib.parse.urljoin(location, a.get("href"))
         if not site(url):
             continue
@@ -260,15 +260,22 @@ def resolve_option(option, page_url):
     if not body.startswith("#EXTM3U"):
         return {"stage": "manifest", "host": host, "result": "not a manifest", "length": len(body)}
     lines = [l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#")]
+    media = "#EXTINF" in body and "#EXT-X-STREAM-INF" not in body
     result = {"stage": "ok", "host": host, "page_referer": referer, "manifest_referer": mreferer,
-              "variants": len(lines)}
-    if lines:
-        child = urllib.parse.urljoin(stream["manifest"], lines[0])
-        _, cstatus, cbody, cerrs = try_fetch(child, [NUPLOAD_REFERER, referer])
-        segs = [l.strip() for l in cbody.splitlines() if l.strip() and not l.startswith("#")] if cbody else []
-        result.update({"child_status": cstatus, "segments": len(segs)})
-        if segs:
-            seg = urllib.parse.urljoin(child, segs[0])
+              "kind": "media" if media else "master", "entries": len(lines)}
+    child = stream["manifest"]
+    if media:
+        first_segment = lines[0] if lines else None
+    elif lines:
+        first_segment = None
+        if first_segment is None and lines:
+            child = urllib.parse.urljoin(stream["manifest"], lines[0])
+            _, cstatus, cbody, _ = try_fetch(child, [NUPLOAD_REFERER, referer])
+            segs = [l.strip() for l in cbody.splitlines() if l.strip() and not l.startswith("#")] if cbody else []
+            result.update({"child_status": cstatus, "child_segments": len(segs)})
+            first_segment = segs[0] if segs else None
+        if first_segment:
+            seg = urllib.parse.urljoin(child if not media else stream["manifest"], first_segment)
             try:
                 req = urllib.request.Request(seg, headers={"User-Agent": HEADERS["User-Agent"],
                                                            "Referer": NUPLOAD_REFERER, "Range": "bytes=0-1023"})
