@@ -11,13 +11,12 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        section: [home, cat, search, movie, serie, season, episode, extra]
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m pip install beautifulsoup4
-      - run: python3 scripts/repelis24shop_probe.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: probe-output
-          path: probe-output/
+      - run: python3 scripts/repelis24shop_probe.py ${{ matrix.section }}
