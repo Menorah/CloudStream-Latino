@@ -91,13 +91,12 @@ class PeliCineProvider : MainAPI() {
         val chapters = mutableListOf<Episode>()
         if (post != null) {
             for (entry in PeliCineMarkup.seasons(doc).take(40)) {
-                val html = withContext(Dispatchers.IO) {
-                    runCatching {
-                        app.post("$mainUrl/wp-admin/admin-ajax.php", referer = url,
-                            data = mapOf("action" to "action_select_season", "season" to entry.season.toString(), "post" to post),
-                            timeout = 15).text
-                    }.getOrNull()
-                } ?: continue
+                val html = try {
+                    app.post("$mainUrl/wp-admin/admin-ajax.php", referer = url,
+                        data = mapOf("action" to "action_select_season", "season" to entry.season.toString(), "post" to post),
+                        timeout = 15).text
+                } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
+                if (html == null) continue
                 PeliCineMarkup.seasonEpisodes(html, url).forEachIndexed { index, ref ->
                     chapters.add(newEpisode(ref.url) {
                         name = ref.title
@@ -126,13 +125,12 @@ class PeliCineProvider : MainAPI() {
         if (servers.isEmpty()) return false
         var emitted = false
         for (server in servers) {
-            val resolved = withContext(Dispatchers.IO) {
-                runCatching {
-                    val player = app.get(PeliCineMarkup.trembedUrl(server.index, post, tv),
-                        referer = data, timeout = 15)
-                    PeliCineMarkup.trembedTarget(player.text)
-                }.getOrNull()
-            } ?: continue
+            val resolved = try {
+                val player = app.get(PeliCineMarkup.trembedUrl(server.index, post, tv),
+                    referer = data, timeout = 15)
+                PeliCineMarkup.trembedTarget(player.text)
+            } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
+            if (resolved == null) continue
             val label = "[${PeliCineMarkup.language(server.language)}] ${server.name}"
             val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
             try {

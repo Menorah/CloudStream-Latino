@@ -116,19 +116,10 @@ class SoloLatinoProvider : MainAPI() {
         val page = fetch(data)
         val servers = SoloLatinoMarkup.servers(page).take(12)
         if (servers.isEmpty()) return false
-        val session = withContext(Dispatchers.IO) {
-            runCatching { app.get("$mainUrl/sanctum/csrf-cookie", timeout = 15) }.getOrNull()
-        }
-        val cookies = mutableMapOf<String, String>()
-        session?.let { response ->
-            for (name in listOf("set-cookie", "Set-Cookie")) {
-                response.headers[name]?.split(",")?.forEach { part ->
-                    val kv = part.split(";")[0].trim()
-                    val eq = kv.indexOf('=')
-                    if (eq > 0) cookies[kv.substring(0, eq).trim()] = kv.substring(eq + 1).trim()
-                }
-            }
-        }
+        val session = try {
+            app.get("$mainUrl/sanctum/csrf-cookie", timeout = 15)
+        } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
+        val cookies = session?.cookies ?: emptyMap()
         val xsrf = SoloLatinoChain.csrfToken(cookies)
         val cookieHeader = cookies.entries.joinToString("; ") { entry -> entry.key + "=" + entry.value }
         var emitted = false
@@ -187,10 +178,10 @@ class SoloLatinoProvider : MainAPI() {
         val headers = (if (withRender) apiHeaders(xsrf, token, referer, cookieHeader)
         else SoloLatinoChain.apiHeaders(xsrf, token, referer, System.currentTimeMillis()).filterKeys { it != "X-SL-Render" } +
             (if (cookieHeader.isBlank()) emptyMap() else mapOf("Cookie" to cookieHeader)))
-        val res = runCatching {
+        val res = try {
             app.post("$mainUrl/api/player-url", headers = headers,
                 requestBody = SoloLatinoChain.apiBody(token).toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
-        }.getOrNull() ?: return null
+        } catch (e: CancellationException) { throw e } catch (_: Throwable) { return null }
         if (!res.isSuccessful) return null
         val body = res.text
         val url = Regex(""""url"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)?.replace("\\/", "/")
@@ -207,21 +198,21 @@ class SoloLatinoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         emit: suspend (ExtractorLink) -> Unit,
     ): Boolean {
-        val html = runCatching { app.get(playerUrl, timeout = 15).text }.getOrNull() ?: return false
+        val html = try { app.get(playerUrl, timeout = 15).text } catch (e: CancellationException) { throw e } catch (_: Throwable) { return false }
         val handshake = PrincipalHandshake.parse(html) ?: return false
         val origin = URI(playerUrl).let { "${it.scheme}://${it.host}" }
         val base = mapOf("Referer" to playerUrl, "Origin" to origin)
-        val first = runCatching {
+        val first = try {
             app.post("$origin/s.php", headers = base, data = handshake.fields("1"), timeout = 15)
-        }.getOrNull() ?: return false
+        } catch (e: CancellationException) { throw e } catch (_: Throwable) { return false }
         val options = PrincipalPlayerData.options(first.text).take(12)
         if (options.isEmpty()) return false
-        runCatching { app.post("$origin/s.php", headers = base, data = handshake.fields("click"), timeout = 15) }
+        try { app.post("$origin/s.php", headers = base, data = handshake.fields("click"), timeout = 15) } catch (_: Throwable) { }
         var any = false
         for (option in options) {
-            val response = runCatching {
+            val response = try {
                 app.post("$origin/s.php", headers = base, data = handshake.fields("2", option.id), timeout = 15)
-            }.getOrNull() ?: continue
+            } catch (e: CancellationException) { throw e } catch (_: Throwable) { continue }
             val source = PrincipalPlayerData.source(response.text) ?: continue
             if (source.type == "signed-proxy") {
                 emit(newExtractorLink(this.name, "$label [${option.language}] ${option.label}", source.url, ExtractorLinkType.M3U8) {
@@ -247,16 +238,16 @@ class SoloLatinoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         emit: suspend (ExtractorLink) -> Unit,
     ): Boolean {
-        val html = runCatching { app.get(playerUrl, timeout = 15).text }.getOrNull() ?: return false
+        val html = try { app.get(playerUrl, timeout = 15).text } catch (e: CancellationException) { throw e } catch (_: Throwable) { return false }
         var servers = Embed69Servers.parse(html)
         if (servers.isEmpty()) {
             val raw = Embed69Raw.rawEmbeds(html)
             if (raw.isEmpty()) return false
-            val response = runCatching {
+            val response = try {
                 app.post("https://embed69.org/api/decrypt", headers = mapOf("Referer" to playerUrl),
                     requestBody = SoloLatinoChain.decryptApiBody(raw.map { it.encrypted })
                         .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()), timeout = 20)
-            }.getOrNull() ?: return false
+            } catch (e: CancellationException) { throw e } catch (_: Throwable) { return false }
             val links = Embed69Raw.decryptedLinks(response.text) ?: return false
             servers = raw.mapIndexedNotNull { index, embed ->
                 links.getOrNull(index)?.let { EmbeddedServer(embed.language, embed.name, it) }
