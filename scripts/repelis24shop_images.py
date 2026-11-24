@@ -174,11 +174,21 @@ def episode_thumbs():
         url = "https:" + raw if raw.startswith("//") else raw
         if url not in thumbs:
             thumbs.append(url)
+    android = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/149.0.0.0 Mobile Safari/537.36")
+    variants = {
+        "cs_desktop_no_referer": no_referer,
+        "cs_android_no_referer": {"User-Agent": android},
+        "no_headers": {},
+        "with_referer": with_referer,
+    }
     report = []
     for url in thumbs[:3]:
-        report.append({"url": urllib.parse.urlsplit(url).path,
-                       "no_referer": get(url, no_referer),
-                       "with_referer": get(url, with_referer)})
+        entry = {"url": urllib.parse.urlsplit(url).path}
+        for name, headers in variants.items():
+            result = get(url, headers)
+            entry[name] = {k: result.get(k) for k in ("status", "type", "cf") if k in result}
+        report.append(entry)
     notice("episode_thumbs", {"found": len(thumbs), "checks": report})
 
 
