@@ -4,8 +4,11 @@ rootProject.name = "CloudstreamPlugins"
 // All new projects should get automatically included unless specified in the "disabled" variable.
 
 // Experimental providers are kept out of release builds until playback is verified.
-// The opt-in keeps Poseidon available to its diagnostic workflows.
-val disabled = if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2")
+// The opt-in flags keep each one available to its diagnostic workflows.
+val disabled =
+    (if (providers.gradleProperty("enablePoseidon").orNull == "true") emptyList() else listOf("PoseidonHD2")) +
+    (if (providers.gradleProperty("enableRepelis24Shop").orNull == "true") emptyList() else listOf("Repelis24Shop")) +
+    (if (providers.gradleProperty("enableSoloLatino").orNull == "true") emptyList() else listOf("SoloLatino"))
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
