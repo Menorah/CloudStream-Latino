@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = "https://repelis24.shop"
@@ -109,6 +110,42 @@ def desktop_matrix():
     notice("desktop_matrix", cases)
 
 
+def coil_simulation():
+    """Exactly what CloudStream's image loader sends once posterHeaders are applied."""
+    desktop = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+    headers = {"User-Agent": desktop, "Referer": "https://repelis24.shop/",
+               "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+               "Accept-Language": "es-AR,es;q=0.9,en;q=0.8"}
+    pages = {
+        "catalog": BASE + "/peliculas/",
+        "movie": BASE + "/pelicula/la-odisea/",
+        "series": BASE + "/serie/breaking-bad-zpya/",
+        "season": BASE + "/temporada/breaking-bad-zpya-1/",
+        "episode": BASE + "/episodio/breaking-bad-zpya-1x1/",
+    }
+    results = {}
+    for label, page in pages.items():
+        try:
+            with urllib.request.urlopen(urllib.request.Request(page, headers=PAGE_HEADERS), timeout=25) as response:
+                html = response.read(4_000_000).decode("utf-8", "replace")
+        except Exception as error:  # noqa: BLE001
+            results[label] = {"page_error": str(error)[:120]}
+            continue
+        found = []
+        for raw in re.findall(r'(?:src|data-backdrop)="([^"]*?cdn/[^"]+)"', html):
+            url = "https:" + raw if raw.startswith("//") else raw
+            if url not in found:
+                found.append(url)
+        checks = []
+        for url in found[:4]:
+            result = get(url, headers)
+            checks.append({"asset": "/".join(urllib.parse.urlsplit(url).path.split("/")[:4]),
+                           "status": result.get("status"), "type": result.get("type")})
+        results[label] = {"images": len(found), "checks": checks}
+    notice("coil_simulation", results)
+
+
 def headers_of_site():
     request = urllib.request.Request(BASE + "/peliculas/", headers=PAGE_HEADERS)
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -119,7 +156,7 @@ def headers_of_site():
 
 if __name__ == "__main__":
     print("section:", sys.argv[1] if len(sys.argv) > 1 else "all", flush=True)
-    for step in (assets, catalog_backdrop, desktop_matrix, headers_of_site):
+    for step in (assets, catalog_backdrop, desktop_matrix, coil_simulation, headers_of_site):
         try:
             step()
         except Exception as error:  # noqa: BLE001
