@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -16,6 +17,9 @@ import java.net.URI
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
+private const val FETCH_ATTEMPTS = 3
+private const val REQUEST_TIMEOUT_SECONDS = 45L
+
 class RePelis24ShopProvider : MainAPI() {
     override var mainUrl = RePelis24ShopMarkup.BASE
     override var name = "RePelis24.shop"
@@ -23,6 +27,17 @@ class RePelis24ShopProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    /**
+     * The site answers every page in 10-15 s under load, and CloudStream requests all 22 catalogs
+     * at once. The default timeouts are wide, but the requests are widened further and the
+     * catalogs are fetched in small batches, otherwise the slowest ones surface as
+     * "Connection Timeout" in the home screen.
+     */
+    override val getMainPageTimeoutMs: Long? = 180_000L
+    override val searchTimeoutMs: Long? = 60_000L
+    override val quickSearchTimeoutMs: Long? = 60_000L
+    override val loadTimeoutMs: Long? = 90_000L
 
     override val mainPage = mainPageOf(
         "/peliculas/" to "Películas",
@@ -51,10 +66,30 @@ class RePelis24ShopProvider : MainAPI() {
 
     // ------------------------------------------------------------------ http
 
+    /**
+     * The site is slow (10-15 s per page even for a warm CDN) and Cloudflare drops the occasional
+     * request, so a single attempt is not enough: each page is tried up to three times with a
+     * browser-like header set and http/1.1, which is what the site's edge prefers.
+     */
     private suspend fun fetch(input: String, referer: String = "$mainUrl/"): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(RePelis24ShopMarkup.siteUrl(url)) { "Dirección fuera de RePelis24.shop" }
-        val response = app.get(url, referer = referer, timeout = 20)
+        var lastError: Exception? = null
+        for (attempt in 1..FETCH_ATTEMPTS) {
+            if (attempt > 1) delay(400L * attempt)
+            try {
+                return fetchOnce(url, referer)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw lastError ?: IllegalStateException("RePelis24.shop no respondió.")
+    }
+
+    private suspend fun fetchOnce(url: String, referer: String): Document {
+        val response = app.get(url, referer = referer, timeout = REQUEST_TIMEOUT_SECONDS)
         if (!response.isSuccessful) throw IllegalStateException("RePelis24.shop no respondió correctamente (HTTP ${response.code}).")
         if (!RePelis24ShopMarkup.siteUrl(response.url)) throw IllegalStateException("RePelis24.shop redirigió fuera del sitio.")
         if (RePelis24ShopMarkup.isChallenge(response.text)) {
@@ -78,8 +113,22 @@ class RePelis24ShopProvider : MainAPI() {
 
     // -------------------------------------------------------------- main page
 
+    private val catalogGate = Semaphore(8)
+
+    /**
+     * CloudStream asks for every catalog at once and fails the whole home screen if a single one
+     * throws, so a slow or rejected catalog returns an empty list instead of taking the rest down.
+     */
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = fetch(RePelis24ShopMarkup.pageUrl(request.data, page))
+        val doc = try {
+            catalogGate.withPermit {
+                fetch(RePelis24ShopMarkup.pageUrl(request.data, page))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+        }
         val cards = RePelis24ShopMarkup.cards(doc)
         return newHomePageResponse(
             HomePageList(request.name, responses(cards)),
@@ -143,7 +192,7 @@ class RePelis24ShopProvider : MainAPI() {
             seasons.map { season ->
                 async(Dispatchers.IO) {
                     permits.withPermit {
-                        withTimeoutOrNull(30_000L) {
+                        withTimeoutOrNull(120_000L) {
                             try {
                                 RePelis24ShopMarkup.episodes(fetch(season.url), season.number)
                             } catch (e: CancellationException) {
@@ -193,13 +242,13 @@ class RePelis24ShopProvider : MainAPI() {
         val lock = Any()
         val seen = Collections.synchronizedSet(mutableSetOf<String>())
 
-        withTimeoutOrNull(60_000L) {
+        withTimeoutOrNull(110_000L) {
             coroutineScope {
                 val permits = Semaphore(4)
                 options.map { option ->
                     async(Dispatchers.IO) {
                         permits.withPermit {
-                            withTimeoutOrNull(20_000L) {
+                            withTimeoutOrNull(30_000L) {
                                 for (link in resolve(option.url, doc.location(), option.language, subtitleCallback)) {
                                     // Two tabs can point at the same stream; only report it once.
                                     if (!seen.add("${link.url}|${link.name}")) continue
@@ -234,7 +283,7 @@ class RePelis24ShopProvider : MainAPI() {
         }
         // `/watch/<uid>` pages hold a JW Player setup with an obfuscated manifest URL.
         val page = try {
-            app.get(target, referer = RePelis24ShopMarkup.NUPLOAD_REFERER, timeout = 20)
+            app.get(target, referer = RePelis24ShopMarkup.NUPLOAD_REFERER, timeout = 30)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
