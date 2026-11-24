@@ -37,3 +37,5 @@ if [ -n "$(ls -A probe-results 2>/dev/null)" ]; then
   git push origin HEAD:arena/77383897-cloudstream-latino 2>&1 | tail -2 | emit
 fi
 exit 0
+
+# Ejecutar de nuevo tras el sondeo.

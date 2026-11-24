@@ -62,4 +62,3 @@ jobs:
             probe-requests.json
             probe-*.log
           if-no-files-found: ignore
-VACUOUS=1
