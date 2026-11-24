@@ -1,0 +1,343 @@
+package com.menorah.pelicinehd
+
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import java.net.URI
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
+
+private const val ATTEMPTS = 3
+private const val REQUEST_TIMEOUT = 30L
+
+/**
+ * Provider for pelicinehd.com.
+ *
+ * The site is a WordPress install behind Cloudflare. It answers plain requests (the app's own
+ * HTTP client is enough); only datacenter IPs get the interactive challenge, which is reported as
+ * a readable error instead of an empty screen.
+ *
+ * Series are a bit unusual: the detail page only renders the episodes of one season, the rest are
+ * requested through the theme's `admin-ajax.php` action, and each episode is its own page with the
+ * same player markup as a movie.
+ */
+class PeliCineHDProvider : MainAPI() {
+    override var mainUrl = PeliCineHDMarkup.BASE
+    override var name = "PeliCineHD"
+    override var lang = "es"
+    override val hasMainPage = true
+    override val hasQuickSearch = true
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    override val mainPage = mainPageOf(
+        "peliculas" to "Películas",
+        "series" to "Series",
+        "category/accion" to "Acción",
+        "category/animacion" to "Animación",
+        "category/aventura" to "Aventura",
+        "category/ciencia-ficcion" to "Ciencia ficción",
+        "category/comedia" to "Comedia",
+        "category/crimen" to "Crimen",
+        "category/drama" to "Drama",
+        "category/familia" to "Familia",
+        "category/fantasia" to "Fantasía",
+        "category/kids" to "Infantil",
+        "category/misterio" to "Misterio",
+        "category/romance" to "Romance",
+        "category/suspense" to "Suspenso",
+        "category/terror" to "Terror"
+    )
+
+    // ------------------------------------------------------------------ http
+
+    private suspend fun fetch(input: String, referer: String = "$mainUrl/"): Document {
+        val url = URI("$mainUrl/").resolve(input).toString()
+        require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD" }
+        var lastError: Exception? = null
+        for (attempt in 1..ATTEMPTS) {
+            if (attempt > 1) delay(500L * attempt)
+            try {
+                return fetchOnce(url, referer)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw lastError ?: IllegalStateException("PeliCineHD no respondió.")
+    }
+
+    private suspend fun fetchOnce(url: String, referer: String): Document {
+        val response = app.get(url, referer = referer, timeout = REQUEST_TIMEOUT)
+        if (!response.isSuccessful) {
+            throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${response.code}).")
+        }
+        if (!PeliCineHDMarkup.siteUrl(response.url)) {
+            throw IllegalStateException("PeliCineHD redirigió fuera del sitio.")
+        }
+        if (PeliCineHDMarkup.isChallenge(response.text)) {
+            throw ErrorLoadingException(
+                "PeliCineHD pidió una verificación anti-bots. Abre el sitio en tu navegador y vuelve a intentarlo."
+            )
+        }
+        return Jsoup.parse(response.text, response.url)
+    }
+
+    /** CloudStream loads every catalog at once; a small gate keeps the site responsive. */
+    private val catalogGate = Semaphore(4)
+
+    private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->
+        val poster = card.poster
+        if (card.movie) {
+            newMovieSearchResponse(card.title, card.url, TvType.Movie) {
+                this.posterUrl = poster
+                card.year?.let { addYear(it) }
+            }
+        } else {
+            newTvSeriesSearchResponse(card.title, card.url, TvType.TvSeries) {
+                this.posterUrl = poster
+                card.year?.let { addYear(it) }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- main page
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val document = try {
+            catalogGate.withPermit { fetch(PeliCineHDMarkup.catalogUrl(request.data, page)) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+        }
+        return newHomePageResponse(
+            HomePageList(request.name, responses(PeliCineHDMarkup.cards(document))),
+            hasNext = PeliCineHDMarkup.hasNext(document, page)
+        )
+    }
+
+    // ----------------------------------------------------------------- search
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        if (query.isBlank()) return emptyList()
+        return responses(PeliCineHDMarkup.cards(fetch(PeliCineHDMarkup.searchUrl(query))))
+    }
+
+    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
+
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        if (query.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
+        val document = fetch(PeliCineHDMarkup.searchUrl(query, page))
+        return newSearchResponseList(
+            responses(PeliCineHDMarkup.cards(document)),
+            hasNext = PeliCineHDMarkup.hasNext(document, page)
+        )
+    }
+
+    // ------------------------------------------------------------------- load
+
+    override suspend fun load(url: String): LoadResponse? {
+        val document = fetch(url)
+        val title = PeliCineHDMarkup.title(document) ?: return null
+        val poster = PeliCineHDMarkup.poster(document)
+        val plot = PeliCineHDMarkup.plot(document)
+        val year = PeliCineHDMarkup.year(document)
+        val tags = PeliCineHDMarkup.genres(document)
+        val actors = PeliCineHDMarkup.actors(document).map { ActorData(Actor(it)) }
+        val score = PeliCineHDMarkup.score(document)
+        val pageUrl = document.location()
+
+        val recommendations = try {
+            responses(PeliCineHDMarkup.recommendations(document))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        if (!PeliCineHDMarkup.isSeries(document)) {
+            return newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
+                this.posterUrl = poster
+                backgroundPosterUrl = poster
+                this.plot = plot
+                this.year = year
+                this.tags = tags
+                this.actors = actors
+                score?.let { this.score = Score.from10(it) }
+                this.duration = PeliCineHDMarkup.durationMinutes(document)
+                this.recommendations = recommendations
+            }
+        }
+
+        val episodes = loadEpisodes(document, pageUrl)
+        if (episodes.isEmpty()) return null
+
+        return newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes.map { item ->
+            newEpisode(item.url) {
+                name = item.title
+                season = item.season
+                episode = item.number
+            }
+        }) {
+            this.posterUrl = poster
+            backgroundPosterUrl = poster
+            this.plot = plot
+            this.year = year
+            this.tags = tags
+            this.actors = actors
+            score?.let { this.score = Score.from10(it) }
+            this.recommendations = recommendations
+        }
+    }
+
+    /**
+     * The detail page renders one season; the others are fetched from the theme's AJAX action.
+     * Episode thumbnails are skipped on purpose: `Episode` has no header field and images from
+     * the site need the site referer, so the list would show broken thumbnails.
+     */
+    private suspend fun loadEpisodes(document: Document, pageUrl: String): List<EpisodeItem> {
+        val seasons = PeliCineHDMarkup.seasons(document)
+        val renderedSeason = PeliCineHDMarkup.parseEpisodeNumber(
+            document.selectFirst("div.choose-season dt.n_s")?.text()
+        )?.second ?: seasons.firstOrNull()?.number ?: 1
+
+        val rendered = PeliCineHDMarkup.episodes(document, renderedSeason)
+        val pending = seasons.filter { it.number != renderedSeason }
+        val post = PeliCineHDMarkup.seasonsPostId(document)
+
+        val extra = if (pending.isEmpty() || post == null) {
+            emptyList()
+        } else {
+            val gate = Semaphore(3)
+            coroutineScope {
+                pending.map { season ->
+                    async {
+                        gate.withPermit {
+                            withTimeoutOrNull(60_000L) {
+                                try {
+                                    seasonEpisodes(post, season.number, pageUrl)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    emptyList()
+                                }
+                            }.orEmpty()
+                        }
+                    }
+                }.awaitAll().flatten()
+            }
+        }
+
+        return (rendered + extra)
+            .distinctBy { it.url }
+            .sortedWith(compareBy({ it.season }, { it.number }))
+    }
+
+    /** Season switch: `action_select_season` returns the same episode cards the site injects. */
+    private suspend fun seasonEpisodes(post: Int, season: Int, pageUrl: String): List<EpisodeItem> {
+        val response = app.post(
+            "$mainUrl${PeliCineHDMarkup.AJAX_PATH}",
+            data = mapOf(
+                "action" to "action_select_season",
+                "season" to season.toString(),
+                "post" to post.toString()
+            ),
+            referer = pageUrl,
+            timeout = REQUEST_TIMEOUT
+        )
+        if (!response.isSuccessful) return emptyList()
+        return PeliCineHDMarkup.parseSeasonHtml(response.text, pageUrl, season)
+    }
+
+    // ------------------------------------------------------------------ links
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val document = fetch(data)
+        val options = PeliCineHDMarkup.players(document).take(20)
+        if (options.isEmpty()) return false
+        val emitted = AtomicBoolean(false)
+        val lock = Any()
+        val seen = Collections.synchronizedSet(mutableSetOf<String>())
+
+        withTimeoutOrNull(80_000L) {
+            coroutineScope {
+                val gate = Semaphore(4)
+                options.map { option ->
+                    async {
+                        gate.withPermit {
+                            withTimeoutOrNull(25_000L) {
+                                val links = try {
+                                    extract(
+                                        option.url,
+                                        document.location(),
+                                        option.language,
+                                        subtitleCallback
+                                    )
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    emptyList()
+                                }
+                                for (link in links) {
+                                    if (!seen.add("${link.url}|${link.name}")) continue
+                                    synchronized(lock) {
+                                        emitted.set(true)
+                                        callback(link)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+        return emitted.get()
+    }
+
+    /**
+     * Every player option is an iframe on the site itself (`?trembed=n&trid=<post>&trtype=1`),
+     * which answers with the hoster's own player page. CloudStream's `loadExtractor` resolves it.
+     */
+    private suspend fun extract(
+        playerUrl: String,
+        referer: String,
+        language: String,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ): List<ExtractorLink> {
+        val found = mutableListOf<ExtractorLink>()
+        loadExtractor(playerUrl, referer, subtitleCallback) { link ->
+            val labelled = if (language.isBlank() || link.name.contains(language, true)) {
+                link
+            } else {
+                newExtractorLink(
+                    source = link.source,
+                    name = "${link.name} [$language]",
+                    url = link.url
+                ) {
+                    this.referer = link.referer
+                    this.quality = link.quality
+                    this.headers = link.headers
+                    this.extractorData = link.extractorData
+                    this.type = link.type
+                }
+            }
+            found.add(labelled)
+        }
+        return found
+    }
+}
