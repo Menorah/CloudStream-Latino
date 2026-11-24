@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
-emit() { cut -c1-380 | sed -e 's/%/%25/g' -e 's/^/::notice::/'; }
+emit() { grep -v 'WARNING: D8' | cut -c1-380 | sed -e 's/%/%25/g' -e 's/^/::notice::/'; }
 mkdir -p RePelis24Shop/src/androidTest/kotlin/com/menorah/repelis24shop
 cp scripts/pelicinehd_probe/PeliCineHDWebProbe.kt RePelis24Shop/src/androidTest/kotlin/com/menorah/repelis24shop/PeliCineHDWebProbe.kt
 adb logcat -c
@@ -9,9 +9,14 @@ adb logcat -c
   --stacktrace > probe-gradle.log 2>&1
 status=$?
 echo "gradle status $status" | emit
-grep -E "^e: |FAILED|Exception|Error:|error:" probe-gradle.log | head -12 | emit
-tail -25 probe-gradle.log | emit
+grep -E "^e: |FAILED|Exception|Caused by|error:" probe-gradle.log | grep -v 'WARNING: D8' | head -8 | emit
+# Resultado de la instrumentación (mensaje real del fallo)
+for xml in RePelis24Shop/build/outputs/androidTest-results/connected/**/*.xml RePelis24Shop/build/outputs/androidTest-results/connected/*.xml; do
+  [ -f "$xml" ] || continue
+  echo "== $xml" | emit
+  head -c 2400 "$xml" | tr '>' '>\n' | head -40 | emit
+done
 adb logcat -d -s CSPeliCine:I '*:S' > probe-webview.log 2>/dev/null || true
-wc -l probe-webview.log | emit
-grep 'CSPeliCine:' probe-webview.log | sed -e 's/^.*CSPeliCine: //' | head -60 | emit
+echo "logcat lines: $(wc -l < probe-webview.log)" | emit
+grep 'CSPeliCine:' probe-webview.log | sed -e 's/^.*CSPeliCine: //' | head -90 | cut -c1-330 | emit
 exit 0
