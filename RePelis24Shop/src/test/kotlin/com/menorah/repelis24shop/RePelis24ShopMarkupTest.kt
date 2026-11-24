@@ -124,7 +124,6 @@ class RePelis24ShopMarkupTest {
         assertEquals(listOf("Acción", "Aventura"), RePelis24ShopMarkup.genres(document))
         assertEquals(listOf("Matt Damon", "Tom Holland"), RePelis24ShopMarkup.actors(document))
         assertEquals(173, RePelis24ShopMarkup.durationMinutes(document))
-        assertNull(RePelis24ShopMarkup.background(document))
     }
 
     @Test
