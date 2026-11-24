@@ -125,18 +125,19 @@ class SoloLatinoProvider : MainAPI() {
         val cookieHeader = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
         val emitted = AtomicBoolean(false)
         val lock = Any()
-        fun emit(link: ExtractorLink) = synchronized(lock) { emitted.set(true); callback(link) }
+        suspend fun emit(link: ExtractorLink) = synchronized(lock) { emitted.set(true); callback(link) }
 
-        servers.map { server ->
-            async {
-                withTimeoutOrNull(30_000L) {
-                    try {
-                        val resolved = resolveServer(server, data, xsrf, cookieHeader, subtitleCallback, ::emit)
-                        if (!resolved) Unit
-                    } catch (e: CancellationException) { throw e } catch (_: Throwable) { }
+        coroutineScope {
+            servers.map { server ->
+                async {
+                    withTimeoutOrNull(30_000L) {
+                        try {
+                            resolveServer(server, data, xsrf, cookieHeader, subtitleCallback, ::emit)
+                        } catch (e: CancellationException) { throw e } catch (_: Throwable) { false }
+                    }
                 }
-            }
-        }.awaitAll()
+            }.awaitAll()
+        }
         return emitted.get()
     }
 
@@ -150,7 +151,7 @@ class SoloLatinoProvider : MainAPI() {
         xsrf: String?,
         cookieHeader: String,
         subtitleCallback: (SubtitleFile) -> Unit,
-        emit: (ExtractorLink) -> Unit,
+        emit: suspend (ExtractorLink) -> Unit,
     ): Boolean {
         var resolved = playerUrl(server.token, referer, xsrf, cookieHeader)
         if (resolved == null) resolved = playerUrl(server.token, referer, xsrf = null, cookieHeader, withRender = false)
@@ -203,7 +204,7 @@ class SoloLatinoProvider : MainAPI() {
         referer: String,
         label: String,
         subtitleCallback: (SubtitleFile) -> Unit,
-        emit: (ExtractorLink) -> Unit,
+        emit: suspend (ExtractorLink) -> Unit,
     ): Boolean {
         val html = runCatching { app.get(playerUrl, timeout = 15).text }.getOrNull() ?: return false
         val handshake = PrincipalHandshake.parse(html) ?: return false
@@ -243,7 +244,7 @@ class SoloLatinoProvider : MainAPI() {
         referer: String,
         label: String,
         subtitleCallback: (SubtitleFile) -> Unit,
-        emit: (ExtractorLink) -> Unit,
+        emit: suspend (ExtractorLink) -> Unit,
     ): Boolean {
         val html = runCatching { app.get(playerUrl, timeout = 15).text }.getOrNull() ?: return false
         var servers = Embed69Servers.parse(html)
@@ -273,7 +274,7 @@ class SoloLatinoProvider : MainAPI() {
         return any
     }
 
-    private fun relabeled(link: ExtractorLink, label: String): ExtractorLink {
+    private suspend fun relabeled(link: ExtractorLink, label: String): ExtractorLink {
         if (link is DrmExtractorLink) return newDrmExtractorLink(link.source, label, link.url, link.type, link.uuid) {
             referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData
             audioTracks = link.audioTracks; kid = link.kid; key = link.key; kty = link.kty
