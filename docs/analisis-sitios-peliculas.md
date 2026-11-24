@@ -17,7 +17,7 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | AnimeOnlineNinja / VerAni | Publicados (tareas previas) | Pendientes conocidos: error 3003 y servidores de AnimeOnline. |
 | SoloLatino | Implementado, pendiente verificación de reproducción | Cadena de red completa + pruebas de análisis; el sitio está bloqueado desde la red de CI. |
 | PeliCineHD | Implementado, pendiente verificación de reproducción | Mecánica Dooplay documentada de implementaciones públicas; Cloudflare bloquea la red de CI. |
-| PoseidonHD2 | Implementado, pendiente verificación | 4-5/6 muestras reproducidas; se corrigieron episodios sin enlaces (variante `thisEpisode` y fuentes directas). |
+| PoseidonHD2 | **Publicado** | Reproducción representativa verificada el 24-nov: película + 3 episodios reproducidos con Media3; se corrigieron episodios sin enlaces (variante `thisEpisode` y fuentes directas). Ciudad de Dios 2x3 y Yellowjackets 1x1 se informan como no disponibles por sus hosts (DNS/403/JS) desde la red de CI. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
 | pelisplus.fit | **Sin complemento viable** | Ídem. |
 | pelisplus-to.com | **Sin complemento viable** | Ídem. |
