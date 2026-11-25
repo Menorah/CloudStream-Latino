@@ -1,9 +1,12 @@
 package com.menorah.pelicinehd
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -176,6 +179,62 @@ class SiteClientTest {
         } catch (_: CancellationException) {
         }
         assertTrue(browser.calls.isEmpty())
+    }
+
+    @Test
+    fun `a cancelled request does not cancel the shared solve`() = runBlocking {
+        // This is the v7 regression: the sixteen home sections have a per-section timeout, and a
+        // solve owned by the section died with it, so no section ever got a session.
+        val gate = CompletableDeferred<Unit>()
+        var browserCalls = 0
+        val browser = object : SiteTransport, CookieSource {
+            override suspend fun get(url: String, headers: Map<String, String>): SiteResponse {
+                browserCalls++
+                gate.await()
+                return response(200, page, home)
+            }
+
+            override suspend fun cookiesFor(url: String): Map<String, String> =
+                mapOf("cf_clearance" to "abc")
+        }
+        val client = SiteClient(
+            SiteTransport { requested, headers ->
+                if (headers["Cookie"] != null) response(200, page, requested) else response(403, challenge)
+            },
+            browser,
+            cookieSource = browser
+        )
+
+        // Section 1 asks, hits the challenge, starts the solve and gives up (its own timeout).
+        assertNull(withTimeoutOrNull(50L) { client.get(url) })
+        assertEquals(1, browserCalls)
+
+        // Section 2 arrives later: it must not start a second browser visit, and once the shared
+        // solve finishes it must get the page over plain HTTP.
+        gate.complete(Unit)
+        val result = withTimeoutOrNull(5_000L) { client.get(url) }
+        assertNotNull(result)
+        assertEquals(page, result!!.text)
+        assertEquals("browser opened once", 1, browserCalls)
+    }
+
+    @Test
+    fun `a warm up resolves the session once for every later page`() = runBlocking {
+        var browserCalls = 0
+        val browser = FakeBrowser({ call ->
+            browserCalls++
+            response(200, page, call)
+        }, mapOf("cf_clearance" to "abc"))
+        val client = SiteClient(
+            SiteTransport { requested, headers ->
+                if (headers["Cookie"] != null) response(200, page, requested) else response(403, challenge)
+            },
+            browser,
+            cookieSource = browser
+        )
+        assertTrue(client.warmUp(5_000L))
+        repeat(3) { client.get(url) }
+        assertEquals(1, browserCalls)
     }
 
     @Test

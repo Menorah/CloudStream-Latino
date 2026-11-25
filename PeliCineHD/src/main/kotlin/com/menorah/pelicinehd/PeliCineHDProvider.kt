@@ -31,7 +31,7 @@ private const val FAILURE_WINDOW_MS = 10_000L
  * Ceiling for one home section. Sixteen sections are asked at once, several of them through the
  * browser, so each one gets a slice instead of the whole screen waiting for the slowest.
  */
-private const val SECTION_MILLIS = 25_000L
+private const val SECTION_MILLIS = 30_000L
 private const val REQUEST_TIMEOUT = 25L
 
 /**
@@ -74,7 +74,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     private val site = SiteClient.create(context)
 
     // Every section asks its own page, so the home screen is intentionally not one long wait.
-    override val getMainPageTimeoutMs: Long? = 120_000L
+    override val getMainPageTimeoutMs: Long? = 150_000L
     override val searchTimeoutMs: Long? = 60_000L
     override val loadTimeoutMs: Long? = 90_000L
     override val loadLinksTimeoutMs: Long? = 240_000L
@@ -168,7 +168,15 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
 
     // -------------------------------------------------------------- main page
 
+    /**
+     * The screen asks sixteen sections at once. If Cloudflare wants a challenge, each of them
+     * would start (and cancel) it; one warm-up here resolves the session first, so the sections
+     * are plain HTTP requests.
+     */
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (!warmedUp.get() && warmedUp.compareAndSet(false, true)) {
+            site.warmUp()
+        }
         val document = try {
             // A section that cannot answer in time is dropped instead of holding the screen.
             withTimeoutOrNull(SECTION_MILLIS) {
@@ -209,6 +217,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
      */
     private val failures = AtomicInteger(0)
     private val lastFailureAt = AtomicLong(0)
+    private val warmedUp = AtomicBoolean(false)
 
 
     // ----------------------------------------------------------------- search
