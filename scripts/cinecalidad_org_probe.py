@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+import base64
+import codecs
 import json
 import re
-import subprocess
 import traceback
 import requests
 
@@ -16,102 +17,121 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3900]}", flush=True)
 
 
+def unpack_dean(p, a, c, k):
+    def base_n(num, base):
+        digits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if num == 0:
+            return "0"
+        res = []
+        while num > 0:
+            res.append(digits[num % base])
+            num //= base
+        return "".join(reversed(res))
+    d = {}
+    for i in range(c - 1, -1, -1):
+        d[base_n(i, a)] = k[i] if i < len(k) and k[i] else base_n(i, a)
+    return re.sub(r"\b\w+\b", lambda m: d.get(m.group(0), m.group(0)), p)
+
+
 try:
-    # 1. Check /single/{type} and /listing/tax/{tax}/{slug}
-    s_movie = s.get("https://cinecalidad.org/wp-api/v1/single/movies?slug=perfectos-mentirosos-2026&postType=movies", timeout=20).json()
-    s_tv = s.get("https://cinecalidad.org/wp-api/v1/single/tvshows?slug=csi-miami-2002&postType=tvshows", timeout=20).json()
-    s_anime = s.get("https://cinecalidad.org/wp-api/v1/single/animes?slug=dragon-ball-super-beerus-2026&postType=animes", timeout=20).json()
-    s_novel = s.get("https://cinecalidad.org/wp-api/v1/single/novels?slug=eres-mi-sangre-2025&postType=novels", timeout=20).json()
-    s_ep = s.get("https://cinecalidad.org/wp-api/v1/single/episodes?slug=f-b-i-temporada-1-episodio-1&postType=episodes", timeout=20).json()
-    emit("1_singles", {
-        "movie_keys": sorted((s_movie.get("data") or {}).keys()) if isinstance(s_movie.get("data"), dict) else s_movie,
-        "tv_seasons": (s_tv.get("data") or {}).get("seasons"),
-        "tv_keys": sorted((s_tv.get("data") or {}).keys()) if isinstance(s_tv.get("data"), dict) else s_tv,
-        "anime_seasons": (s_anime.get("data") or {}).get("seasons"),
-        "novel_seasons": (s_novel.get("data") or {}).get("seasons"),
-        "ep_sample": {k: (s_ep.get("data") or {}).get(k) for k in ["_id", "title", "slug", "type", "season_number", "episode_number", "parent", "serie", "tvshow", "post_parent", "still_path", "runtime"] if isinstance(s_ep.get("data"), dict)},
-        "ep_keys": sorted((s_ep.get("data") or {}).keys()) if isinstance(s_ep.get("data"), dict) else s_ep,
+    # 1. Inspect /single/tvshows, /single/episodes/list (keys + pagination + seasons?), /single/related
+    tv_single = s.get("https://cinecalidad.org/wp-api/v1/single/tvshows?slug=csi-miami-2002&postType=tvshows", timeout=20).json()
+    ep_list = s.get("https://cinecalidad.org/wp-api/v1/single/episodes/list?_id=74410&season=1&page=1&postsPerPage=3", timeout=20).json()
+    ep_list_s2 = s.get("https://cinecalidad.org/wp-api/v1/single/episodes/list?_id=74410&season=2&page=1&postsPerPage=2", timeout=20).json()
+    ep_list_s99 = s.get("https://cinecalidad.org/wp-api/v1/single/episodes/list?_id=74410&season=99&page=1&postsPerPage=2", timeout=20).json()
+    rel = s.get("https://cinecalidad.org/wp-api/v1/single/related?postId=74657&page=1&tab=connections&postsPerPage=6", timeout=20).json()
+    emit("1_single_ep_rel", {
+        "tv_single_keys": sorted((tv_single.get("data") or {}).keys()) if isinstance(tv_single.get("data"), dict) else tv_single,
+        "ep_list_data_keys": sorted((ep_list.get("data") or {}).keys()) if isinstance(ep_list.get("data"), dict) else ep_list,
+        "ep_list_pag": (ep_list.get("data") or {}).get("pagination"),
+        "ep_list_seasons": (ep_list.get("data") or {}).get("seasons"),
+        "ep_s2_cnt": len((ep_list_s2.get("data") or {}).get("posts", [])),
+        "ep_s99": ep_list_s99,
+        "rel_cnt": len((rel.get("data") or {}).get("posts", [])),
     })
 
-    # 2. Check /listing/tax/genres/accion, /listing/tax/years/2026, /listing/tax/lang/castellano, /listing/tax/lang/subtitulado, /listing/latest
-    tax_check = {}
+    # 2. Check app.js for tax filter query param AND how seasons list is discovered!
+    jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20).text
+    tax_ctx = [jr[max(0, m.start()-80):min(len(jr), m.end()+260)] for m in re.finditer(r'listing/tax/|/listing/', jr)]
+    season_ctx = [jr[max(0, m.start()-120):min(len(jr), m.end()+260)] for m in re.finditer(r'Temporadas|seasons\s*[:=]|season_number|seasons_count', jr)]
+    emit("2_appjs_listing", tax_ctx[:8])
+    emit("3_appjs_seasons", season_ctx[:8])
+
+    # 3. Test listing filter candidates directly on /wp-api/v1/listing/...
+    filter_tests = {}
     for label, u in [
-        ("genres_accion", "https://cinecalidad.org/wp-api/v1/listing/tax/genres/accion?page=1&orderBy=latest&order=desc&postsPerPage=5"),
-        ("years_2026", "https://cinecalidad.org/wp-api/v1/listing/tax/years/2026?page=1&orderBy=latest&order=desc&postsPerPage=5"),
-        ("lang_castellano", "https://cinecalidad.org/wp-api/v1/listing/tax/lang/castellano?page=1&orderBy=latest&order=desc&postsPerPage=5"),
-        ("lang_sub", "https://cinecalidad.org/wp-api/v1/listing/tax/lang/subtitulado?page=1&orderBy=latest&order=desc&postsPerPage=5"),
-        ("latest_all", "https://cinecalidad.org/wp-api/v1/listing/latest?postTypes=movies,tvshows,animes&postsPerPage=10"),
-        ("tvshows_order_popular", "https://cinecalidad.org/wp-api/v1/listing/tvshows?page=1&orderBy=popular&order=desc&postType=tvshows&postsPerPage=5"),
+        ("genres_in_listing", "https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=latest&order=desc&postType=movies&postsPerPage=5&genres=26"),
+        ("genre_slug", "https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=latest&order=desc&postType=movies&postsPerPage=5&genres=accion"),
+        ("tax_filter_id", 'https://cinecalidad.org/wp-api/v1/listing/genres?filter=["accion"]&page=1&orderBy=latest&order=desc&postsPerPage=5'),
+        ("listing_all", "https://cinecalidad.org/wp-api/v1/listing/all?page=1&orderBy=latest&order=desc&postsPerPage=5&genres=26"),
+        ("listing_tax_posts", "https://cinecalidad.org/wp-api/v1/listing/tax/genres/accion?page=1&orderBy=latest&order=desc&postsPerPage=5&withPosts=1"),
     ]:
         r = s.get(u, timeout=20)
         d = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
         posts = (d.get("data") or {}).get("posts", []) if isinstance(d, dict) and isinstance(d.get("data"), dict) else []
-        tax_check[label] = {
-            "st": r.status_code,
-            "cnt": len(posts),
-            "pag": (d.get("data") or {}).get("pagination") if isinstance(d.get("data"), dict) else None,
-            "types": list({p.get("type") for p in posts}),
-            "first": posts[0].get("slug") if posts else r.text[:180],
-        }
-    emit("2_tax_and_latest", tax_check)
+        filter_tests[label] = {"st": r.status_code, "cnt": len(posts), "first": posts[0].get("slug") if posts else r.text[:160]}
+    emit("4_filter_tests", filter_tests)
 
-    # 3. Sample player embeds across movies, tv episode, anime episode, novel episode, wwe!
-    servers_seen = {}
-    samples_embeds = {}
-    items_to_check = [
-        ("movie_2026", 74657, None),
-        ("movie_1995", 74676, None),
-        ("ep_fbi", (s_ep.get("data") or {}).get("_id"), "tvshows"),
-    ]
-    # Also fetch episode 1 of Dragon Ball Super Beerus & Eres Mi Sangre & first WWE
-    if isinstance(s_anime.get("data"), dict):
-        aid = s_anime["data"].get("_id")
-        ae = s.get(f"https://cinecalidad.org/wp-api/v1/single/episodes/list?_id={aid}&season=1&page=1&postsPerPage=5", timeout=20).json()
-        aps = (ae.get("data") or {}).get("posts", [])
-        if aps:
-            items_to_check.append(("ep_anime", aps[0]["_id"], "animes"))
-    if isinstance(s_novel.get("data"), dict):
-        nid = s_novel["data"].get("_id")
-        ne = s.get(f"https://cinecalidad.org/wp-api/v1/single/episodes/list?_id={nid}&season=1&page=1&postsPerPage=5", timeout=20).json()
-        nps = (ne.get("data") or {}).get("posts", [])
-        if nps:
-            items_to_check.append(("ep_novel", nps[0]["_id"], "novels"))
-    wwe_list = s.get("https://cinecalidad.org/wp-api/v1/listing/wwe?page=1&orderBy=latest&order=desc&postType=wwe&postsPerPage=3", timeout=20).json()
-    wposts = (wwe_list.get("data") or {}).get("posts", [])
-    if wposts:
-        items_to_check.append(("wwe", wposts[0]["_id"], None))
-    # Also check a few random movies from page 1 & page 3 to see all server types & langs!
-    m1 = s.get("https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=latest&order=desc&postType=movies&postsPerPage=10", timeout=20).json()
-    for p in (m1.get("data") or {}).get("posts", [])[:5]:
-        items_to_check.append((f"m_{p['slug'][:20]}", p["_id"], None))
-
-    test_embed_urls = []
-    for label, pid, pt in items_to_check:
-        if not pid:
-            continue
-        q = f"https://cinecalidad.org/wp-api/v1/player?postId={pid}&demo=0" + (f"&parentType={pt}" if pt else "")
-        pr = s.get(q, timeout=20).json()
-        embeds = (pr.get("data") or {}).get("embeds", []) if isinstance(pr.get("data"), dict) else []
-        samples_embeds[label] = [{"server": e.get("server"), "lang": e.get("lang"), "q": e.get("quality"), "url": e.get("url")} for e in embeds]
-        for e in embeds:
-            srv = e.get("server") or "?"
-            servers_seen[srv] = servers_seen.get(srv, 0) + 1
-            if len(test_embed_urls) < 6 and e.get("url"):
-                test_embed_urls.append((label, e["url"]))
-    emit("3_embeds", {"servers_seen": servers_seen, "samples": samples_embeds})
-
-    # 4. Inspect real embed responses (vimeos.net, videoapp.zip, voe.sx, goodstream...) and extract m3u8!
-    embed_check = []
-    for label, eu in test_embed_urls:
+    # 4. Inspect real vimeos.net & voe.sx playback streams (check HLS playlist #EXTINF total duration!)
+    playback = {}
+    for label, eu in [
+        ("vimeos_movie", "https://vimeos.net/embed-5gtjv7hneey8.html"),
+        ("vimeos_ep", "https://vimeos.net/embed-81u2kpycz5yt.html"),
+        ("vimeos_anime", "https://vimeos.net/embed-0qdi57h85dsw.html"),
+    ]:
         try:
-            r = s.get(eu, headers={"Referer": "https://cinecalidad.org/"}, timeout=15)
-            # Find m3u8 / mp4 / redirect / iframe inside embed HTML
-            media = re.findall(r'https?://[^"\'\s<>]+\.(?:m3u8|mp4)[^"\'\s<>]*', r.text)
-            ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', r.text, re.I)
-            embed_check.append({"label": label, "url": eu, "st": r.status_code, "final": r.url, "media": media[:3], "iframes": ifr[:2], "len": len(r.text)})
+            html = s.get(eu, headers={"Referer": "https://cinecalidad.org/"}, timeout=20).text
+            # Try direct m3u8 or Dean Edwards packed script
+            m3 = re.findall(r'https?://[^"\'\s<>]+\.m3u8[^"\'\s<>]*', html)
+            if not m3:
+                pm = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", html, re.S)
+                if pm:
+                    unpacked = unpack_dean(pm.group(1), int(pm.group(2)), int(pm.group(3)), pm.group(4).split("|"))
+                    m3 = re.findall(r'https?://[^"\'\s<>]+\.m3u8[^"\'\s<>]*', unpacked)
+            dur_info = {}
+            if m3:
+                m3u_url = m3[0]
+                m3u_txt = s.get(m3u_url, headers={"Referer": "https://vimeos.net/", "Origin": "https://vimeos.net"}, timeout=20).text
+                # If master playlist, follow first variant
+                if "#EXT-X-STREAM-INF" in m3u_txt:
+                    lines = [ln.strip() for ln in m3u_txt.splitlines() if ln.strip() and not ln.startswith("#")]
+                    if lines:
+                        from urllib.parse import urljoin
+                        var_u = urljoin(m3u_url, lines[0])
+                        m3u_txt = s.get(var_u, headers={"Referer": "https://vimeos.net/", "Origin": "https://vimeos.net"}, timeout=20).text
+                segs = [float(x) for x in re.findall(r'#EXTINF:([0-9.]+)', m3u_txt)]
+                dur_info = {"m3u8": m3u_url[:90], "segments": len(segs), "total_sec": round(sum(segs), 1)}
+            playback[label] = {"has_m3u8": bool(m3), **dur_info}
         except Exception as ex:
-            embed_check.append({"label": label, "url": eu, "err": str(ex)})
-    emit("4_embed_resolve", embed_check)
+            playback[label] = {"err": str(ex)}
+
+    # Also test voe.sx redirect + JSON decode!
+    try:
+        vh = s.get("https://voe.sx/e/djpwhnvs36g1", headers={"Referer": "https://cinecalidad.org/"}, timeout=20).text
+        red = re.search(r"window\.location\.href\s*=\s*'([^']+)'", vh)
+        if red:
+            vh2 = s.get(red.group(1), headers={"Referer": "https://voe.sx/"}, timeout=20).text
+            jm = re.search(r'<script type="application/json">\s*(\[.*?\])\s*</script>', vh2, re.S)
+            if jm:
+                enc = json.loads(jm.group(1))[0]
+                v = codecs.decode(enc, "rot13")
+                for pat in ["@$", "^^", "~@", "%?", "*~", "!!", "#&"]:
+                    v = v.replace(pat, "_")
+                v = base64.b64decode(v.replace("_", "")).decode("utf8")
+                v = "".join(chr(ord(c) - 3) for c in v)[::-1]
+                vdata = json.loads(base64.b64decode(v))
+                src = vdata.get("source")
+                mtxt = s.get(src, headers={"Referer": red.group(1)}, timeout=20).text if src else ""
+                if "#EXT-X-STREAM-INF" in mtxt:
+                    lines = [ln.strip() for ln in mtxt.splitlines() if ln.strip() and not ln.startswith("#")]
+                    if lines:
+                        from urllib.parse import urljoin
+                        mtxt = s.get(urljoin(src, lines[0]), headers={"Referer": red.group(1)}, timeout=20).text
+                segs = [float(x) for x in re.findall(r'#EXTINF:([0-9.]+)', mtxt)]
+                playback["voe_movie"] = {"has_src": bool(src), "segments": len(segs), "total_sec": round(sum(segs), 1)}
+    except Exception as ex:
+        playback["voe_movie"] = {"err": str(ex)}
+    emit("5_playback_durations", playback)
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
