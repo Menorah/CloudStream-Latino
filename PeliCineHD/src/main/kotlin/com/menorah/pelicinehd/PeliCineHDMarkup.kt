@@ -106,25 +106,9 @@ internal object PeliCineHDMarkup {
 
     // --------------------------------------------------------------- cards
 
-    /**
-     * Cards of a catalogue, a search result and the home rows. The home page prints the same
-     * `article.post` with `.movies` / `.series`, plus a slide variant in its hero carousel.
-     */
+    /** Cards of a catalogue and of a search result. Ads and cross-host links are dropped. */
     private const val CARD_SELECTOR =
         "article.post.movies, article.post.series, article.post.episodes"
-
-    /**
-     * The hero carousel of the home page. It is drawn by the theme from a slides list; the
-     * slides are `article`/`div` carrying a poster, a title and an in-site link.
-     */
-    fun heroCards(document: Document): List<Card> {
-        val slides = document.select(
-            "#hero .slide, .hero-slider .slide, .slider-home .item, .aa-hero .item, " +
-                ".swiper-slide, .glide__slide, section.hero article, .hero article.post"
-        )
-        return slides.mapNotNull { slide -> card(slide) }
-            .distinctBy { it.url }
-    }
 
     /** Catalog/搜索结果 cards. Ads and cross-host links are dropped because there is no `a.lnk-blk`. */
     fun cards(document: Document): List<Card> =

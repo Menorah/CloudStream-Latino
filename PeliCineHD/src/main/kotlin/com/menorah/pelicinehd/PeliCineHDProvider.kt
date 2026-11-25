@@ -72,8 +72,6 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     override val loadLinksTimeoutMs: Long? = 240_000L
 
     override val mainPage = mainPageOf(
-        // First row: the home page itself, whose hero carousel the other rows do not show.
-        "inicio" to "Destacados",
         "peliculas" to "Películas",
         "series" to "Series",
         "category/accion" to "Acción",
@@ -159,10 +157,6 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // The home row can answer with the hero carousel only; that is still a success.
-            if (request.data == "inicio" && e !is ErrorLoadingException) {
-                return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
-            }
             // One failing section must not empty the whole screen, but when the site rejects
             // every request the user has to read why instead of seeing an empty catalogue.
             // Failures are counted inside one batch: a retry seconds later starts from zero.
@@ -178,14 +172,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
             }
             return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         }
-        // The home page carries the hero carousel before its rows; both are the same cards.
-        val cards = if (request.data == "inicio") {
-            (PeliCineHDMarkup.heroCards(document) + PeliCineHDMarkup.cards(document)).distinctBy { it.url }
-        } else {
-            PeliCineHDMarkup.cards(document)
-        }
         return newHomePageResponse(
-            HomePageList(request.name, responses(cards)),
+            HomePageList(request.name, responses(PeliCineHDMarkup.cards(document))),
             hasNext = PeliCineHDMarkup.hasNext(document, page)
         )
     }

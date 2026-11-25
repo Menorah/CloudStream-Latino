@@ -63,8 +63,6 @@ class UserPagesTest {
         assertTrue("home cards ${cards.size}", cards.size > 30)
         assertTrue(cards.any { it.title == "Pacífico" })
         assertTrue(cards.all { it.url.startsWith("https://pelicinehd.com/") })
-        // Nothing on this page is a real hero slider, so the fallback must not invent one.
-        assertTrue(PeliCineHDMarkup.heroCards(page).isEmpty())
     }
 
     @Test

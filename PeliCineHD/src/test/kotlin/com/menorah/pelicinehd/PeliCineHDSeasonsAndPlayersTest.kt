@@ -80,23 +80,4 @@ class PeliCineHDSeasonsAndPlayersTest {
         """.trimIndent()
         assertNull(PeliCineHDMarkup.embeddedUrl(page(html)))
     }
-
-    @Test
-    fun `the hero carousel is read as cards`() {
-        val html = """
-            <html><body><div class="hero-slider">
-              <div class="slide">
-                <figure><img src="//image.tmdb.org/t/p/w500/gr2v2nt0isUhTqnvNKeNQYpX0sO.jpg"></figure>
-                <h2 class="entry-title">La Odisea</h2>
-                <a class="lnk-blk" href="https://pelicinehd.com/movies/la-odisea/"></a>
-              </div>
-            </div></body></html>
-        """.trimIndent()
-        val hero = PeliCineHDMarkup.heroCards(page(html))
-        assertEquals(1, hero.size)
-        assertEquals("La Odisea", hero[0].title)
-        assertEquals("https://pelicinehd.com/movies/la-odisea/", hero[0].url)
-        assertTrue(hero[0].movie)
-        assertFalse(hero[0].poster!!.contains("pelicinehd.com"))
-    }
 }
