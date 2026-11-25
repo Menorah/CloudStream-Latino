@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import re
 import traceback
@@ -16,115 +17,76 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3850]}", flush=True)
 
 
+def unpack_packer(p, a, c, k):
+    def base_n(num, b):
+        chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        return ("" if num < b else base_n(num // b, b)) + chars[num % b]
+    d = {}
+    for i in range(c - 1, -1, -1):
+        key = base_n(i, a)
+        d[key] = k[i] if i < len(k) and k[i] else key
+    return re.sub(r"\b\w+\b", lambda m: d.get(m.group(0), m.group(0)), p)
+
+
 try:
-    # 1. /temporada/ archive + /servidores-de-video/ + real genre slugs in sidebar/filter
-    r_temp = s.get("https://ww4.animeonline.ninja/temporada/", timeout=20)
-    sp_t = BeautifulSoup(r_temp.text, "html.parser")
-    r_temp2 = s.get("https://ww4.animeonline.ninja/temporada/page/2/", timeout=20)
-    sp_t2 = BeautifulSoup(r_temp2.text, "html.parser")
+    # 1. Inspect article.item HTML in /temporada/ and /episodio/ and /online/ and /pelicula/
+    samples = {}
+    for path in ("/temporada/", "/episodio/", "/online/", "/pelicula/"):
+        r = s.get("https://ww4.animeonline.ninja" + path, timeout=20)
+        sp = BeautifulSoup(r.text, "html.parser")
+        art = sp.select_one("article.item")
+        samples[path] = str(art)[:900] if art else None
+    emit("1_article_items", samples)
 
-    r_home = s.get("https://ww4.animeonline.ninja/inicio/", timeout=20)
-    sp_h = BeautifulSoup(r_home.text, "html.parser")
-    sidebar_genres = [(a.get_text(" ", strip=True), a.get("href")) for a in sp_h.select(".genres a[href], #menu-generos a[href], .filtro_y a[href], aside a[href*='/genero/']")]
-    footer_genres = [(a.get_text(" ", strip=True), a.get("href")) for a in sp_h.select("a[href*='/genero/']")]
-    seen_g = []
-    seen_set = set()
-    for t, h in footer_genres:
-        if h and h not in seen_set:
-            seen_set.add(h)
-            seen_g.append([t, h])
-
-    r_serv = s.get("https://ww4.animeonline.ninja/servidores-de-video/", timeout=20)
-    sp_serv = BeautifulSoup(r_serv.text, "html.parser")
-
-    emit("1_temp_and_genres", {
-        "temp_code": r_temp.status_code,
-        "temp_articles": len(sp_t.select("article.item")),
-        "temp_p2_code": r_temp2.status_code,
-        "temp_p2_articles": len(sp_t2.select("article.item")),
-        "temp_first": (
-            sp_t.select_one("article.item a").get("href") if sp_t.select_one("article.item a") else None,
-            sp_t.select_one("article.item .data h3").get_text(strip=True) if sp_t.select_one("article.item .data h3") else None,
-        ),
-        "all_genre_links_cnt": len(seen_g),
-        "all_genre_links": seen_g[:40],
-        "serv_text": sp_serv.select_one(".wp-content, article, main").get_text(" ", strip=True)[:800] if sp_serv.select_one(".wp-content, article, main") else None,
-    })
-
-    # 2. gupload.site full script & media hunt
+    # 2. Decode gupload.site scripts 4, 5, 8 (XOR key "G7#kP!2qZxV9mRwL")
     rg = s.get("https://gupload.site/data/e/14506ff102c4", headers={"Referer": "https://saidochesto.top/"}, timeout=15)
     spg = BeautifulSoup(rg.text, "html.parser")
-    g_scripts = []
-    for idx, sc in enumerate(spg.select("script")):
-        st = (sc.string or "").strip()
-        src = sc.get("src")
-        if src or (st and "all-traffic" not in st and "ricardo-id30" not in st):
-            g_scripts.append({"i": idx, "src": src, "len": len(st), "head": st[:400]})
-    g_urls = re.findall(r'https?://[^\s"\'<>\\]+', rg.text)
-    emit("2_gupload_deep", {
-        "body_keywords": re.findall(r'(?:config|player|video|file|src|source|atob|eval|token|stream)[^\n;]{0,120}', rg.text, re.I)[:15],
-        "scripts": g_scripts,
-        "urls": [u for u in g_urls if "gupload" in u or ".mp4" in u or ".m3u8" in u or "cdn" in u][:15],
-    })
+    decoded_g = []
+    xor_key = b"G7#kP!2qZxV9mRwL"
+    for sc in spg.select("script"):
+        st = sc.string or ""
+        if "~" in st and len(st) > 50:
+            # find strings containing ~
+            for m in re.findall(r'["\']([A-Za-z0-9+/=_-]+~[A-Za-z0-9+/=_-]+)["\']', st):
+                try:
+                    b = base64.b64decode(m.split("~", 1)[1])
+                    dec = bytes(b[i] ^ xor_key[i % len(xor_key)] for i in range(len(b))).decode("utf-8", errors="replace")
+                    decoded_g.append(dec[:600])
+                except Exception as ex:
+                    decoded_g.append("ERR:" + str(ex))
+            decoded_g.append("RAW_TAIL:" + st[-500:])
+    emit("2_gupload_decoded", decoded_g)
 
-    # 3. peeplayer /e/ deep script hunt
+    # 3. peeplayer script 23 full content
     rp = s.get("https://peeplayer.com/e/sbm3uJCJZByS", headers={"Referer": "https://peeplayer.com/v/sbm3uJCJZByS"}, timeout=15)
     spp = BeautifulSoup(rp.text, "html.parser")
-    p_scripts = []
-    for idx, sc in enumerate(spp.select("script")):
-        st = (sc.string or "").strip()
-        src = sc.get("src")
-        if src or len(st) > 40:
-            p_scripts.append({"i": idx, "src": src, "len": len(st), "match": re.findall(r'(?:https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*|api/[^\s"\'<>]+|fetch\([^\)]+\)|sources?\s*[:=][^\n;]{1,160})', st)[:4]})
-    emit("3_peeplayer_deep", {"scripts": p_scripts[-12:]})
+    s23 = ""
+    for sc in spp.select("script"):
+        st = sc.string or ""
+        if "fetch(" in st and "Math.random" in st:
+            s23 = st
+            break
+    emit("3_peeplayer_s23", {"len": len(s23), "p1": s23[:3000]})
+    if len(s23) > 3000:
+        emit("3_peeplayer_s23_p2", {"p2": s23[3000:6500], "p3": s23[6500:]})
 
-    # 4. uqload.vc & savefiles.top POST /dl + ByseSX playback API check for filemoon0.top
+    # 4. uqload.vc /dl unpacked + n1mwq.org ByseSX embed frame & api test
     ruq = s.post("https://uqload.vc/dl", data={"op": "embed", "file_code": "yuws7b11flrx", "auto": "1", "referer": "https://saidochesto.top/"}, headers={"Referer": "https://uqload.vc/e/yuws7b11flrx"}, timeout=15)
-    rsf = s.post("https://savefiles.top/dl", data={"op": "embed", "file_code": "dijqoi9tx3ml", "auto": "1", "referer": "https://saidochesto.top/"}, headers={"Referer": "https://savefiles.top/e/dijqoi9tx3ml"}, timeout=15)
-    r_byse = s.get(
-        "https://n1mwq.org/api/videos/swxub14kn31t/embed/playback",
-        headers={"referer": "https://n1mwq.org/yw65/swxub14kn31t", "x-embed-parent": "https://filemoon0.top/e/swxub14kn31t/animeonlineninja-the-detective-is-already-dead-2-08"},
-        timeout=15,
-    )
-    emit("4_xfs_and_byse", {
-        "uq_dl": {"code": ruq.status_code, "len": len(ruq.text), "hints": re.findall(r'(?:sources\s*:[^\]]+\]|https?://[^\s"\'<>]+\.(?:mp4|m3u8)[^\s"\'<>]*|eval\(function\(p,a,c,k,e,d\))', ruq.text)[:5], "head": ruq.text[:350]},
-        "sf_dl": {"code": rsf.status_code, "len": len(rsf.text), "hints": re.findall(r'(?:sources\s*:[^\]]+\]|https?://[^\s"\'<>]+\.(?:mp4|m3u8)[^\s"\'<>]*|eval\(function\(p,a,c,k,e,d\))', rsf.text)[:5], "head": rsf.text[:350]},
-        "byse_pb": {"code": r_byse.status_code, "body": r_byse.text[:500]},
+    m_pack = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", ruq.text, re.S)
+    uq_unpacked = unpack_packer(m_pack.group(1), int(m_pack.group(2)), int(m_pack.group(3)), m_pack.group(4).split("|")) if m_pack else None
+
+    # ByseSX check: test GET /api/videos/.../embed/playback on BOTH filemoon0.top and n1mwq.org (POST vs GET) and inspect n1mwq frame HTML
+    rn1 = s.get("https://n1mwq.org/yw65/swxub14kn31t", headers={"Referer": "https://filemoon0.top/"}, timeout=15)
+    rfm_pb = s.get("https://filemoon0.top/api/videos/swxub14kn31t/embed/playback", headers={"Referer": "https://filemoon0.top/e/swxub14kn31t"}, timeout=15)
+    rn1_pb_get = s.get("https://n1mwq.org/api/videos/swxub14kn31t/embed/playback", headers={"Referer": "https://n1mwq.org/yw65/swxub14kn31t", "x-embed-parent": "https://filemoon0.top/e/swxub14kn31t"}, timeout=15)
+    rn1_pb_post = s.post("https://n1mwq.org/api/videos/swxub14kn31t/embed/playback", headers={"Referer": "https://n1mwq.org/yw65/swxub14kn31t", "x-embed-parent": "https://filemoon0.top/e/swxub14kn31t"}, timeout=15)
+    emit("4_uqload_and_byse", {
+        "uq_unpacked": uq_unpacked[:1200] if uq_unpacked else None,
+        "n1_html": rn1.text[:500],
+        "fm_pb_get": (rfm_pb.status_code, rfm_pb.text[:300]),
+        "n1_pb_get": (rn1_pb_get.status_code, rn1_pb_get.text[:300]),
+        "n1_pb_post": (rn1_pb_post.status_code, rn1_pb_post.text[:300]),
     })
-
-    # 5. Live episode from /episodio/ -> #playeroptionsul -> wp-json -> saidochesto -> remaining hosts!
-    r_ep_list = s.get("https://ww4.animeonline.ninja/episodio/", timeout=20)
-    sp_el = BeautifulSoup(r_ep_list.text, "html.parser")
-    ep_urls = [a.get("href") for a in sp_el.select("article.item a[href]")][:8]
-    seen_hosts = {}
-    for eu in ep_urls[:4]:
-        rep = s.get(eu, timeout=20)
-        spep = BeautifulSoup(rep.text, "html.parser")
-        li = spep.select_one("#playeroptionsul li[data-post]:not(.dooplay_player_option_trailer)")
-        if not li:
-            continue
-        dp, dn, dt = li.get("data-post"), li.get("data-nume"), li.get("data-type")
-        rj = s.get(f"https://ww4.animeonline.ninja/wp-json/dooplayer/v1/post/{dp}?type={dt}&source={dn}", headers={"Referer": eu}, timeout=15).json()
-        su = rj.get("embed_url")
-        if su and "saidochesto" in su:
-            rs = s.get(su, headers={"Referer": eu}, timeout=15)
-            for opt in BeautifulSoup(rs.text, "html.parser").select(".OptionsLangDisp li[onclick]"):
-                m = re.search(r"go_to_player\('([^']+)'\)", opt.get("onclick", ""))
-                if m:
-                    pu = m.group(1)
-                    h = pu.split("/")[2]
-                    if h not in seen_hosts:
-                        seen_hosts[h] = (pu, su)
-
-    extra_probe = {}
-    for h, (pu, su) in seen_hosts.items():
-        if any(k in h for k in ("streamp2p", "upnshare", "playmate", "luluvid", "dood", "streamtape", "mp4upload", "hexload")):
-            try:
-                hr = s.get(pu, headers={"Referer": su}, timeout=15, allow_redirects=True)
-                extra_probe[h] = {"url": pu, "final": str(hr.url), "code": hr.status_code, "len": len(hr.text), "head": hr.text[:400]}
-            except Exception as ex:
-                extra_probe[h] = {"url": pu, "err": str(ex)[:120]}
-    emit("5_live_hosts", {"all_hosts": list(seen_hosts.keys()), "probed": extra_probe})
 
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:2000]})
