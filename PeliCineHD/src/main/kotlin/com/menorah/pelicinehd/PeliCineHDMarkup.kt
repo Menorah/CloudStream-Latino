@@ -288,10 +288,9 @@ internal object PeliCineHDMarkup {
      * forms are matched too. Diacritics are folded (`LATÍNO`, `ESPANOL`) before comparing.
      */
     fun language(label: String?): String {
-        val text = label?.uppercase()
-            ?.replace('Á', 'A').replace('É', 'E').replace('Í', 'I')
-            ?.replace('Ó', 'O').replace('Ú', 'U')
-            ?: return ""
+        val raw = label?.uppercase() ?: return ""
+        val text = raw.replace('Á', 'A').replace('É', 'E').replace('Í', 'I')
+            .replace('Ó', 'O').replace('Ú', 'U')
         return when {
             text.contains("CASTELLAN") || text.contains("CAST ") || text.endsWith("CAST") ||
                 text.contains("ESPANA") || text.contains("ESPANOL") -> "Castellano"
