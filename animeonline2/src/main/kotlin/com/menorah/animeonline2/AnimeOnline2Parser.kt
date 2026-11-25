@@ -1,9 +1,9 @@
 package com.menorah.animeonline2
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -87,6 +87,15 @@ object AnimeOnline2Parser {
     const val BASE = "https://ww4.animeonline.ninja"
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    private val jsonMapper = jacksonObjectMapper()
+
+    fun parseJsonMap(jsonText: String): Map<String, Any?>? {
+        return runCatching {
+            @Suppress("UNCHECKED_CAST")
+            jsonMapper.readValue(jsonText, Map::class.java) as? Map<String, Any?>
+        }.getOrNull()
+    }
 
     private val siteHostRegex = Regex("""^https?://(?:www\d*|ww\d*|ver\d*\.)?animeonline\.ninja(?=/|$)""", RegexOption.IGNORE_CASE)
     private val anySubdomainAnimeOnlineRegex = Regex("""^https?://[a-z0-9.-]*animeonline\.ninja(?=/|$)""", RegexOption.IGNORE_CASE)
@@ -450,9 +459,12 @@ object AnimeOnline2Parser {
         val rating = doc.selectFirst(".dt_rating_vgs")?.text()?.trim()?.ifBlank { null }
         val tags = cleanGenreTags(doc.select(".sheader .sgeneros a, .sgeneros a"))
 
-        val trailerSrc = doc.selectFirst("#trailer iframe[src]")?.let {
-            val s = it.attr("data-src").ifBlank { it.attr("src") }.trim()
+        val trailerEl: Element? = doc.selectFirst("#trailer iframe[src]")
+        val trailerSrc = if (trailerEl != null) {
+            val s = trailerEl.attr("data-src").ifBlank { trailerEl.attr("src") }.trim()
             if (s.startsWith("//")) "https:$s" else s.ifBlank { null }
+        } else {
+            null
         }
 
         val cast = doc.select("#cast .person").mapNotNull { person ->
@@ -589,7 +601,7 @@ object AnimeOnline2Parser {
     }
 
     fun parseDooplayerEmbedUrl(jsonText: String): String? {
-        val parsed = tryParseJson<Map<String, Any?>>(jsonText) ?: return null
+        val parsed = parseJsonMap(jsonText) ?: return null
         val raw = parsed["embed_url"]?.toString()?.trim().orEmpty()
         if (raw.isBlank()) return null
         val fixed = raw.replace("\\/", "/")
@@ -691,7 +703,7 @@ object AnimeOnline2Parser {
                 }
                 val decoded = String(out, StandardCharsets.UTF_8)
                 if (decoded.contains("\"videoUrl\"")) {
-                    val map = tryParseJson<Map<String, Any?>>(decoded)
+                    val map = parseJsonMap(decoded)
                     val videoUrl = map?.get("videoUrl")?.toString()?.replace("\\/", "/")?.trim()
                     if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http")) {
                         return videoUrl
@@ -716,7 +728,7 @@ object AnimeOnline2Parser {
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, ivBytes))
         var plain = String(cipher.doFinal(cipherBytes), StandardCharsets.UTF_8)
         if (plain.startsWith("\uFEFF")) plain = plain.substring(1)
-        val root = tryParseJson<Map<String, Any?>>(plain) ?: return null
+        val root = parseJsonMap(plain) ?: return null
         @Suppress("UNCHECKED_CAST")
         val sources = root["sources"] as? List<Map<String, Any?>> ?: return null
         return sources.firstOrNull()?.get("url")?.toString()?.trim()?.ifBlank { null }

@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.extractors.LuluStream
 import com.lagradost.cloudstream3.extractors.MixDrop
 import com.lagradost.cloudstream3.extractors.Uqload
 import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
@@ -224,7 +223,7 @@ class PeeplayerExtractor : ExtractorApi() {
                 headers = mapOf("Referer" to embedUrl),
                 timeout = 15,
             ).text
-            tryParseJson<Map<String, Any?>>(authText)?.get("t")?.toString()?.ifBlank { null }
+            AnimeOnline2Parser.parseJsonMap(authText)?.get("t")?.toString()?.ifBlank { null }
         }.getOrNull() ?: stok ?: return
 
         val masterUrl = "$strimBase/m/$msgId/master.m3u8?t=$authToken"
@@ -279,7 +278,7 @@ open class ByseFilemoonExtractor(override var mainUrl: String) : ExtractorApi() 
             app.get("$base/api/videos/$code/embed/details", referer = url, timeout = 15).text
         }.getOrNull()
         val embedFrameUrl = detailsJson?.let {
-            tryParseJson<Map<String, Any?>>(it)?.get("embed_frame_url")?.toString()?.trim()
+            AnimeOnline2Parser.parseJsonMap(it)?.get("embed_frame_url")?.toString()?.trim()
         }
         if (!embedFrameUrl.isNullOrBlank()) {
             val embedBase = hostBaseUrl(embedFrameUrl, base)
@@ -296,7 +295,7 @@ open class ByseFilemoonExtractor(override var mainUrl: String) : ExtractorApi() 
                 )
             }.getOrNull()
             if (pbResp != null && pbResp.isSuccessful) {
-                val root = tryParseJson<Map<String, Any?>>(pbResp.text)
+                val root = AnimeOnline2Parser.parseJsonMap(pbResp.text)
                 @Suppress("UNCHECKED_CAST")
                 val playback = root?.get("playback") as? Map<String, Any?>
                 val iv = playback?.get("iv")?.toString()
