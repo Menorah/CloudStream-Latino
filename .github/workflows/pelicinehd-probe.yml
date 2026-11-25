@@ -12,6 +12,6 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4 seleniumbase
-      - name: Inspeccionar pelicinehd.com con SeleniumBase UC + Xvfb
+      - run: python3 -m pip install beautifulsoup4 patchright
+      - name: Inspeccionar pelicinehd.com con Patchright + Chrome + Xvfb
         run: xvfb-run -a python3 scripts/pelicinehd_probe.py
