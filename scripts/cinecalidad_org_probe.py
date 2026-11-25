@@ -17,35 +17,34 @@ def emit(tag, obj):
 
 try:
     home_html = s.get("https://cinecalidad.org/", timeout=20).text
-    m_cfg = re.search(r"window\.siteConfig\s*=\s*\{", home_html)
-    snippet = home_html[m_cfg.start():m_cfg.start() + 3000] if m_cfg else ""
-    emit("1_sitecfg_head", snippet)
-
-    # Find imageUrl and datas keys inside window.siteConfig
-    m_img = re.search(r'imageUrl\s*:\s*([^,\n]+)', home_html)
-    m_datas = re.search(r'datas\s*:\s*(\{.*?\})\s*(?:,|\n)', home_html)
-    emit("1b_img_datas", {
-        "imageUrl": m_img.group(1) if m_img else None,
-        "datas_head": (m_datas.group(1)[:1500] if m_datas else None),
-    })
-
-    any_p1 = s.get("https://cinecalidad.org/wp-api/v1/listing/any?page=1&orderBy=latest&order=desc&postType=any&postsPerPage=24", timeout=20).json()
-    tops_m = s.get("https://cinecalidad.org/wp-api/v1/tops?postType=movies&postsPerPage=24&range=week", timeout=20).json()
-    emit("2_any_and_tops", {
-        "any_ok": any_p1.get("success"),
-        "any_types": sorted({p.get("type") for p in (any_p1.get("data") or {}).get("posts", [])}),
-        "any_pag": (any_p1.get("data") or {}).get("pagination"),
-        "any_first3": [(p.get("type"), p.get("slug"), p.get("poster_path"), p.get("backdrop_path"), p.get("images")) for p in (any_p1.get("data") or {}).get("posts", [])[:3]],
-        "tops_keys": list((tops_m.get("data") or {}).keys()),
-        "tops_pag": (tops_m.get("data") or {}).get("pagination"),
-        "tops_first2": [(p.get("slug"), p.get("images")) for p in (tops_m.get("data") or {}).get("posts", [])[:2]],
+    langs_m = re.search(r"langs\s*:\s*(\{.*?\})\s*,", home_html)
+    years_m = re.search(r"years\s*:\s*(\{.*?\})\s*,", home_html)
+    emit("1_langs_years", {
+        "langs": json.loads(langs_m.group(1)) if langs_m else None,
+        "years_count": len(json.loads(years_m.group(1))) if years_m else None,
+        "years_sample": dict(list(json.loads(years_m.group(1)).items())[:10]) if years_m else None,
     })
 
     single_m = s.get("https://cinecalidad.org/wp-api/v1/single/movies?slug=madden-2026&postType=movies", timeout=20).json()
-    cast_m = s.get(f"https://cinecalidad.org/wp-api/v1/cast/movies/{single_m['data']['post']['_id']}", timeout=20).json()
-    emit("3_single_and_cast", {
-        "post": {k: single_m["data"]["post"].get(k) for k in ("_id", "title", "slug", "type", "poster_path", "backdrop_path", "images", "release_date", "runtime", "vote_average", "trailer", "genres", "years", "lang", "overview")},
-        "cast_sample": cast_m.get("data", [])[:3],
+    d = single_m["data"]
+    cast_m = s.get(f"https://cinecalidad.org/wp-api/v1/cast/movies/{d['_id']}", timeout=20).json()
+    ep_list = s.get("https://cinecalidad.org/wp-api/v1/single/episodes/list?_id=108385&season=1&page=1&postsPerPage=5", timeout=20).json()
+    emit("2_single_cast_ep", {
+        "single_fields": {k: d.get(k) for k in ("_id", "title", "slug", "type", "poster_path", "backdrop_path", "images", "release_date", "runtime", "vote_average", "trailer", "genres", "years", "lang", "overview")},
+        "cast_sample": (cast_m.get("data") or [])[:3],
+        "ep_first": ((ep_list.get("data") or {}).get("posts") or [None])[0],
+    })
+
+    tops_p2 = s.get("https://cinecalidad.org/wp-api/v1/tops?page=2&postType=movies&postsPerPage=24&range=week", timeout=20).json()
+    img_url = "https://cinecalidad.org/wp-content/uploads" + d["images"]["poster"]
+    img_res = s.get(img_url, timeout=20)
+    emit("3_tops_p2_and_img", {
+        "tops_p2_pag": (tops_p2.get("data") or {}).get("pagination"),
+        "tops_p2_first": ((tops_p2.get("data") or {}).get("posts") or [{}])[0].get("slug"),
+        "img_url": img_url,
+        "img_code": img_res.status_code,
+        "img_ct": img_res.headers.get("content-type"),
+        "img_len": len(img_res.content),
     })
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
