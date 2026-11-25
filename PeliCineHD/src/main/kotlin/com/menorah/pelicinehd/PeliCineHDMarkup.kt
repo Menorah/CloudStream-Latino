@@ -117,18 +117,17 @@ internal object PeliCineHDMarkup {
      * that points inside the site is used instead, so a small markup change does not empty a row.
      */
     private fun card(article: Element): Card? {
-        val candidates = buildList {
-            article.selectFirst("a.lnk-blk[href]")?.let { add(it) }
-            addAll(article.select("a[href]"))
-        }
-        val url = candidates.asSequence()
-            .mapNotNull { absolute(it.attr("href"), article.baseUri()) }
-            .firstOrNull { siteUrl(it) && !looksLikeCategory(it) }
+        val overlay: Element? = article.selectFirst("a.lnk-blk[href]")
+        val links: List<Element> = article.select("a[href]").toList()
+        val hrefs: List<String> = (listOfNotNull(overlay) + links).map { it.attr("href") }
+        val url: String = hrefs.asSequence()
+            .mapNotNull { href -> absolute(href, article.baseUri()) }
+            .firstOrNull { candidate -> siteUrl(candidate) && !looksLikeCategory(candidate) }
             ?: return null
-        val title = article.selectFirst("h2.entry-title, h3.entry-title")?.text()?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: article.selectFirst("img[alt]")?.attr("alt")?.removePrefix("Image ")?.trim()
-                ?.takeIf { it.isNotEmpty() }
+        val heading: Element? = article.selectFirst("h2.entry-title, h3.entry-title")
+        val alt: Element? = article.selectFirst("img[alt]")
+        val title: String = heading?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: alt?.attr("alt")?.removePrefix("Image ")?.trim()?.takeIf { it.isNotEmpty() }
             ?: return null
         val thumbnail: Element? = article.selectFirst("div.post-thumbnail img, figure img")
         val poster = absolute(thumbnail?.let { image(it) }, article.baseUri())
