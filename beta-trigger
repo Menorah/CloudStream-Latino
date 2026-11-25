@@ -1,1 +1,1 @@
-PeliCineHD v4: usa el UA de la WebView con cf_clearance y detecta el reto con HTTP 200
+PeliCineHD v5: las páginas se piden desde dentro de la WebView
