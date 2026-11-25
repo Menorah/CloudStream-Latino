@@ -10,6 +10,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -73,15 +74,27 @@ object PlaybackProbe {
 
                     val novelListing = provider.getMainPage(1, MainPageRequest("Novelas", "listing:novels", false))
                     val firstNovelUrl = novelListing.items.first().list.first().url
-                    val novelLoad = provider.load(firstNovelUrl) as? TvSeriesLoadResponse
-                        ?: error("novel load failed for $firstNovelUrl")
-                    check(novelLoad.episodes.isNotEmpty()) { "novel episodes empty for $firstNovelUrl" }
+                    val novelLoad = provider.load(firstNovelUrl) ?: error("novel load failed for $firstNovelUrl")
+                    val novelPlayData = when (novelLoad) {
+                        is TvSeriesLoadResponse -> {
+                            check(novelLoad.episodes.isNotEmpty()) { "novel episodes empty for $firstNovelUrl" }
+                            novelLoad.episodes.first().data
+                        }
+                        is MovieLoadResponse -> novelLoad.dataUrl
+                        else -> error("unexpected novel LoadResponse: ${novelLoad.javaClass.simpleName}")
+                    }
 
                     val wweListing = provider.getMainPage(1, MainPageRequest("WWE", "listing:wwe", false))
                     val firstWweUrl = wweListing.items.first().list.first().url
-                    val wweLoad = provider.load(firstWweUrl) as? TvSeriesLoadResponse
-                        ?: error("wwe load failed for $firstWweUrl")
-                    check(wweLoad.episodes.isNotEmpty()) { "wwe episodes empty for $firstWweUrl" }
+                    val wweLoad = provider.load(firstWweUrl) ?: error("wwe load failed for $firstWweUrl")
+                    val wwePlayData = when (wweLoad) {
+                        is TvSeriesLoadResponse -> {
+                            check(wweLoad.episodes.isNotEmpty()) { "wwe episodes empty for $firstWweUrl" }
+                            wweLoad.episodes.first().data
+                        }
+                        is MovieLoadResponse -> wweLoad.dataUrl
+                        else -> error("unexpected wwe LoadResponse: ${wweLoad.javaClass.simpleName}")
+                    }
 
                     val castMovieUrl = "https://cinecalidad.org/peliculas/bulldozer-2022/"
                     check(provider.load(castMovieUrl) != null) { "subtitled movie load failed" }
@@ -92,6 +105,8 @@ object PlaybackProbe {
                         "movie Subtitulado Bulldozer" to castMovieUrl,
                         "series ep1 (${firstShowUrl.substringAfter("/series/").trimEnd('/')})" to seriesLoad.episodes.first().data,
                         "anime ep1 (${firstAnimeUrl.substringAfter("/animes/").trimEnd('/')})" to animeLoad.episodes.first().data,
+                        "novel (${firstNovelUrl.substringAfter("/novelas/").trimEnd('/')})" to novelPlayData,
+                        "wwe (${firstWweUrl.substringAfter("/wwe/").trimEnd('/')})" to wwePlayData,
                     )
                     csiLoad?.episodes?.firstOrNull()?.data?.let { epData ->
                         targets += "csi-miami ep1" to epData

@@ -11,7 +11,7 @@ cloudstream {
     description = "Películas, series, anime y novelas de Cinecalidad.org en español."
     authors = listOf("Menorah")
     status = 3
-    tvTypes = listOf("Movie", "TvSeries", "Anime")
+    tvTypes = listOf("Movie", "TvSeries", "Anime", "AnimeMovie")
     language = "es"
 }
 

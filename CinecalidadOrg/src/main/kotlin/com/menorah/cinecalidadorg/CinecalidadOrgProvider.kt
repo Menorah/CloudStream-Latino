@@ -24,7 +24,7 @@ class CinecalidadOrgProvider : MainAPI() {
     override var lang = "es"
     override val hasMainPage = true
     override val hasQuickSearch = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AnimeMovie)
 
     override val getMainPageTimeoutMs: Long? = 120_000L
     override val searchTimeoutMs: Long? = 45_000L
@@ -284,10 +284,36 @@ class CinecalidadOrgProvider : MainAPI() {
             }
 
             val episodes = loadAllEpisodes(detail.id)
-            if (episodes.isEmpty()) return@coroutineScope null
-
             val actors = castDeferred.await().map { ActorData(Actor(it.name, it.imageUrl), roleString = it.role) }
             val recommendations = responses(relatedDeferred.await().filter { it.url != detail.url })
+
+            if (episodes.isEmpty()) {
+                // Single-video events (such as WWE PPVs or anime/special releases without episode lists) expose embeds directly by postId.
+                val hasDirectEmbeds = runCatching {
+                    CinecalidadOrgApi.parsePlayerEmbeds(getJson(CinecalidadOrgApi.buildPlayerUrl(detail.id))).isNotEmpty()
+                }.getOrDefault(false)
+                if (!hasDirectEmbeds) return@coroutineScope null
+                val singleType = if (CinecalidadOrgApi.isAnimeType(detail.postType)) TvType.AnimeMovie else TvType.Movie
+                return@coroutineScope newMovieLoadResponse(
+                    detail.title,
+                    detail.url,
+                    singleType,
+                    CinecalidadOrgApi.buildPlayerUrl(detail.id),
+                ) {
+                    posterUrl = detail.poster
+                    backgroundPosterUrl = detail.backdrop
+                    logoUrl = detail.logo
+                    plot = detail.overview
+                    year = detail.year
+                    duration = detail.durationMinutes
+                    tags = genreTags
+                    score = Score.from10(detail.rating)
+                    this.recommendations = recommendations
+                    if (actors.isNotEmpty()) this.actors = actors
+                    addTrailer(detail.trailerUrl)
+                }
+            }
+
             val tvType = if (CinecalidadOrgApi.isAnimeType(detail.postType)) TvType.Anime else TvType.TvSeries
 
             val episodeItems = episodes.map { ep ->
