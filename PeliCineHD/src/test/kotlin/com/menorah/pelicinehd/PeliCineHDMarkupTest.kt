@@ -223,7 +223,7 @@ class PeliCineHDMarkupTest {
     @Test
     fun `el claro largo de cloudflare no se confunde con el reto`() {
         val real = "<html><head><title>Inicio</title></head><body>" +
-            "<script src="/cdn-cgi/challenge-platform/x"></script>" +
+            "<script src=\"/cdn-cgi/challenge-platform/x\"></script>" +
             "PeliCineHD ".repeat(6000) + "</body></html>"
         assertFalse(PeliCineHDMarkup.isChallenge(200, real))
     }
