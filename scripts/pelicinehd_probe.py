@@ -15,32 +15,54 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3900]}", flush=True)
 
 
+def unpack_packed(text):
+    m = re.search(r"(?s)\}\s*\('(.*)',\s*(.*?),\s*(\d+),\s*'(.*?)'\.split\('\|'\)", text)
+    if not m:
+        return None
+    payload, radix_s, _, words_s = m.groups()
+    radix = int(radix_s)
+    words = words_s.split("|")
+    abc = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    def dec(mat):
+        tok = mat.group(0)
+        n = 0
+        for ch in tok:
+            if ch not in abc[:radix]:
+                return tok
+            n = n * radix + abc.index(ch)
+        return words[n] if n < len(words) and words[n] else tok
+    return re.sub(r"\b[a-zA-Z0-9_]+\b", dec, payload.replace("\\'", "'"))
+
+
 def probe_hosts():
     from curl_cffi import requests as cffi_req
     out = {}
     for name, url in [
         ("morencius", "https://morencius.com/embed/15tgiexsgp7h"),
         ("minochinos", "https://minochinos.com/embed/td9hewhsozc5"),
-        ("minochinos2", "https://minochinos.com/embed/8ky4mil4vy79"),
     ]:
         try:
             r = cffi_req.get(url, impersonate="chrome131", headers={"Referer": BASE + "/"}, timeout=20)
-            doc = BeautifulSoup(r.text, "html.parser")
-            packed = [s.get_text()[:300] for s in doc.select("script") if "eval(function(p,a,c,k,e," in s.get_text()]
-            scripts = [s.get("src") for s in doc.select("script[src]")]
-            out[name] = {
-                "code": r.status_code,
-                "final": str(r.url),
-                "server": r.headers.get("server"),
-                "title": doc.title.get_text(strip=True) if doc.title else None,
-                "len": len(r.text),
-                "packed_count": len(packed),
-                "scripts": scripts[:10],
-                "head": r.text[:900],
-            }
+            unp = unpack_packed(r.text) or ""
+            urls = re.findall(r"https?://[^\s\"'<>]+", unp)
+            rel_m3u8 = re.findall(r"[\"'](/[^\"']+\.(?:m3u8|txt)[^\"']*)[\"']", unp)
+            stream_test = {}
+            for cand in urls + [urllib.parse.urljoin(str(r.url), p) for p in rel_m3u8]:
+                if any(k in cand for k in [".m3u8", ".txt", "master", "hls"]):
+                    origin = f"{urllib.parse.urlsplit(str(r.url)).scheme}://{urllib.parse.urlsplit(str(r.url)).netloc}"
+                    sr = cffi_req.get(cand, impersonate="chrome131", headers={"Referer": str(r.url), "Origin": origin}, timeout=15)
+                    stream_test["master"] = {"url": cand, "code": sr.status_code, "ct": sr.headers.get("content-type"), "head": sr.text[:350]}
+                    if "#EXTM3U" in sr.text:
+                        lines = [ln.strip() for ln in sr.text.splitlines() if ln.strip() and not ln.startswith("#")]
+                        if lines:
+                            child = urllib.parse.urljoin(str(sr.url), lines[0])
+                            cr = cffi_req.get(child, impersonate="chrome131", headers={"Referer": str(r.url), "Origin": origin}, timeout=15)
+                            stream_test["child"] = {"url": child, "code": cr.status_code, "ct": cr.headers.get("content-type"), "head": cr.text[:250]}
+                    break
+            out[name] = {"final": str(r.url), "unpacked": unp[:900], "urls": urls[:8], "rel": rel_m3u8[:5], "stream": stream_test}
         except Exception as e:
             out[name] = {"error": str(e)}
-    emit("0_host_probe", out)
+    emit("0_host_unpack", out)
 
 
 async def try_solve_cf_and_probe():
@@ -57,13 +79,18 @@ async def try_solve_cf_and_probe():
         await page.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
 
         clicked = []
-        for step in range(8):
-            await asyncio.sleep(2.5)
+        for step in range(15):
+            await asyncio.sleep(2.0)
             title = await page.title()
             html = await page.content()
+            cookies = await context.cookies()
+            has_cf = any(c["name"] == "cf_clearance" for c in cookies)
             if "Un momento" not in title and "Just a moment" not in title and len(html) > 20000:
                 break
-            frames = [{"url": f.url, "name": f.name} for f in page.frames]
+            if has_cf and step >= 6:
+                await page.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(2.0)
+                continue
             for f in page.frames:
                 if "challenges.cloudflare.com" in (f.url or ""):
                     try:
@@ -88,11 +115,11 @@ async def try_solve_cf_and_probe():
             "clicked": clicked[:4],
             "cookies": [c["name"] for c in cookies],
             "has_cf": any(c["name"] == "cf_clearance" for c in cookies),
-            "frames": [f.url[:120] for f in page.frames],
+            "url": page.url,
         })
         if "Un momento" in title or "Just a moment" in title or len(html) < 20000:
             await browser.close()
-            return False
+            return
 
         async def get_doc(path_or_url):
             url = urllib.parse.urljoin(BASE + "/", path_or_url)
@@ -153,34 +180,16 @@ async def try_solve_cf_and_probe():
                 if src and "youtube" not in src and not src.startswith("about:"):
                     wrappers.append(urllib.parse.urljoin(BASE + "/", src))
         wrap_out = []
-        for wurl in list(dict.fromkeys(wrappers))[:4]:
+        for wurl in list(dict.fromkeys(wrappers))[:5]:
             wu, whtml, wdoc = await get_doc(wurl)
             h_ifr = [urllib.parse.urljoin(wu, i.get("src") or i.get("data-src")) for i in wdoc.select("iframe") if (i.get("src") or i.get("data-src"))]
             wrap_out.append({"w": wurl, "final": wu, "iframes": h_ifr, "html": whtml[:450] if not h_ifr else ""})
         emit("7_ep_wrappers", {"ep_url": eu, "ep_players": [str(x)[:650] for x in edoc.select("ul.aa-tbs-video, [id^=options-], iframe")[:5]], "wrappers": wrap_out})
         await browser.close()
-        return True
 
 
 try:
     probe_hosts()
-    ok = asyncio.run(try_solve_cf_and_probe())
-    if not ok:
-        # Try camoufox fallback
-        try:
-            from camoufox.sync_api import Camoufox
-            with Camoufox(headless=False) as browser:
-                page = browser.new_page()
-                page.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
-                import time
-                for _ in range(10):
-                    time.sleep(2)
-                    t = page.title()
-                    h = page.content()
-                    if "moment" not in t.lower() and len(h) > 20000:
-                        break
-                emit("8_camoufox", {"title": page.title(), "len": len(page.content()), "url": page.url})
-        except Exception as ce:
-            emit("8_camoufox_err", str(ce))
+    asyncio.run(try_solve_cf_and_probe())
 except BaseException as exc:
     emit("probe_error", {"type": type(exc).__name__, "tb": traceback.format_exc()})
