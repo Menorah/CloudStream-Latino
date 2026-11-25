@@ -18,11 +18,12 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3900]}", flush=True)
 
 
-cj = http.cookiejar.CookieJar()
-opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+def make_opener():
+    cj = http.cookiejar.CookieJar()
+    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj)), cj
 
 
-def req_url(url, data=None, referer=None, raw_body=None, origin=None):
+def req_url(opener, url, data=None, referer=None, raw_body=None, origin=None):
     headers = {
         "User-Agent": UA,
         "Accept": "*/*",
@@ -48,41 +49,87 @@ def req_url(url, data=None, referer=None, raw_body=None, origin=None):
 
 
 try:
-    movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
-    mst, _, _, m_html = req_url(movie_url)
-    ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
-    ft_url = ft_el["href"] if ft_el else "https://financialtrust.info/l.php?o=ZXFNNUNsWU85bFJsck1jMzZMenBMdVl4YzJJZUhRZnJvRGZSTW9wVkhMY2QyWWN1TmpGRnpPNHZoV21xUDhnM0k5NUNqYWdzVFh0bVp3VkJyTS9WTjVJSDUyY1hkV2FDOE1TQXcwRUFpVFRTM3J5eTlWdWxiNEQwTGdNU1hrd24="
-
-    _, cur, _, body = req_url(ft_url, referer=movie_url)
-    form = BeautifulSoup(body, "html.parser").select_one("form")
-    inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
-    st, cur2, _, body2 = req_url(urllib.parse.urljoin(cur, form["action"]), data=inputs, referer=cur)
-    api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
-    link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
-    cd = re.search(r'countdownTime:\s*"([^"]+)"', body2).group(1)
-    emit("1_start", {"st": st, "apiKey": api_key, "cd": cd, "cookies": [c.name + "=" + c.value for c in cj]})
-
-    # Send "a" (verifyServer) with Origin header just like fetch("/check.php")!
-    sa, _, _, ba = req_url("https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/", origin="https://financialtrust.info")
-    # Also simulate fotise.com open + ccounter
-    _, _, _, fbody = req_url("https://fotise.com", data={"openAds": api_key, "formAd": "hs8mOLoaWTlzHDdm", "el_link": link_out}, referer="https://financialtrust.info/")
-    aj_st, _, _, aj_b = req_url("https://fotise.com/wp-admin/admin-ajax.php", raw_body="cc=1&action=ccounter", referer="https://financialtrust.info/", origin="https://financialtrust.info")
-    emit("2_a_and_cc", {"sa": (sa, ba[:200]), "ajax": (aj_st, aj_b[:200])})
-
-    # Wait 47s WITHOUT touching /check.php("c")!
-    time.sleep(47)
-    sc, _, _, bc = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/", origin="https://financialtrust.info")
-    r_url = f"https://financialtrust.info/r.php?f={urllib.parse.quote(link_out)}&t={urllib.parse.quote(api_key)}"
-    rst, rcur, _, rbody = req_url(r_url, referer="https://financialtrust.info/")
-    rs = BeautifulSoup(rbody, "html.parser")
-    emit("3_final", {
-        "sc": (sc, bc[:200]),
-        "rst": rst,
-        "rcur": rcur,
-        "title": rs.title.string if rs.title else None,
-        "links": [[a.get_text(" ", strip=True), a.get("href")] for a in rs.select("a[href]")][:30],
-        "body": rbody[:2500],
+    op0, _ = make_opener()
+    # 1) First inspect the already-known hdpastes URL directly!
+    hst, hcur, hhdr, hbody = req_url(op0, "https://hdpastes.com/?v=dfys01-i5airggpc", referer="https://financialtrust.info/")
+    hs = BeautifulSoup(hbody, "html.parser")
+    emit("1_hdpaste_direct", {
+        "st": hst,
+        "url": hcur,
+        "title": hs.title.string if hs.title else None,
+        "links": [[a.get_text(" ", strip=True), a.get("href")] for a in hs.select("a[href]")][:40],
+        "forms": [[f.get("action"), [i.get("name") for i in f.select("input")]] for f in hs.select("form")],
+        "text": hs.get_text(" ", strip=True)[:1500],
     })
+
+    # 2) Also grab multiple URLs from homepage (movie 1080p ligera, 4K, episode pack) and unlock them in parallel!
+    _, _, _, home = req_url(op0, "https://pelisenhd.org/")
+    hs_home = BeautifulSoup(home, "html.parser")
+    post_links = []
+    for a in hs_home.select("a[href*='/pelicula-'], a[href*='/series-tv-'], a[href*='/episodio-']"):
+        u = a.get("href")
+        if u and u not in post_links:
+            post_links.append(u)
+    # Also fetch an episode page from Blade Runner 2099 / Rings of Power or first series
+    ep_candidates = [u for u in post_links if "/series-tv-" in u][:1]
+    if ep_candidates:
+        _, _, _, s_html = req_url(op0, ep_candidates[0])
+        for a in BeautifulSoup(s_html, "html.parser").select("a[href*='/episodio-']"):
+            if a.get("href") not in post_links:
+                post_links.append(a.get("href"))
+                break
+
+    targets = []
+    for u in post_links:
+        if any(k in u for k in ("ligera", "pesada", "episodio", "1080p", "4k")) or len(targets) < 3:
+            if "/series-tv-" not in u and u not in targets:
+                targets.append(u)
+        if len(targets) >= 3:
+            break
+
+    emit("2_targets", targets)
+
+    sessions = []
+    for u in targets:
+        op, cj = make_opener()
+        mst, _, _, m_html = req_url(op, u)
+        ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
+        if not ft_el:
+            emit("2b_skip", {"u": u, "mst": mst})
+            continue
+        ft_url = ft_el["href"]
+        _, cur, _, body = req_url(op, ft_url, referer=u)
+        form = BeautifulSoup(body, "html.parser").select_one("form")
+        inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
+        _, cur2, _, body2 = req_url(op, urllib.parse.urljoin(cur, form["action"]), data=inputs, referer=cur)
+        api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
+        link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
+        cd = re.search(r'countdownTime:\s*"([^"]+)"', body2).group(1)
+        sa, _, _, _ = req_url(op, "https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/", origin="https://financialtrust.info")
+        sessions.append((u, op, api_key, link_out, sa, cd))
+
+    # Also inspect raw HTML of hdpastes paste if it has JS tabs/scripts
+    emit("3_hdpaste_raw_html", hbody[:3500])
+
+    if sessions:
+        time.sleep(47)
+        for idx, (u, op, api_key, link_out, sa, cd) in enumerate(sessions):
+            sc, _, _, _ = req_url(op, "https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/", origin="https://financialtrust.info")
+            r_url = f"https://financialtrust.info/r.php?f={urllib.parse.quote(link_out)}&t={urllib.parse.quote(api_key)}"
+            _, _, _, rbody = req_url(op, r_url, referer="https://financialtrust.info/")
+            m_hd = re.search(r'https://hdpastes\.com/[^"\'\s]+', rbody)
+            hd_url = m_hd.group(0) if m_hd else None
+            hd_info = {}
+            if hd_url:
+                hst2, _, _, hb2 = req_url(op, hd_url, referer="https://financialtrust.info/")
+                s2 = BeautifulSoup(hb2, "html.parser")
+                hd_info = {
+                    "hst": hst2,
+                    "title": s2.title.string if s2.title else None,
+                    "text": s2.get_text(" ", strip=True)[:1200],
+                    "links": [[a.get_text(" ", strip=True), a.get("href")] for a in s2.select("a[href]")][:40],
+                }
+            emit(f"4_unlocked_{idx}", {"src": u, "sc": sc, "hd_url": hd_url, "hd": hd_info})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
