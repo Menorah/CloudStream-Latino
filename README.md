@@ -1,24 +1,24 @@
 # CloudStream Latino
 
-Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/) [PoseidonHD 2](https://www.poseidonhd2.co/). Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
+Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/), [PoseidonHD 2](https://www.poseidonhd2.co/) y [PeliCineHD](https://pelicinehd.com/). Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
 
 ## Instalación
 
-El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json` y los ocho complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelis24Shop.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `PoseidonHD2.cs3`) en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
+El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json` y los nueve complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelis24Shop.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `PoseidonHD2.cs3`, `PeliCineHD.cs3`) en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
 
-1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los ocho complementos.
+1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los nueve complementos.
 2. En CloudStream abre **Ajustes → Extensiones → Repositorios → Añadir repositorio**.
 3. Pega esta URL:
 
    `https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo.json`
 
-4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelis24.shop**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **PoseidonHD2** o los que desees y activa los proveedores en español si es necesario.
+4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelis24.shop**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **PoseidonHD2**, **PeliCineHD** o los que desees y activa los proveedores en español si es necesario.
 
 Como alternativa para pruebas privadas, descarga el artefacto `AnimeOnlineNinja` desde la ejecución de Actions, extrae el `.cs3` deseado e impórtalo localmente en CloudStream si tu versión admite instalación de archivos locales. La descarga del artefacto requiere iniciar sesión en GitHub.
 
 ## Compilación
 
-Necesitas JDK 17, Android SDK 35 y acceso a los repositorios Maven/JitPack y a las releases de CloudStream. Ejecuta `./gradlew make makePluginsJson`. Los paquetes se generan en `AnimeOnlineNinja/build/AnimeOnlineNinja.cs3`, `VerAni/build/VerAni.cs3`, `Repelis24CZ/build/Repelis24CZ.cs3`, `RePelis24Shop/build/RePelis24Shop.cs3`, `RePelisHD/build/RePelisHD.cs3`, `CinecalidadAM/build/CinecalidadAM.cs3`, `CinecalidadMY/build/CinecalidadMY.cs3`, y `PoseidonHD2/build/PoseidonHD2.cs3`; el índice, en `build/plugins.json`. El flujo de ramas y PR solo sube un artefacto; únicamente una ejecución exitosa de `main` actualiza la release. Si las políticas de Actions restringen la escritura, habilita el permiso de escritura de contenidos para el flujo de publicación.
+Necesitas JDK 17, Android SDK 35 y acceso a los repositorios Maven/JitPack y a las releases de CloudStream. Ejecuta `./gradlew make makePluginsJson`. Los paquetes se generan en `AnimeOnlineNinja/build/AnimeOnlineNinja.cs3`, `VerAni/build/VerAni.cs3`, `Repelis24CZ/build/Repelis24CZ.cs3`, `RePelis24Shop/build/RePelis24Shop.cs3`, `RePelisHD/build/RePelisHD.cs3`, `CinecalidadAM/build/CinecalidadAM.cs3`, `CinecalidadMY/build/CinecalidadMY.cs3`, `PoseidonHD2/build/PoseidonHD2.cs3` y `PeliCineHD/build/PeliCineHD.cs3`; el índice, en `build/plugins.json`. El flujo de ramas y PR solo sube un artefacto; únicamente una ejecución exitosa de `main` actualiza la release. Si las políticas de Actions restringen la escritura, habilita el permiso de escritura de contenidos para el flujo de publicación.
 
 ## Limitaciones
 
@@ -80,3 +80,9 @@ Incluye películas, series, búsqueda, catálogos por idioma y género, portadas
 ### Categorías de Cinecalidad.am
 
 La página principal incluye Destacados, Series, los géneros del sitio y secciones por los ocho años más recientes. Para consultar cualquier otro año del archivo, escribe sus cuatro cifras en la búsqueda (por ejemplo, `1995`); sus resultados se pueden seguir paginando. Esto evita cargar decenas de categorías de años a la vez.
+
+### PeliCineHD
+
+Incluye películas (`/movies/`), series (`/series/`), búsqueda paginada, las categorías del sitio, fichas completas con reparto, valoración y tráiler, carga de temporadas vía AJAX (`admin-ajax.php`) ordenada numéricamente y resolución de los envoltorios `/?trembed=` y de los reproductores propios (`Morencius` y `Minochinos` / `callistanise.com`, además de los extractores integrados como `Filemoon` y `Voe`), etiquetando cada fuente según el idioma indicado por la página (`Latino`, `Castellano`, `Subtitulado`) y priorizando las pistas `hls2` limpias frente a espejos rotos o enmascarados.
+
+Cuando Cloudflare exige verificación, el complemento intenta reutilizar las cookies resueltas por un `WebView` integrado con un `User-Agent` de Chrome móvil limpio (sin la marca `; wv`) tanto en peticiones `GET` como `POST`, manteniendo el `WebView` como transporte de respaldo si la red o el sitio rechazan el cliente HTTP. La disponibilidad de cada servidor y la resolución de Cloudflare pueden variar según la red y el dispositivo.

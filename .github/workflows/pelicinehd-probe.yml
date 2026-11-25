@@ -1,16 +1,32 @@
-name: Diagnóstico PeliCineHD
+name: Diagnóstico reproducción PeliCineHD
 on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['scripts/pelicinehd_probe.py', '.github/workflows/pelicinehd-probe.yml']
+    paths: ['PeliCineHD/**', 'scripts/playback_probe/PeliCineHDProbe.kt', 'scripts/playback_probe/run_pelicinehd_app.sh', '.github/workflows/pelicinehd-probe.yml']
 permissions:
   contents: read
 jobs:
-  browser_probe:
+  playback:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install curl_cffi
-      - run: python3 scripts/pelicinehd_probe.py
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Probar extractores y reproducción en CloudStream
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 28
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash scripts/playback_probe/run_pelicinehd_app.sh
