@@ -1,6 +1,6 @@
 ### PeliCineHD
 
-El sitio usa WordPress con el tema *torofilm*. El catálogo vive en `article.post.movies` / `article.post.series` (con `h2.entry-title`, `div.post-thumbnail img`, `span.year` y el enlace `a.lnk-blk`). La extensión incluye las dieciséis secciones del inicio (películas, series y los géneros del sitio), búsqueda paginada (`/?s=`, `/page/<n>/?s=`) y fichas completas: título, portada, sinopsis, año, géneros, reparto, duración y puntuación, además de recomendaciones.
+El sitio usa WordPress con el tema *torofilm*. El catálogo vive en `article.post.movies` / `article.post.series` (con `h2.entry-title`, `div.post-thumbnail img`, `span.year` y el enlace `a.lnk-blk`). La extensión incluye las diecisiete secciones del inicio (películas, series y los géneros del sitio), búsqueda paginada (`/?s=`, `/page/<n>/?s=`) y fichas completas: título, portada, sinopsis, año, géneros, reparto, duración y puntuación, además de recomendaciones.
 
 Las series necesitan un paso extra: la ficha solo dibuja **una** temporada. El resto se descubre en `div.choose-season a[data-post][data-season]` y se pide con el AJAX del propio tema (`POST /wp-admin/admin-ajax.php`, `action=action_select_season&season=&post=`), reutilizando el mismo analizador sobre la respuesta. La numeración sale de `span.num-epi` (`1x6`) y no se renumera: si el sitio salta un episodio, la lista conserva el hueco. Si la página no indica el `post` de la temporada, la temporada se lista igualmente y solo se omite la petición que no se puede hacer.
 
