@@ -387,34 +387,49 @@ class CinecalidadOrgProvider : MainAPI() {
         val playerUrl = resolvePlayerApiUrl(data) ?: return false
         val playerJson = getJson(playerUrl)
         val rawEmbeds = CinecalidadOrgApi.parsePlayerEmbeds(playerJson)
-        val embeds = rawEmbeds.sortedBy { CinecalidadOrgApi.safeHost(it.url, "videoapp.zip") }.take(24)
-        if (embeds.isEmpty()) return false
+        val directEmbeds = rawEmbeds.filterNot { CinecalidadOrgApi.safeHost(it.url, "videoapp.zip") }.take(20)
+        val wrapperEmbeds = rawEmbeds.filter { CinecalidadOrgApi.safeHost(it.url, "videoapp.zip") }.take(8)
+        if (directEmbeds.isEmpty() && wrapperEmbeds.isEmpty()) return false
 
         val emitted = AtomicBoolean(false)
         val lock = Any()
         val seen = Collections.synchronizedSet(mutableSetOf<String>())
+        val vimeosResolvedLangs = Collections.synchronizedSet(mutableSetOf<String>())
         val permits = Semaphore(5)
 
-        withTimeoutOrNull(45_000L) {
-            coroutineScope {
-                embeds.map { embed ->
-                    async(Dispatchers.IO) {
-                        permits.withPermit {
-                            withTimeoutOrNull(18_000L) {
-                                val resolved = resolveEmbed(embed, subtitleCallback)
-                                for (link in resolved) {
-                                    val labeled = labelLink(link, embed)
-                                    val key = "${labeled.url}|${embed.languageTag}"
-                                    if (!seen.add(key)) continue
-                                    synchronized(lock) {
-                                        emitted.set(true)
-                                        callback(labeled)
-                                    }
+        suspend fun processEmbeds(list: List<OrgEmbed>) = coroutineScope {
+            list.map { embed ->
+                async(Dispatchers.IO) {
+                    permits.withPermit {
+                        withTimeoutOrNull(18_000L) {
+                            val resolved = resolveEmbed(embed, subtitleCallback)
+                            for (link in resolved) {
+                                if (CinecalidadOrgApi.safeHost(embed.url, "vimeos.net") ||
+                                    link.name.contains("vimeos", ignoreCase = true)
+                                ) {
+                                    vimeosResolvedLangs.add(embed.languageTag)
+                                }
+                                val labeled = labelLink(link, embed)
+                                val key = "${labeled.url}|${embed.languageTag}"
+                                if (!seen.add(key)) continue
+                                synchronized(lock) {
+                                    emitted.set(true)
+                                    callback(labeled)
                                 }
                             }
                         }
                     }
-                }.awaitAll()
+                }
+            }.awaitAll()
+        }
+
+        withTimeoutOrNull(45_000L) {
+            if (directEmbeds.isNotEmpty()) {
+                processEmbeds(directEmbeds)
+            }
+            val neededWrappers = wrapperEmbeds.filter { it.languageTag !in vimeosResolvedLangs }
+            if (neededWrappers.isNotEmpty()) {
+                processEmbeds(neededWrappers)
             }
         }
         return emitted.get()

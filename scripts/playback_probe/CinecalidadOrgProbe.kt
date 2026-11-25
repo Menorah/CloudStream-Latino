@@ -71,6 +71,18 @@ object PlaybackProbe {
                         ?: error("anime load failed for $firstAnimeUrl")
                     check(animeLoad.episodes.isNotEmpty()) { "anime episodes empty for $firstAnimeUrl" }
 
+                    val novelListing = provider.getMainPage(1, MainPageRequest("Novelas", "listing:novels", false))
+                    val firstNovelUrl = novelListing.items.first().list.first().url
+                    val novelLoad = provider.load(firstNovelUrl) as? TvSeriesLoadResponse
+                        ?: error("novel load failed for $firstNovelUrl")
+                    check(novelLoad.episodes.isNotEmpty()) { "novel episodes empty for $firstNovelUrl" }
+
+                    val wweListing = provider.getMainPage(1, MainPageRequest("WWE", "listing:wwe", false))
+                    val firstWweUrl = wweListing.items.first().list.first().url
+                    val wweLoad = provider.load(firstWweUrl) as? TvSeriesLoadResponse
+                        ?: error("wwe load failed for $firstWweUrl")
+                    check(wweLoad.episodes.isNotEmpty()) { "wwe episodes empty for $firstWweUrl" }
+
                     val castMovieUrl = "https://cinecalidad.org/peliculas/bulldozer-2022/"
                     check(provider.load(castMovieUrl) != null) { "subtitled movie load failed" }
 
