@@ -79,7 +79,9 @@ class PeliCineHDRealMarkupTest {
         val episodes = PeliCineHDMarkup.episodes(page, 1)
         assertEquals(episodes.joinToString { "${it.season}x${it.number}" }, 11, episodes.size)
         assertEquals(1, episodes.first().number)
-        assertEquals(11, episodes.last().number)
+        // The site skipped 1x6 for this title; the parser must not renumber the rest.
+        assertEquals(12, episodes.last().number)
+        assertFalse(episodes.any { it.number == 6 })
         assertTrue(episodes.all { it.season == 1 })
         assertTrue(episodes.all { it.url.startsWith("https://pelicinehd.com/episode/") })
         assertEquals("https://pelicinehd.com/episode/adios-tierra-1x1/", episodes.first().url)
