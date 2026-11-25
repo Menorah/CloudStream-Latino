@@ -1,24 +1,24 @@
 # CloudStream Latino
 
-Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/) [PoseidonHD 2](https://www.poseidonhd2.co/). Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
+Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeonline.ninja/), [VerAni.me](https://verani.me/), [RePelis24.cz](https://repelis24.cz/), [RePelis24.shop](https://repelis24.shop/), [RePelisHD](https://repelishd.surf/), [Cinecalidad.am](https://www.cinecalidad.am/), [Cinecalidad.my](https://www.cinecalidad.my/), [PoseidonHD 2](https://www.poseidonhd2.co/) y [PeliCineHD](https://pelicinehd.com/). Ofrecen búsqueda, catálogos de series y películas, episodios y enlaces clasificados por idioma cuando el sitio proporciona esa información.
 
 ## Instalación
 
-El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json` y los ocho complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelis24Shop.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `PoseidonHD2.cs3`) en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
+El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json` y los nueve complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelis24Shop.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `PoseidonHD2.cs3`, `PeliCineHD.cs3`) en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
 
-1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los ocho complementos.
+1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los nueve complementos.
 2. En CloudStream abre **Ajustes → Extensiones → Repositorios → Añadir repositorio**.
 3. Pega esta URL:
 
    `https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo.json`
 
-4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelis24.shop**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **PoseidonHD2** o los que desees y activa los proveedores en español si es necesario.
+4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelis24.shop**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **PoseidonHD2**, **PeliCineHD** o los que desees y activa los proveedores en español si es necesario.
 
 Como alternativa para pruebas privadas, descarga el artefacto `AnimeOnlineNinja` desde la ejecución de Actions, extrae el `.cs3` deseado e impórtalo localmente en CloudStream si tu versión admite instalación de archivos locales. La descarga del artefacto requiere iniciar sesión en GitHub.
 
 ## Compilación
 
-Necesitas JDK 17, Android SDK 35 y acceso a los repositorios Maven/JitPack y a las releases de CloudStream. Ejecuta `./gradlew make makePluginsJson`. Los paquetes se generan en `AnimeOnlineNinja/build/AnimeOnlineNinja.cs3`, `VerAni/build/VerAni.cs3`, `Repelis24CZ/build/Repelis24CZ.cs3`, `RePelis24Shop/build/RePelis24Shop.cs3`, `RePelisHD/build/RePelisHD.cs3`, `CinecalidadAM/build/CinecalidadAM.cs3`, `CinecalidadMY/build/CinecalidadMY.cs3`, y `PoseidonHD2/build/PoseidonHD2.cs3`; el índice, en `build/plugins.json`. El flujo de ramas y PR solo sube un artefacto; únicamente una ejecución exitosa de `main` actualiza la release. Si las políticas de Actions restringen la escritura, habilita el permiso de escritura de contenidos para el flujo de publicación.
+Necesitas JDK 17, Android SDK 35 y acceso a los repositorios Maven/JitPack y a las releases de CloudStream. Ejecuta `./gradlew make makePluginsJson`. Los paquetes se generan en `AnimeOnlineNinja/build/AnimeOnlineNinja.cs3`, `VerAni/build/VerAni.cs3`, `Repelis24CZ/build/Repelis24CZ.cs3`, `RePelis24Shop/build/RePelis24Shop.cs3`, `RePelisHD/build/RePelisHD.cs3`, `CinecalidadAM/build/CinecalidadAM.cs3`, `CinecalidadMY/build/CinecalidadMY.cs3`, `PoseidonHD2/build/PoseidonHD2.cs3` y `PeliCineHD/build/PeliCineHD.cs3`; el índice, en `build/plugins.json`. El flujo de ramas y PR solo sube un artefacto; únicamente una ejecución exitosa de `main` actualiza la release. Si las políticas de Actions restringen la escritura, habilita el permiso de escritura de contenidos para el flujo de publicación.
 
 ## Limitaciones
 
@@ -62,6 +62,29 @@ Las imágenes (portadas, fondos de las fichas y miniaturas de episodios) se sirv
 El sitio responde con lentitud (unos 10-15 s por página incluso con la caché de Cloudflare caliente) y rechaza peticiones esporádicas. El complemento pide un máximo de ocho catálogos a la vez, reintenta cada página hasta tres veces con esperas cortas y devuelve un catálogo vacío en lugar de tumbar la pantalla de inicio si una sección falla; además amplía los tiempos de espera (`getMainPageTimeoutMs`, `searchTimeoutMs`, `loadTimeoutMs`) y usa 45 s por petición. Si aun así aparece «Connection Timeout», suele ser la red del dispositivo o un bloqueo temporal de Cloudflare: reintenta desde el botón de la pantalla o desde «Reintentar conexión», y comprueba que el sitio abra en el navegador del dispositivo.
 
 Los cambios del sitio pueden requerir ajustes: los flujos **Verificación real RePelis24.shop** y **Diagnóstico imágenes RePelis24.shop** (este último solo manual, desde la pestaña Actions) recorren catálogo, búsqueda, ficha, reproductores, temporadas, episodios, manifiesto y entrega de imágenes contra el sitio real y publican el resumen en las anotaciones del chequeo.
+
+### PeliCineHD
+
+El sitio usa WordPress con el tema *torofilm*. El catálogo vive en `article.post.movies` / `article.post.series` (con `h2.entry-title`, `div.post-thumbnail img`, `span.year` y el enlace `a.lnk-blk`). La extensión incluye las dieciséis secciones del inicio (películas, series y los géneros del sitio), búsqueda paginada (`/?s=`, `/page/<n>/?s=`) y fichas completas: título, portada, sinopsis, año, géneros, reparto, duración y puntuación, además de recomendaciones.
+
+Las series necesitan un paso extra: la ficha solo dibuja **una** temporada. El resto se descubre en `div.choose-season a[data-post][data-season]` y se pide con el AJAX del propio tema (`POST /wp-admin/admin-ajax.php`, `action=action_select_season&season=&post=`), reutilizando el mismo analizador sobre la respuesta. La numeración sale de `span.num-epi` (`1x6`) y no se renumera: si el sitio salta un episodio, la lista conserva el hueco. Si la página no indica el `post` de la temporada, la temporada se lista igualmente y solo se omite la petición que no se puede hacer.
+
+**Los reproductores.** Cada opción del panel (`aside#aa-options > div#options-<n>`) es un `iframe` hacia un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). Ese envoltorio responde de dos maneras distintas, y las dos están cubiertas:
+
+1. **Con el hoster ya dentro** (`<iframe src="https://morencius.com/v/<id>">`, Voe, etc.). Se pasa el hoster a los extractores de CloudStream.
+2. **Con un reproductor VidHide.** Aquí no hay ningún `<iframe>` ni `.m3u8` en el HTML: el setup de JW Player está oculto en un bloque `eval(function(p,a,c,k,e,d)…)`. El complemento lo **desempaqueta** (`PeliCineHDMarkup.unpack`) y obtiene el manifiesto HLS firmado, que se entrega directamente al reproductor con el `Referer` de la página del hoster y la etiqueta del idioma del panel.
+
+Este segundo caso era la causa del «Enlaces no encontrados»: `loadExtractor` elige el extractor **por dominio**, y el hoster propio del sitio (`morencius.com`, un clon de VidHide) no está entre los que trae CloudStream, así que la URL embebida no encontraba extractor. Ahora se resuelve por dos vías: el clon se registra en el plugin (`Morencius : VidHidePro()`) y, si aun así fallara, el manifiesto desempaquetado se reproduce igual porque su CDN sí es un HLS normal.
+
+El desempaquetado no usa el `JsUnpacker` de CloudStream a propósito: este sitio ofusca con **radix 36** y sustituye los tokens en **una sola pasada** (`while(c--)` sobre el diccionario), mientras que el decodificador genérico usa el alfabeto de 62 caracteres y el recorrido ordenado. Con esas dos diferencias el resultado era vacío, no un error visible, así que el algoritmo vive en el complemento y está cubierto por pruebas con las páginas reales del reproductor guardadas en `PeliCineHD/src/test/resources/` (`vidhide-player-real.html`, `vidhide-player-episode-real.html`).
+
+**Cloudflare.** El sitio está detrás de Cloudflare y a algunas redes les responde con el desafío («Just a moment…»), a veces con `403` y a veces con un `200` cuyo cuerpo *es* la página del desafío. El complemento usa dos transportes: primero HTTP (con `Accept`, `Accept-Language`, `Upgrade-Insecure-Requests` y `Referer`), y si recibe `403/429/503` o el interstitial, abre el sitio **una sola vez** en el WebView fuera de pantalla para resolver el desafío y reutiliza las cookies (`cf_clearance`) en las peticiones HTTP siguientes. El WebView se identifica con un User-Agent de Chrome para Android **sin `; wv`** (Cloudflare trata `wv` como bot) y las peticiones HTTP no envían User-Agent propio, porque la cookie está atada al del navegador que la obtuvo. Una sesión normal abre el navegador una vez, no una vez por página.
+
+Si ocho secciones fallan seguidas sin ningún éxito, la pantalla muestra el motivo real en lugar de quedarse vacía. Un `404` no se confunde con un rechazo: solo `403/429/503` y el interstitial activan la vía del navegador. Las pruebas también cubren que un `200` con la página del desafío nunca se analice como catálogo.
+
+**Estado de la verificación.** Los flujos de GitHub Actions se ejecutan sin WebView y desde IP de centro de datos, que recibe el desafío: sirven para comprobar el analizador, no la ruta con navegador. Por eso el HTML real del sitio (inicio, catálogo paginado, ficha de película con dos reproductores, ficha de serie con tres temporadas, página de episodio y las páginas del reproductor) se guarda en `PeliCineHD/src/test/resources/` y se usa en pruebas unitarias: un cambio del tema rompe una prueba antes de llegar a la aplicación. La reproducción real depende de los extractores instalados y de la red del dispositivo; si un servidor falla, prueba otra opción del panel.
+
+El bloqueo de Cloudflare depende de la reputación de la IP: el complemento reintenta cada página hasta tres veces con esperas cortas. Si aun así aparece el desafío, suele resolverse abriendo el sitio en el navegador del dispositivo o cambiando de red. La caché de imágenes de CloudStream puede conservar una respuesta de error anterior: bórrala si una portada queda en blanco.
 
 ### PoseidonHD 2
 
