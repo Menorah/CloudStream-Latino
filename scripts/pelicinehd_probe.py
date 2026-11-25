@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import json
+import os
+import shutil
 import time
+import traceback
 import urllib.parse
 from bs4 import BeautifulSoup
 
@@ -14,9 +17,14 @@ def emit(tag, obj):
 
 
 def run_browser_probe():
+    emit("0_env", {
+        "chrome": shutil.which("google-chrome"),
+        "chromium": shutil.which("chromium") or shutil.which("chromium-browser"),
+        "display": os.environ.get("DISPLAY"),
+    })
     from seleniumbase import SB
 
-    with SB(uc=True, test=True, headless=False) as sb:
+    with SB(uc=True, headless=False, chromium_arg="--no-sandbox") as sb:
         sb.uc_open_with_reconnect(BASE + "/", 6)
         for _ in range(10):
             title = sb.get_title()
@@ -51,7 +59,6 @@ def run_browser_probe():
             h = sb.get_page_source()
             return sb.get_current_url(), h, BeautifulSoup(h, "html.parser")
 
-        # 1. Home
         doc = BeautifulSoup(html, "html.parser")
         nav_links = []
         for el in doc.select("header a[href], nav a[href], .Menu a[href], .menu a[href], aside a[href]"):
@@ -72,7 +79,6 @@ def run_browser_probe():
                 })
         emit("2_home", {"body_cls": doc.body.get("class") if doc.body else None, "nav": nav_links[:60], "sections": sections[:6]})
 
-        # 2. Catalogs & Search
         cats = []
         for path in ["/peliculas/", "/peliculas/page/2/", "/series/", "/category/accion/", "/?s=avatar", "/page/2/?s=a", "/?s=zzzznotfound99999"]:
             u, _, cdoc = get_doc(path)
@@ -87,7 +93,6 @@ def run_browser_probe():
         emit("3_catalogs_a", cats[:3])
         emit("4_catalogs_b", cats[3:])
 
-        # 3. Movie page & Players
         mu, _, mdoc = get_doc("/movies/star-wars-the-mandalorian-and-grogu/")
         emit("5_movie_meta", {
             "url": mu,
@@ -97,7 +102,6 @@ def run_browser_probe():
         })
         emit("6_movie_dom", {"single": str(mdoc.select_one("article.TPost.Single, main, .Single"))[:3500]})
 
-        # 4. Series & Episode & AJAX
         su, _, sdoc = get_doc("/series/one-piece/")
         ep_links = [a.get("href") for a in sdoc.select("a[href]") if "/episode" in (a.get("href") or "")]
         season_els = [str(x)[:900] for x in sdoc.select("select, .choose-season, .aa-cnt, [data-post], [data-season], .episodes-list, ul.all-episodes")[:5]]
@@ -115,7 +119,6 @@ def run_browser_probe():
             """, posts[0])
         emit("7_series", {"url": su, "season_els": season_els, "ep_links": ep_links[:8], "posts": posts[:3], "ajax_s2": ajax_res})
 
-        # 5. Episode + Wrappers
         eu, _, edoc = get_doc("/episode/one-piece-1x1/")
         wrappers = []
         for d in (mdoc, edoc):
@@ -135,4 +138,7 @@ def run_browser_probe():
         })
 
 
-run_browser_probe()
+try:
+    run_browser_probe()
+except Exception:
+    emit("probe_exception", traceback.format_exc())
