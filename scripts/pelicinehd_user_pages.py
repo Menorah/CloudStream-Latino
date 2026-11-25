@@ -11,7 +11,7 @@ import sys
 import urllib.request
 import zipfile
 
-SOURCE = "https://tmpfiles.org/dl/1795575558.344cdfd5014f3e44/wyAFaaTTlcbA/paginaweb.zip"
+SOURCE = "https://tmpfiles.org/dl/1795609161.fab9af1600835bad/wyAFaaTTlcbA/paginaweb.zip"
 KEEP = {
     "PELICINEHD-": "home-user-real.html",
     "TODAS-LAS-PEL": "catalog-user-real.html",
@@ -19,6 +19,9 @@ KEEP = {
     "VER-LA-ODISEA": "movie-user-real.html",
     "VER-EL-SE": "series-user-real.html",
     "SAVED_RESOURCE.HTML": "embed-wrapper-user-real.html",
+    "A01XMF": "player-morencius-user.html",
+    "EI06PQ": "player-morencius-user-2.html",
+    "EL-SE-OR-DE-LOS-ANILLOS-LOS": "episode-user-real.html",
 }
 
 
