@@ -71,26 +71,12 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
-**Versión 8: la resolución del desafío sobrevive a las secciones.** La versión 7 quitó la espera de 180 s pero introdujo otro fallo: el inicio pide **16 secciones a la vez**, cada una con su propio límite de tiempo, y la resolución del desafío (la visita al navegador) se ejecutaba **dentro** de la coroutine de la sección. Al cumplirse el límite, la sección se cancelaba y **cancelaba la resolución con ella**; las 16 secciones, compitiendo por la misma resolución, se cancelaban entre sí y todas volvían vacías: categorías con nombre y ningún título.
+**Versión 9: vuelta a la base que funcionaba.** Las versiones 7 y 8 intentaron arreglar el tiempo de espera del inicio y empeoraron el complemento: el inicio tardaba más de 40 s y terminaba sin títulos. Se detuvo ese camino y se **restauró el código de la versión 5**, la que el usuario confirmó que funcionaba (catálogo, fichas, las tres temporadas y reproducción), con un solo cambio: la eliminación de la fila «Destacados», que era lo único pedido. Concretamente, respecto de la v5:
 
-Ahora la resolución corre en **su propio ámbito** (`CoroutineScope(SupervisorJob() + Dispatchers.IO)`), compartida por todas las peticiones: una sección que se rinde deja de esperar, pero **no** cancela la resolución; las demás se limitan a esperar el mismo trabajo y luego piden su página por HTTP con las cookies resultantes. Además:
+- Fuera la fila «Destacados» y el selector del carrusel (`heroCards`).
+- Todo lo demás idéntico: transporte con navegador + cookies, 3 intentos por página, 4 catálogos simultáneos y `getMainPageTimeoutMs` de 180 s.
 
-- El inicio **calienta la sesión una vez antes** de pedir secciones (máximo 45 s); si aun así falla, cada sección reintenta por su cuenta.
-- Reintentos de la visita al navegador con **enfriamiento de 20 s**, para que un fallo no abra el WebView en bucle.
-- Límite por sección 30 s, límite global de la pantalla 150 s.
-
-**Versión 7: el inicio ya no se queda esperando.** El aviso «Timed out waiting for 180000 ms» venía del propio límite de la pantalla de inicio, y la causa era un fallo de diseño del transporte: en cuanto el navegador resolvía la verificación una vez, **todas** las páginas siguientes se pedían dentro del WebView. Dieciséis secciones en paralelo, cada una cargando una página completa en un WebView, no caben en ningún plazo. Ahora:
-
-- El navegador se usa **para la página que lo necesita, no como transporte general**: resuelve la verificación una vez, entrega las cookies `cf_clearance` y las demás páginas van por HTTP con esas cookies.
-- Cada sección del inicio tiene un techo de **25 s**; si no responde, se descarta esa fila en lugar de retener la pantalla entera. Se piden **3 a la vez** (antes 4) y con **1 intento** en el inicio (antes 2-3).
-- El límite global de la pantalla baja de 180 s a **120 s**, para que un fallo se vea como error en lugar de una espera indefinida.
-
-**Versión 6: fuera la fila «Destacados».** La portada guardada por el usuario no contiene ninguna diapositiva de carrusel (solo el tema imprime el JS `owl_carousel`, sin diapositivas), así que esa fila salía siempre vacía. Se eliminó junto con el selector de carrusel: las filas son ahora las secciones reales del sitio (Películas, Series y sus géneros).
-
-**Versión 5: películas que se creían series y temporadas desordenadas.** Con las páginas reales guardadas por el usuario se midieron dos errores:
-
-- **Toda película se clasificaba como serie.** La ficha de una película (La Odisea, por ejemplo) también trae `<section class="section episodes">`, vacía, y esa marca bastaba para tratarla como serie: el complemento buscaba episodios, no había, y la pantalla mostraba «PeliCineHD devolvió la ficha pero ningún episodio». Ahora una página es serie solo si `article.post.single` tiene la clase `series`, si hay selector de temporada (`div.choose-season`) o si hay tarjetas de episodio reales (`article.post.episodes`, `#episode_by_temp`). Además, una ficha sin título informa un error propio en lugar de quedar vacía.
-- **Faltaba la tercera temporada.** El sitio imprime las temporadas desordenadas (`Season 2`, `Season 1`, `Season 3` en Los Anillos del Poder) y el número se deducía de la posición, quedándose en 2. Ahora se lee siempre de `data-season` y se ordena por número; `dt.n_s` (que en esa página vale 2, la temporal visible) solo se usa como respaldo y nunca para numerar el resto. La temporada que la página no dibuja se pide por AJAX, como antes.
+Lección aplicada: no se vuelve a tocar el transporte ni los tiempos sin una medición del dispositivo que lo justifique.
 
 **Versión 4: ficha, temporadas, reproductores y portada.**
 
