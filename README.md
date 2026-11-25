@@ -71,6 +71,12 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
+**Versión 7: el inicio ya no se queda esperando.** El aviso «Timed out waiting for 180000 ms» venía del propio límite de la pantalla de inicio, y la causa era un fallo de diseño del transporte: en cuanto el navegador resolvía la verificación una vez, **todas** las páginas siguientes se pedían dentro del WebView. Dieciséis secciones en paralelo, cada una cargando una página completa en un WebView, no caben en ningún plazo. Ahora:
+
+- El navegador se usa **para la página que lo necesita, no como transporte general**: resuelve la verificación una vez, entrega las cookies `cf_clearance` y las demás páginas van por HTTP con esas cookies.
+- Cada sección del inicio tiene un techo de **25 s**; si no responde, se descarta esa fila en lugar de retener la pantalla entera. Se piden **3 a la vez** (antes 4) y con **1 intento** en el inicio (antes 2-3).
+- El límite global de la pantalla baja de 180 s a **120 s**, para que un fallo se vea como error en lugar de una espera indefinida.
+
 **Versión 6: fuera la fila «Destacados».** La portada guardada por el usuario no contiene ninguna diapositiva de carrusel (solo el tema imprime el JS `owl_carousel`, sin diapositivas), así que esa fila salía siempre vacía. Se eliminó junto con el selector de carrusel: las filas son ahora las secciones reales del sitio (Películas, Series y sus géneros).
 
 **Versión 5: películas que se creían series y temporadas desordenadas.** Con las páginas reales guardadas por el usuario se midieron dos errores:
