@@ -43,40 +43,19 @@ try:
     _, _, _, m_html = req_url(movie_url)
     ms = BeautifulSoup(m_html, "html.parser")
     ft_url = ms.select_one("a[href*='financialtrust']")["href"]
-    emit("1_ft_url", {"ft_url": ft_url})
+    _, cur, _, body = req_url(ft_url, referer=movie_url)
+    soup = BeautifulSoup(body, "html.parser")
+    form = soup.select_one("form")
+    inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
+    action = urllib.parse.urljoin(cur, form["action"])
+    st, cur2, hdrs2, body2 = req_url(action, data=inputs, referer=cur)
 
-    st, cur, hdrs, body = req_url(ft_url, referer=movie_url)
-    emit("2_hop1", {"status": st, "url": cur, "body": body[:1500]})
+    emit("1_ft_body_tail", {"len": len(body2), "p1": body2[1400:4600], "p2": body2[4600:7800]})
 
-    for hop in range(3, 8):
-        soup = BeautifulSoup(body, "html.parser")
-        form = soup.select_one("form")
-        if form and form.get("action"):
-            action = urllib.parse.urljoin(cur, form["action"])
-            method = (form.get("method") or "GET").upper()
-            inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
-            emit(f"{hop}_form", {"action": action, "method": method, "inputs": list(inputs.keys())})
-            if method == "POST":
-                st, cur, hdrs, body = req_url(action, data=inputs, referer=cur)
-            else:
-                qs = urllib.parse.urlencode(inputs)
-                st, cur, hdrs, body = req_url(f"{action}?{qs}" if qs else action, referer=cur)
-            emit(f"{hop}_res", {
-                "status": st,
-                "url": cur,
-                "title": BeautifulSoup(body, "html.parser").title.string if BeautifulSoup(body, "html.parser").title else None,
-                "links": [[a.get_text(" ", strip=True), a.get("href")] for a in BeautifulSoup(body, "html.parser").select("a[href]")][:20],
-                "body": body[:2200],
-            })
-        else:
-            emit(f"{hop}_stop", {
-                "status": st,
-                "url": cur,
-                "scripts": [sc.get("src") for sc in soup.select("script[src]")],
-                "inline": [sc.string[:400] for sc in soup.select("script:not([src])") if sc.string][:5],
-                "body_tail": body[:1800],
-            })
-            break
+    _, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer=cur2)
+    emit("2_app_js", {"len": len(js_body), "js": js_body[:3200]})
+    if len(js_body) > 3200:
+        emit("3_app_js2", {"js": js_body[3200:6400]})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
