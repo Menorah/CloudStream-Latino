@@ -134,6 +134,7 @@ class PeliCineHDProvider : MainAPI() {
         var status = -1
         var body: String? = null
         var finalUrl = url
+        var tried = false
 
         runCatching {
             val response = app.get(url, headers = withReferer(referer), timeout = HTTP_TIMEOUT_S)
@@ -146,6 +147,7 @@ class PeliCineHDProvider : MainAPI() {
 
         if (body == null) {
             // Bloqueo del sitio: se pide el HTML al navegador, que sí entra.
+            tried = true
             val page = browser.get(url, referer ?: "$mainUrl/")
             if (page != null && page.code in 200..299 && !PeliCineHDMarkup.isChallenge(page.code, page.body)) {
                 status = page.code
@@ -155,12 +157,16 @@ class PeliCineHDProvider : MainAPI() {
         }
 
         val html = body ?: throw ErrorLoadingException(
-            if (status > 0) {
-                "PeliCineHD respondió HTTP $status y el navegador interno tampoco pudo cargar la página. " +
-                    "Abre pelicinehd.com en el navegador del dispositivo y vuelve a intentarlo."
-            } else {
-                "PeliCineHD no cargó: ni la petición directa ni el navegador interno recibieron la página. " +
-                    "Comprueba la conexión o usa una VPN y vuelve a intentarlo."
+            when {
+                // El sitio contestó (aunque fuese con 403): el problema está en el sitio o en el
+                // bloqueo, no en la conexión del dispositivo.
+                status > 0 && tried ->
+                    "PeliCineHD respondió HTTP $status y el navegador interno tampoco recibió la página. " +
+                        "Abre pelicinehd.com en el navegador del dispositivo y vuelve a intentarlo."
+                status > 0 ->
+                    "PeliCineHD respondió HTTP $status. Vuelve a intentarlo en unos minutos."
+                else ->
+                    "PeliCineHD no respondió: revisa la conexión (o usa una VPN) y vuelve a intentarlo."
             }
         )
 

@@ -1,4 +1,4 @@
-version = 9
+version = 10
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
