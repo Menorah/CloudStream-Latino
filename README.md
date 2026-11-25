@@ -71,6 +71,14 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
+**Versión 8: la resolución del desafío sobrevive a las secciones.** La versión 7 quitó la espera de 180 s pero introdujo otro fallo: el inicio pide **16 secciones a la vez**, cada una con su propio límite de tiempo, y la resolución del desafío (la visita al navegador) se ejecutaba **dentro** de la coroutine de la sección. Al cumplirse el límite, la sección se cancelaba y **cancelaba la resolución con ella**; las 16 secciones, compitiendo por la misma resolución, se cancelaban entre sí y todas volvían vacías: categorías con nombre y ningún título.
+
+Ahora la resolución corre en **su propio ámbito** (`CoroutineScope(SupervisorJob() + Dispatchers.IO)`), compartida por todas las peticiones: una sección que se rinde deja de esperar, pero **no** cancela la resolución; las demás se limitan a esperar el mismo trabajo y luego piden su página por HTTP con las cookies resultantes. Además:
+
+- El inicio **calienta la sesión una vez antes** de pedir secciones (máximo 45 s); si aun así falla, cada sección reintenta por su cuenta.
+- Reintentos de la visita al navegador con **enfriamiento de 20 s**, para que un fallo no abra el WebView en bucle.
+- Límite por sección 30 s, límite global de la pantalla 150 s.
+
 **Versión 7: el inicio ya no se queda esperando.** El aviso «Timed out waiting for 180000 ms» venía del propio límite de la pantalla de inicio, y la causa era un fallo de diseño del transporte: en cuanto el navegador resolvía la verificación una vez, **todas** las páginas siguientes se pedían dentro del WebView. Dieciséis secciones en paralelo, cada una cargando una página completa en un WebView, no caben en ningún plazo. Ahora:
 
 - El navegador se usa **para la página que lo necesita, no como transporte general**: resuelve la verificación una vez, entrega las cookies `cf_clearance` y las demás páginas van por HTTP con esas cookies.
