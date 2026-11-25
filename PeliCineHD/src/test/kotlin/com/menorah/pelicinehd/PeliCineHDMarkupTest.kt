@@ -297,7 +297,7 @@ class PeliCineHDMarkupTest {
         val html = """
             <html><body>
             <script>eval(function(p,a,c,k,e,d){e=function(c){return c.toString(36)};if(!''.replace(/^/,String)){while(c--){d[c.toString(36)]=k[c]||c.toString(36)}k=[function(e){return d[e]}];e=function(){return'\\w+'};c=1};while(c--){if(k[c]){p=p.replace(new RegExp('\\b'+e(c)+'\\b','g'),k[c])}}return p}('0.1="2";',3,3,'window|adLoaded|ok'.split('|'),0,{}))</script>
-            <script>eval(function(p,a,c,k,e,d){e=function(c){return c.toString(36)};if(!''.replace(/^/,String)){while(c--){d[c.toString(36)]=k[c]||c.toString(36)}k=[function(e){return d[e]}];e=function(){return'\\w+'};c=1};while(c--){if(k[c]){p=p.replace(new RegExp('\\b'+e(c)+'\\b','g'),k[c])}}return p}('0 1={"2":"3://4.5-6.7/2/a/b.8?t=9","c":"3://d.e.f/c/b.g","h":"/i/j/b.8"};k("l").m({n:[{o:1.h||1.c||1.2,p:"q"}],r:[{o:"/s?op=get_slides",t:"u"},{o:"3://v.5-6.7/w/b.x",y:"Español",t:"z"}]});',36,36,'var|links|hls2|https|pfabi|dramiyos|cdn|com|m3u8|sig123|01|master|hls3|bad|willowgrovelearning|store|txt|hls4|stream|E4JHcht9|jwplayer|vplayer|setup|sources|file|type|hls|tracks|dl|kind|thumbnails|cdn1|vtt|vtt|label|captions'.split('|'),0,{}))</script>
+            <script>eval(function(p,a,c,k,e,d){e=function(c){return c.toString(36)};if(!''.replace(/^/,String)){while(c--){d[c.toString(36)]=k[c]||c.toString(36)}k=[function(e){return d[e]}];e=function(){return'\\w+'};c=1};while(c--){if(k[c]){p=p.replace(new RegExp('\\b'+e(c)+'\\b','g'),k[c])}}return p}('0 1={"2":"3://4.5-6.7/2/a/b.8?tok=9","c":"3://d.e.f/c/b.g","h":"/i/j/b.8"};k("l").m({n:[{o:1.h||1.c||1.2,p:"q"}],r:[{o:"/s?op=get_slides",t:"u"},{o:"3://v.5-6.7/w/b.x",y:"Español",t:"z"}]});',36,36,'var|links|hls2|https|pfabi|dramiyos|cdn|com|m3u8|sig123|01|master|hls3|bad|willowgrovelearning|store|txt|hls4|stream|E4JHcht9|jwplayer|vplayer|setup|sources|file|type|hls|tracks|dl|kind|thumbnails|cdn1|vtt|vtt|label|captions'.split('|'),0,{}))</script>
             </body></html>
         """.trimIndent()
 
@@ -305,7 +305,7 @@ class PeliCineHDMarkupTest {
         assertEquals("https://callistanise.com", parsed.finalOrigin)
         // hls2 MUST come first (pure MPEG-TS); hls4 must resolve against redirected callistanise.com, never minochinos.com!
         assertEquals(listOf("hls2", "hls3", "hls4"), parsed.streams.map { it.key })
-        assertEquals("https://pfabi.dramiyos-cdn.com/hls2/01/master.m3u8?t=sig123", parsed.streams[0].url)
+        assertEquals("https://pfabi.dramiyos-cdn.com/hls2/01/master.m3u8?tok=sig123", parsed.streams[0].url)
         assertEquals("https://callistanise.com/stream/E4JHcht9/master.m3u8", parsed.streams[2].url)
         // Thumbnails track excluded; real caption track preserved.
         assertEquals(1, parsed.subtitles.size)

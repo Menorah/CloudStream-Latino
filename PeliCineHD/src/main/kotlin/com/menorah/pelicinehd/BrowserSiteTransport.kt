@@ -161,13 +161,19 @@ internal class BrowserSiteTransport(
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
-                        if (finished.get() || !PeliCineHDMarkup.siteUrl(url)) return
-                        val currentGeneration = generation
+                        checkReady(view, url, generation)
+                    }
+
+                    private fun checkReady(view: WebView, url: String, currentGeneration: Int) {
+                        if (finished.get() || generation != currentGeneration || !PeliCineHDMarkup.siteUrl(url)) return
                         val inspect = "JSON.stringify({url:location.href,text:document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1})})"
                         view.evaluateJavascript(inspect) { raw ->
                             if (finished.get() || generation != currentGeneration) return@evaluateJavascript
                             val page = parseValue(raw) ?: return@evaluateJavascript
-                            if (SiteClient.looksLikeChallenge(page.optString("text"))) return@evaluateJavascript
+                            if (SiteClient.looksLikeChallenge(page.optString("text"))) {
+                                handler.postDelayed({ checkReady(view, url, currentGeneration) }, 300L)
+                                return@evaluateJavascript
+                            }
                             if (status == 0) {
                                 finish(Result.failure(IllegalStateException("El navegador no pudo cargar PeliCineHD.")))
                             } else if (!fetchStarted) {
