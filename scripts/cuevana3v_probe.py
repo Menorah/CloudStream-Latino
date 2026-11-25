@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Compact single-line JSON probe for tungtungsahur.cuevana3v.pro, movie/series metadata, and downstream embeds."""
-import base64
+"""Inspect actual video hosts behind Cuevana3v.pro (Hyper, Nebula, Goldmember, Death Star, Trinity, Mahoutokoro)."""
 import json
 import re
 import urllib.error
@@ -8,16 +7,14 @@ import urllib.parse
 import urllib.request
 from bs4 import BeautifulSoup
 
-BASE = "https://cuevana3v.pro"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-    "Referer": f"{BASE}/",
 }
 
 
-def fetch(url: str, referer: str = f"{BASE}/"):
+def fetch(url: str, referer: str = "https://tungtungsahur.cuevana3v.pro/"):
     hdrs = dict(HEADERS)
     hdrs["Referer"] = referer
     req = urllib.request.Request(url, headers=hdrs)
@@ -27,40 +24,42 @@ def fetch(url: str, referer: str = f"{BASE}/"):
 
 def emit(tag: str, obj):
     line = json.dumps({tag: obj}, ensure_ascii=True).replace("%", "%25")
-    assert "\n" not in line
     for i in range(0, min(len(line), 7600), 3800):
         print("::notice::" + line[i : i + 3800])
 
 
-# 1. Exact inline script of tungtungsahur for Hyper token, Nebula token, and ?v=
-for label, url in [
-    ("t_hyper", "https://tungtungsahur.cuevana3v.pro/?token=1VkUEEAYMURVIQwNM"),
-    ("t_nebula", "https://tungtungsahur.cuevana3v.pro/?token=3G1tFFgZNVgZCS0lc"),
-    ("t_ep_hyper", "https://tungtungsahur.cuevana3v.pro/?token=1EQRBH1FFBVQZRl5e"),
-    ("t_v", "https://tungtungsahur.cuevana3v.pro/?v=aHR0cHM6Ly92c2VtYmVkLnJ1L2VtYmVkL21vdmllP3RtZGI9MTMwMDk2OCZkc19sYW5nPWVz"),
-]:
+hosts = [
+    ("hyper_hunger", "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/7q1v682peq0u"),
+    ("hyper_deriva", "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/ctqo0qlm4k4r"),
+    ("nebula_hunger", "https://vibuxer.com/e/zopp6y5coyze"),
+    ("nebula_deriva", "https://vibuxer.com/e/8jjtlsm270pf"),
+    ("goldmember", "https://vsembed.ru/embed/movie?tmdb=1300968&ds_lang=es"),
+    ("deathstar", "https://vidlink.pro/movie/1300968"),
+    ("trinity", "https://player.videasy.net/movie/1300968"),
+    ("mahoutokoro", "https://vidapi.xyz/embed/movie/1300968"),
+]
+
+for tag, url in hosts:
     try:
-        st, fu, hdrs, html = fetch(url, referer=f"{BASE}/")
-        s = BeautifulSoup(html, "html.parser")
-        main_script = next((sc.get_text() for sc in s.select("script:not([src])") if "loadVideo" in sc.get_text() or "videoUrl" in sc.get_text() or "params" in sc.get_text()), "")
-        emit(label, {"status": st, "url": fu, "body_no_ad": re.sub(r'\(function\(\)\{\s*var VAST_LIST.*?\}\)\(\)', '', main_script, flags=re.S)[:3400]})
+        st, fu, hdrs, body = fetch(url)
+        s = BeautifulSoup(body, "html.parser")
+        iframes = [i.get("src") or i.get("data-src") for i in s.select("iframe")]
+        scripts_src = [sc.get("src") for sc in s.select("script[src]")]
+        inline = [sc.get_text(strip=True)[:1000] for sc in s.select("script:not([src])") if sc.get_text(strip=True)]
+        m3u8_or_eval = re.findall(r'(?:https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*|eval\(function\(p,a,c,k,e,[dr]\).*?split\([^\)]+\))', body, re.S)
+        emit(tag, {
+            "status": st,
+            "final": fu,
+            "len": len(body),
+            "title": s.title.get_text(strip=True) if s.title else None,
+            "iframes": iframes,
+            "scripts_src": scripts_src[:8],
+            "inline": inline[:3],
+            "m3u8_eval": [x[:500] for x in m3u8_or_eval[:2]],
+            "head": body[:900],
+        })
+    except urllib.error.HTTPError as he:
+        err_body = he.read().decode("utf-8", "replace")[:400]
+        emit(tag, {"http_err": he.code, "url": he.geturl(), "headers": dict(he.headers), "body": err_body})
     except Exception as e:
-        emit(label, repr(e))
-
-# 2. Check /js/serie-player.js compactly
-try:
-    _, _, _, js = fetch(BASE + "/js/serie-player.js")
-    emit("serie_player_js", js[:3500])
-except Exception as e:
-    emit("serie_player_js", repr(e))
-
-# 3. Movie metadata structure + Episode/Series metadata structure
-for path in ["/pelicula/una-navidad-para-escribir-y-amar", "/serie/yellowjackets", "/serie/a-la-deriva-2/episodio-1x10"]:
-    _, _, _, html = fetch(BASE + path)
-    s = BeautifulSoup(html, "html.parser")
-    # Remove scripts, styles, header, footer to inspect content structure cleanly
-    for tag in s.select("script, style, svg, header, footer"):
-        tag.decompose()
-    main = s.select_one("main") or s.body
-    txt = str(main)
-    emit(f"dom:{path}", {"len": len(txt), "part1": txt[:3500], "part2": txt[3500:7000]})
+        emit(tag, {"err": repr(e)})
