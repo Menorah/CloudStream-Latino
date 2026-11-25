@@ -1,0 +1,30 @@
+name: HTML actual PeliCineHD
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'scripts/pelicinehd_fetch.py'
+      - '.github/workflows/pelicinehd-fetch.yml'
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Leer el catálogo a través de lectores públicos
+        run: |
+          python3 scripts/pelicinehd_fetch.py 2>&1 | while IFS= read -r line; do echo "::notice::$line"; done
+      - name: Guardar el HTML para revisarlo
+        if: always()
+        run: |
+          if [ -f pelicinehd-catalog.html ]; then
+            mkdir -p probe-results
+            mv pelicinehd-catalog.html probe-results/current-catalog.html
+            git config user.name "probe" && git config user.email "probe@example.com"
+            git add -f probe-results && git commit -q -m "Current pelicinehd catalogue HTML" || true
+            git pull --rebase -q origin arena/77383897-cloudstream-latino || true
+            git push origin HEAD:arena/77383897-cloudstream-latino || true
+          fi
