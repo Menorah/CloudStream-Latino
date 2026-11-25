@@ -71,6 +71,12 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
+**Cloudflare: identificación del cliente (corregido en la versión 3).** El WebView de Android añade `; wv` a su User-Agent, y Cloudflare trata cualquier `wv` como bot: responde `403` antes incluso de mostrar el desafío. Por eso la versión 2 seguía dando «HTTP 403» en el dispositivo aunque el sitio abriera bien en el navegador (el navegador real no lleva `wv`). La versión 3 envía un User-Agent de Chrome para Android en las dos vías (cliente HTTP y WebView), y además:
+
+- Abre la portada **una sola vez** en el navegador para que Cloudflare entregue `cf_clearance`; esas cookies se adjuntan a todas las peticiones HTTP posteriores. Solo si con las cookies el HTTP sigue rechazado se pide la página dentro del navegador, de modo que una sesión normal abre el navegador una vez y no una vez por página.
+- Envía `User-Agent`, `Accept`, `Accept-Language`, `Upgrade-Insecure-Requests` y `Referer` en todas las peticiones, incluidas las del AJAX de temporadas (que también admite la vía del navegador si el HTTP falla).
+- No confunde un `404` normal con un rechazo: solo `403/429/503` y la página del desafío activan la vía del navegador.
+
 **Cloudflare y pantalla vacía (corregido en la versión 2):** el sitio responde a muchas redes con el desafío JavaScript de Cloudflare («Just a moment…»), a veces con un `403` y a veces con un `200` cuyo cuerpo *es* la página del desafío. La versión 1 solo usaba el cliente HTTP y, si ese `200` llegaba, el catálogo se analizaba como si fuera HTML normal: cero títulos. Además, cada sección fallida devolvía una lista vacía en silencio, así que la pantalla mostraba las categorías sin un solo título y sin explicación.
 
 La versión 2 corrige las dos causas:
