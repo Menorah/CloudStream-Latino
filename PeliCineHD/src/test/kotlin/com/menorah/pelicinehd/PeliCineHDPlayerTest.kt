@@ -60,8 +60,9 @@ class PeliCineHDPlayerTest {
             resource("vidhide-player-episode-real.html", "https://morencius.com/v/ei06pqvqtfey")
         )
         assertNotNull(embed)
-        assertTrue(embed!!.url, embed.url.startsWith("https://dD2STLiWT0bC.dramiyos-cdn.com/hls2/"))
-        assertTrue(embed.url, embed.url.contains("/ei06pqvqtfey_n/master.m3u8"))
+        val url = embed!!.url
+        assertTrue(url, url.startsWith("https://dD2STLiWT0bC.dramiyos-cdn.com/hls2/"))
+        assertTrue(url, url.contains("/ei06pqvqtfey_n/master.m3u8"))
     }
 
     @Test
