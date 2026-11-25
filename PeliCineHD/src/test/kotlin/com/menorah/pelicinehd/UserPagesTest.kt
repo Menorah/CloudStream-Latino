@@ -71,12 +71,15 @@ class UserPagesTest {
     fun `the user's catalogues are read as movies and as series`() {
         val movies = resource("catalog-user-real.html", "https://pelicinehd.com/peliculas/")
         val movieCards = PeliCineHDMarkup.cards(movies)
-        assertTrue("movies ${movieCards.size}", movieCards.size > 30)
-        assertTrue(movieCards.all { it.movie })
+        assertTrue("movies ${movieCards.size}", movieCards.size > 40)
+        assertTrue(movieCards.any { it.movie })
+        // The sidebar repeats series, so both kinds are expected, never zero of one.
+        assertTrue(movieCards.any { !it.movie })
 
         val series = resource("series-catalog-user-real.html", "https://pelicinehd.com/series/")
         val seriesCards = PeliCineHDMarkup.cards(series)
-        assertTrue("series ${seriesCards.size}", seriesCards.size > 20)
-        assertTrue(seriesCards.all { !it.movie })
+        assertTrue("series ${seriesCards.size}", seriesCards.size > 40)
+        assertTrue(seriesCards.any { !it.movie })
+        assertTrue(seriesCards.any { it.title == "El Señor de los Anillos: Los Anillos de Poder" })
     }
 }
