@@ -59,7 +59,8 @@ class PeliCineHDBrowserTest {
         // El latido va dentro de `setInterval`, después de definir `go`; nunca suelto al inicio,
         // que era lo que cerraba la WebView con la página todavía en blanco.
         val interval = script.indexOf("setInterval")
-        val go = script.indexOf("setTimeout(go, 300)")
+        // El último es el arranque; el primero está dentro de la propia función `go`.
+        val go = script.lastIndexOf("setTimeout(go, 300)")
         assertTrue("El latido debe definirse junto al arranque", interval > 0)
         assertTrue("El latido debe ir antes del setTimeout de go", interval < go)
         // Antes del latido no puede haber ninguna petición de imagen: solo definiciones.
