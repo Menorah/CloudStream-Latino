@@ -2,7 +2,8 @@
 import json
 import re
 import traceback
-import requests
+import urllib.request
+import urllib.error
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_req
 
@@ -18,15 +19,20 @@ def emit(tag, obj):
 
 
 try:
-    # 1. Plain requests check on wp-content image vs curl_cffi
+    # 1. Plain urllib check on wp-content image + HTML vs curl_cffi
     img_u = "https://ww4.animeonline.ninja/wp-content/uploads/2020/08/3f4ETSwknZs74lmUYC7ENIMRBMP-185x278.jpg"
-    r_plain_img = requests.get(img_u, headers={"User-Agent": UA, "Referer": "https://ww4.animeonline.ninja/inicio/"}, timeout=15)
-    emit("1_plain_img_check", {
-        "plain_img_code": r_plain_img.status_code,
-        "plain_img_ct": r_plain_img.headers.get("content-type"),
-        "plain_img_len": len(r_plain_img.content),
-        "cf_mitigated": r_plain_img.headers.get("cf-mitigated"),
-    })
+    plain_res = {}
+    for k, u in [("plain_img", img_u), ("plain_home", "https://ww4.animeonline.ninja/inicio/")]:
+        req = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": "https://ww4.animeonline.ninja/inicio/"})
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                b = resp.read()
+                plain_res[k] = {"code": resp.status, "ct": resp.headers.get("content-type"), "len": len(b)}
+        except urllib.error.HTTPError as he:
+            plain_res[k] = {"code": he.code, "ct": he.headers.get("content-type"), "cf_mitigated": he.headers.get("cf-mitigated"), "len": len(he.read())}
+        except Exception as ex:
+            plain_res[k] = {"err": str(ex)[:150]}
+    emit("1_plain_http_check", plain_res)
 
     # 2. Check search pagination, menu genres, and /temporada/ + /online/ + /pelicula/ details
     r_srch = s.get("https://ww4.animeonline.ninja/?s=a", timeout=20)
@@ -76,7 +82,26 @@ try:
         ("peeplayer", "https://peeplayer.com/v/sbm3uJCJZByS", "https://saidochesto.top/"),
         ("streamasia", "https://streamasia.live/e/vid_milmblf2", "https://saidochesto.top/"),
         ("mxdrop", "https://mxdrop.sx/e/pjj3mmggtg73wn4", "https://saidochesto.top/"),
+        ("streamp2p", "https://saidochesto.top/", "https://ww4.animeonline.ninja/"),
+        ("upnshare", "https://saidochesto.top/", "https://ww4.animeonline.ninja/"),
     ]
+    # Also fetch live saidochesto.top embed ids 51018 & 44511 to get fresh links for streamp2p/upnshare/playmate/luluvid
+    extra_urls = []
+    for eid in (51018, 44511):
+        try:
+            r_emp = s.get(f"https://ww4.animeonline.ninja/wp-json/dooplayer/v1/post/{eid}?type=tv&source=1", timeout=15).json()
+            eu = r_emp.get("embed_url")
+            if eu:
+                rs = s.get(eu, headers={"Referer": "https://ww4.animeonline.ninja/"}, timeout=15)
+                for li in BeautifulSoup(rs.text, "html.parser").select(".OptionsLangDisp li[onclick]"):
+                    m = re.search(r"go_to_player\('([^']+)'\)", li.get("onclick", ""))
+                    if m:
+                        u = m.group(1)
+                        if any(k in u for k in ("streamp2p", "upnshare", "playmate", "luluvid", "dood", "streamtape", "mp4upload", "hexload")):
+                            extra_urls.append((u.split("/")[2], u, eu))
+        except Exception:
+            pass
+    hosts_to_inspect = hosts_to_inspect[:-2] + extra_urls[:6]
     host_probes = []
     for name, u, ref in hosts_to_inspect:
         try:
