@@ -129,7 +129,7 @@ internal object PeliCineHDMarkup {
         if (pageUrl.isNotBlank() && normalizeKey(candidate) == normalizeKey(pageUrl)) return false
         if (siteUrl(candidate)) {
             val path = runCatching { URI(candidate).path.orEmpty().lowercase() }.getOrDefault("")
-            if (path.startsWith("/movies/") || path.startsWith("/series/") || path.startsWith("/episode/") || path.startsWith("/category/")) {
+            if (path.startsWith("/movies/") || path.startsWith("/series/") || path.startsWith("/episode/") || path.startsWith("/category/") || path.startsWith("/release/")) {
                 return false
             }
             if (!path.contains("/wp-content/") && !IMAGE_EXT.containsMatchIn(path)) {
@@ -281,10 +281,16 @@ internal object PeliCineHDMarkup {
             .filter { it.isNotBlank() }
             .distinct()
 
-        val actors = root.select(".cast-lst a, .cast a")
+        val castListLinks = root.select(".cast-lst li")
+            .filter { li -> !li.selectFirst("span")?.text().orEmpty().contains("director", true) }
+            .flatMap { li -> li.select("a") }
+        val actors = (if (castListLinks.isNotEmpty()) castListLinks else root.select(".cast a"))
+            .asSequence()
+            .filter { !it.attr("href").contains("/director", true) }
             .map { it.text().trim() }
             .filter { it.isNotBlank() }
             .distinct()
+            .toList()
 
         val rating = root.selectFirst(".vote-cn .vote .num, .vote .num")?.text()
             ?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it in 0.0..10.0 }
@@ -292,13 +298,14 @@ internal object PeliCineHDMarkup {
         val trailer = doc.select("#mdl-trailer iframe[data-src], #mdl-trailer iframe[src], .mdl-trailer iframe[data-src], .mdl-trailer iframe[src], iframe[src*=youtube], iframe[data-src*=youtube]")
             .asSequence()
             .mapNotNull { iframe ->
-                cleanUrlAttr(iframe.baseUri(), iframe.attr("data-src").ifBlank { iframe.attr("src") })
+                cleanUrlAttr(iframe.baseUri().ifBlank { doc.baseUri() }, iframe.attr("data-src").ifBlank { iframe.attr("src") })
             }
             .firstOrNull()
 
-        val recommendations = doc.select(".related .post, section .post-lst .post")
+        val recommendations = doc.select(".related .post, section.episodes .owl-carousel .post, section.episodes .post, section .post-lst .post")
             .asSequence()
             .filter { !it.hasClass("single") && !it.hasClass("episodes") }
+            .filter { it.closest("aside, #episode_by_temp, .wdgt-sidebar") == null }
             .mapNotNull { el -> parseCard(el) }
             .filter { normalizeKey(it.url) != normalizeKey(pageUrl) }
             .distinctBy { it.url }
@@ -409,7 +416,8 @@ internal object PeliCineHDMarkup {
         val tabs = doc.select(".video-options .aa-tbs a[href], ul.aa-tbs-video a[href]")
         for (tab in tabs) {
             val href = tab.attr("href").trim()
-            val tabId = TAB_ID_REGEX.matchEntire(href)?.groupValues?.get(1) ?: continue
+            val fragment = href.substringAfter('#', "").takeIf { href.contains('#') } ?: continue
+            val tabId = TAB_ID_REGEX.matchEntire("#$fragment")?.groupValues?.get(1) ?: continue
             val pane: Element = doc.getElementById(tabId) ?: continue
             val iframe: Element = pane.selectFirst("iframe[data-src], iframe[src]") ?: continue
             val rawUrl = iframe.attr("data-src").ifBlank { iframe.attr("src") }

@@ -532,4 +532,99 @@ class PeliCineHDMarkupTest {
         assertTrue(SiteClient.looksLikeChallenge("""<title>Attention Required! | Cloudflare</title>"""))
         assertFalse(SiteClient.looksLikeChallenge("""<ul class="post-lst"><li><article class="post movies">Pacífico</article></li></ul>"""))
     }
+
+    @Test
+    fun userCapturedHtmlQuirksParseCleanly() {
+        // 1. Homepage series card with CSS class `movies`, /peliculas/ & /release/2026/ pagination
+        val archiveDoc = doc(
+            """
+            <main>
+              <ul class="post-lst">
+                <li class="series type-series">
+                  <article class="post dfx fcl movies">
+                    <header class="entry-header"><h2 class="entry-title">El Señor de los Anillos: Los Anillos de Poder</h2></header>
+                    <div class="post-thumbnail or-1">
+                      <figure><img src="https://image.tmdb.org/t/p/w500/xdsgZ60TBFiuAIvGPtxRsjDt4NV.jpg" alt="Image El Señor de los Anillos"></figure>
+                      <span class="year">2022</span>
+                    </div>
+                    <a class="lnk-blk" href="https://pelicinehd.com/series/el-senor-de-los-anillos-los-anillos-de-poder/"></a>
+                  </article>
+                </li>
+              </ul>
+              <nav class="navigation pagination"><div class="nav-links">
+                <a class="page-link current" href="https://pelicinehd.com/peliculas/">1</a>
+                <a class="page-link" href="https://pelicinehd.com/peliculas/page/2/">2</a>
+                <a class="page-link" href="https://pelicinehd.com/peliculas/page/2/">SIGUIENTE</a>
+              </div></nav>
+            </main>
+            """.trimIndent(),
+            site("/peliculas/")
+        )
+        val cards = PeliCineHDMarkup.cards(archiveDoc)
+        assertEquals(1, cards.size)
+        assertFalse(cards[0].movie)
+        assertTrue(PeliCineHDMarkup.hasNextPage(archiveDoc, 1, "/peliculas/"))
+
+        // 2. Movie detail with Directors + Actores in .cast-lst, Recomendadas owl-carousel (no .post-lst), and full-URL tab hrefs
+        val odiseaDoc = doc(
+            """
+            <div class="bghd"><img class="TPostBg" src="https://image.tmdb.org/t/p/w780/twiVn9oFXOVR0uoYgawyEBlnFu8.jpg" alt="Background"></div>
+            <article class="post single">
+              <div class="post-thumbnail"><figure><img src="https://image.tmdb.org/t/p/w500/gr2v2nt0isUhTqnvNKeNQYpX0sO.jpg" alt="Image La Odisea"></figure></div>
+              <header class="entry-header">
+                <h1 class="entry-title">La Odisea</h1>
+                <div class="entry-meta">
+                  <span class="genres"><a href="https://pelicinehd.com/category/accion/">Acción</a>, <a href="https://pelicinehd.com/category/aventura/">Aventura</a></span>
+                  <span class="duration">2h 52m</span>
+                  <span class="year">2026</span>
+                </div>
+              </header>
+              <ul class="cast-lst dfx fwp">
+                <li><span>Director</span><p><a href="https://pelicinehd.com/director/christopher-nolan/">Christopher Nolan</a></p></li>
+                <li><span>Actores</span><p><a href="https://pelicinehd.com/cast/adam-croasdell/">Adam Croasdell</a>, <a href="https://pelicinehd.com/cast/anne-hathaway/">Anne Hathaway</a></p></li>
+              </ul>
+              <ul class="aa-tbs aa-tbs-video">
+                <li><a href="https://pelicinehd.com/movies/la-odisea/#options-0">OPCIÓN 1 Morencius -LAT HD</a></li>
+                <li><a href="https://pelicinehd.com/movies/la-odisea/#options-1">OPCIÓN 2 Voe - LAT HD</a></li>
+              </ul>
+              <aside class="video-player" id="aa-options">
+                <div id="options-0"><iframe data-src="https://pelicinehd.com/?trembed=0&amp;trid=19821&amp;trtype=1"></iframe></div>
+                <div id="options-1"><iframe data-src="https://pelicinehd.com/?trembed=1&amp;trid=19821&amp;trtype=1"></iframe></div>
+              </aside>
+            </article>
+            <section class="section episodes">
+              <header class="section-header"><h3 class="section-title">Recomendadas</h3></header>
+              <div class="owl-carousel owl-theme carousel">
+                <div class="owl-item"><article class="post dfx fcl movies">
+                  <header class="entry-header"><h2 class="entry-title">Tornados</h2></header>
+                  <div class="post-thumbnail"><figure><img src="https://image.tmdb.org/t/p/w500/cpWWm1MVwFFjpM6TQ9QzP74ZXfH.jpg"></figure></div>
+                  <a class="lnk-blk" href="https://pelicinehd.com/movies/tornados/"></a>
+                </article></div>
+              </div>
+            </section>
+            """.trimIndent(),
+            site("/movies/la-odisea/")
+        )
+        val detail = PeliCineHDMarkup.detail(odiseaDoc)!!
+        assertEquals("https://image.tmdb.org/t/p/w1280/twiVn9oFXOVR0uoYgawyEBlnFu8.jpg", detail.backdrop)
+        assertEquals(172, detail.durationMinutes)
+        assertEquals(listOf("Adam Croasdell", "Anne Hathaway"), detail.actors)
+        assertEquals(listOf("Tornados"), detail.recommendations.map { it.title })
+
+        val options = PeliCineHDMarkup.playerOptions(odiseaDoc)
+        assertEquals(2, options.size)
+        assertEquals("Latino", options[0].language)
+        assertEquals("Latino", options[1].language)
+
+        // 3. Episode embed where var links declares hls3 before hls2 and hls4 is absent (ei06pqvqtfey)
+        val epEmbed = """
+            <script>
+            var links={"hls3":"https://dD2STLiWT0bC.radiantgroveproduction.cfd/mCJ01caRj2Dh8/hls3/01/01071/t8ktplkons7j_n/master.txt","hls2":"https://dD2STLiWT0bC.dramiyos-cdn.com/hls2/01/01071/t8ktplkons7j_n/master.m3u8?t=sig&s=1"};
+            jwplayer("vplayer").setup({sources:[{file:links.hls4||links.hls3||links.hls2,type:"hls"}],tracks:[{file:"/dl?op=get_slides",kind:"thumbnails"}]});
+            </script>
+        """.trimIndent()
+        val parsedEmbed = EarnVidsParser.parse(epEmbed, "https://morencius.com/v/ei06pqvqtfey")
+        assertEquals(listOf("hls2", "hls3"), parsedEmbed.streams.map { it.key })
+        assertTrue(parsedEmbed.subtitles.isEmpty())
+    }
 }

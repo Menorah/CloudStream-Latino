@@ -34,8 +34,9 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     override val loadLinksTimeoutMs: Long? = 60_000L
 
     override val mainPage = mainPageOf(
-        "/movies/" to "Películas",
+        "/peliculas/" to "Películas",
         "/series/" to "Series",
+        "/release/2026/" to "Estrenos",
         "/category/accion/" to "Acción",
         "/category/animacion/" to "Animación",
         "/category/aventura/" to "Aventura",
@@ -109,8 +110,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Keep primary sections noisy on hard failures while preventing one empty category from breaking home.
-            if (request.data.startsWith("/category/")) {
+            // Keep primary sections noisy on hard failures while preventing one empty category or release archive from breaking home.
+            if (request.data.startsWith("/category/") || request.data.startsWith("/release/")) {
                 return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
             }
             throw e
