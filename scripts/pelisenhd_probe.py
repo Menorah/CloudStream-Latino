@@ -6,7 +6,6 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
-from bs4 import BeautifulSoup
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -39,25 +38,6 @@ def req_url(url, data=None, referer=None):
 
 
 try:
-    movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
-    mst, _, _, m_html = req_url(movie_url)
-    ms = BeautifulSoup(m_html, "html.parser")
-    ft_el = ms.select_one("a[href*='financialtrust']")
-    emit("0_movie_check", {"status": mst, "title": ms.title.string if ms.title else None, "has_ft": bool(ft_el)})
-    ft_url = ft_el["href"] if ft_el else "https://financialtrust.info/l.php?o=ZXFNNUNsWU85bFJsck1jMzZMenBMdVl4YzJJZUhRZnJvRGZSTW9wVkhMY2QyWWN1TmpGRnpPNHZoV21xUDhnM0k5NUNqYWdzVFh0bVp3VkJyTS9WTjVJSDUyY1hkV2FDOE1TQXcwRUFpVFRTM3J5eTlWdWxiNEQwTGdNU1hrd24="
-
-    st1, cur, _, body = req_url(ft_url, referer=movie_url)
-    soup = BeautifulSoup(body, "html.parser")
-    form = soup.select_one("form")
-    if form and form.get("action"):
-        inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
-        action = urllib.parse.urljoin(cur, form["action"])
-        st, cur2, _, body2 = req_url(action, data=inputs, referer=cur)
-        emit("1_body_tail", {"status": st, "len": len(body2), "tail": body2[4500:]})
-    else:
-        emit("1_no_form", {"st1": st1, "cur": cur, "body": body[:1200]})
-        cur2 = cur
-
     jst, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer="https://financialtrust.info/")
     open("/tmp/app.packed.js", "w").write(js_body)
     harness = r"""
@@ -65,10 +45,10 @@ const fs = require('fs');
 const code = fs.readFileSync('/tmp/app.packed.js', 'utf8');
 const origFunction = global.Function;
 let captured = [];
-const window = global;
-const document = { cookie: '', addEventListener() {}, getElementById() { return {}; }, querySelector() { return null; } };
-const navigator = { userAgent: 'Mozilla/5.0' };
-const location = { href: 'https://financialtrust.info', hostname: 'financialtrust.info' };
+global.window = global;
+global.document = { cookie: '', addEventListener() {}, getElementById() { return {}; }, querySelector() { return null; }, body: {} };
+global.navigator = { userAgent: 'Mozilla/5.0' };
+global.location = { href: 'https://financialtrust.info', hostname: 'financialtrust.info' };
 String.prototype.constructor = function(...args) {
   if (args.length === 1 && typeof args[0] === 'string' && args[0].includes('arguments')) {
     const fn = origFunction(...args);
@@ -91,9 +71,9 @@ console.log(JSON.stringify(captured));
     dec = subprocess.check_output(["node", "/tmp/decode.js"], text=True)
     arr = json.loads(dec)
     full_decoded = "\n---\n".join(str(x) for x in arr)
-    emit("2_js_meta", {"jst": jst, "raw_len": len(js_body), "dec_len": len(full_decoded)})
-    for idx in range(0, min(len(full_decoded), 18000), 3000):
-        emit(f"3_dec_{idx//3000}", full_decoded[idx:idx+3000])
+    emit("1_meta", {"jst": jst, "raw_len": len(js_body), "dec_len": len(full_decoded), "count": len(arr)})
+    for idx in range(0, min(len(full_decoded), 24000), 3500):
+        emit(f"2_dec_{idx//3500}", full_decoded[idx:idx+3500])
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
