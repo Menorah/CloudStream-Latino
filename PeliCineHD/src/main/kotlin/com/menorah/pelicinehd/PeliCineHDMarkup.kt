@@ -316,6 +316,33 @@ internal object PeliCineHDMarkup {
         return all.sortedBy { if (it.lowercase().contains(".m3u8")) 0 else 1 }
     }
 
+    /**
+     * Marcas de la página de verificación de Cloudflare (la del reto «Just a moment…»). Cloudflare
+     * también la sirve con **HTTP 200**, así que el estado por sí solo no basta: `CloudflareKiller`
+     * únicamente mira 403/503 y se le escapa ese caso.
+     */
+    private val challengeMarks = listOf(
+        "Just a moment",
+        "cf-browser-verification",
+        "challenge-platform",
+        "cf_chl_opt",
+        "_cf_chl_opt",
+        "cf-challenge",
+        "Checking your browser",
+        "Enable JavaScript and cookies to continue",
+        "Verificando el navegador",
+    )
+
+    /** ¿La respuesta es el reto de Cloudflare y no la página del sitio? */
+    fun isChallenge(code: Int, body: String): Boolean {
+        if (code == 403 || code == 503 || code == 429) return true
+        if (code !in 200..299 || body.isBlank()) return false
+        // La página del sitio también puede nombrar Cloudflare en un script; solo cuenta si el
+        // cuerpo contiene la estructura del reto, nunca si es un HTML largo y con contenido real.
+        if (body.length > 60_000) return false
+        return challengeMarks.any { body.contains(it, ignoreCase = true) }
+    }
+
     /** Segundo paso: desde la página del host hasta las URLs de vídeo. */
     fun streamsFromHost(html: String): List<String> =
         (unpack(html)?.let { streams(it) } ?: emptyList()).ifEmpty { streams(html) }

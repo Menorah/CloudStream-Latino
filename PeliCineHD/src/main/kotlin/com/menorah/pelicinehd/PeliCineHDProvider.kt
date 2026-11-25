@@ -86,64 +86,93 @@ class PeliCineHDProvider : MainAPI() {
     )
 
     /**
-     * Cookies `cf_clearance` que la WebView deja en el `CookieManager` cuando resuelve el reto.
-     * Se leen de ahí (no de `CloudflareKiller`, que bloquea la petición hasta el timeout de la app).
+     * UA de la WebView (`WebViewResolver.webViewUserAgent`). Un `cf_clearance` **solo** vale bajo el
+     * UA con el que se obtuvo, así que las peticiones que llevan la cookie tienen que mandar este
+     * UA y no el de la app. Si aún no hay UA de WebView se usa el de la app.
+     */
+    private val browserUserAgent: String?
+        get() = runCatching {
+            WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+
+    private fun browserHeaders(): Map<String, String> =
+        browserUserAgent?.let { mapOf("User-Agent" to it) } ?: emptyMap()
+
+    /**
+     * Cookies de la WebView (`cf_clearance`, `__cf_bm`…) junto al UA de esa misma WebView.
+     * Esto es lo que CloudStream no hace por su cuenta: su `CloudflareKiller` guarda las cookies
+     * pero deja el UA de la app, y Cloudflare invalida la cookie por ese cambio.
      */
     private fun clearanceHeaders(): Map<String, String> = runCatching {
         val raw = CookieManager.getInstance().getCookie(mainUrl).orEmpty()
         if (!raw.contains("cf_clearance")) return@runCatching emptyMap()
-        raw.split(';').mapNotNull { part ->
+        val cookies = raw.split(';').mapNotNull { part ->
             val pair = part.trim().split('=', limit = 2)
             if (pair.size == 2 && pair[0].isNotBlank() && pair[1].isNotBlank()) pair[0] to pair[1] else null
         }.toMap()
+        if (cookies.isEmpty()) emptyMap() else cookies + browserHeaders()
     }.getOrDefault(emptyMap())
 
     /**
-     * Deja una WebView acotada (`timeout`) resolver el reto de Cloudflare y guardar las cookies.
-     * A diferencia de `CloudflareKiller`, nunca deja la petición colgada hasta el timeout de la app.
+     * Pide el sitio tal cual (sin interceptor que bloquee la petición) y devuelve HTML + estado.
+     * Se envían las cookies ya resueltas con su UA; si el sitio responde con el reto, se resuelve.
      */
-    private suspend fun solveChallenge(url: String) {
+    private suspend fun ask(url: String, referer: String?): Triple<Int, String, String> {
+        val response = app.get(
+            url,
+            headers = withReferer(referer) + clearanceHeaders(),
+            timeout = PAGE_TIMEOUT_S,
+        )
+        return Triple(response.code, response.text.orEmpty(), response.url)
+    }
+
+    /**
+     * Resuelve el reto de Cloudflare con una WebView acotada a 20 s. A diferencia de
+     * `CloudflareKiller` no espera al timeout de 60 s del resolver ni deja la petición colgada
+     * hasta el corte de 120 s de la app.
+     */
+    private suspend fun solveChallenge() {
         runCatching {
             WebViewResolver(
-                interceptUrl = Regex("""hello_never_matches_local_test"""),
+                interceptUrl = Regex("""^never-matches-a-url$"""),
                 userAgent = null, // Cloudflare exige el UA real de la WebView.
                 useOkhttp = false,
                 timeout = CHALLENGE_TIMEOUT_MS,
-            ).resolveUsingWebView(url)
+            ).resolveUsingWebView(mainUrl)
         }
     }
 
     /**
-     * GET validado: solo se sigue dentro del dominio del sitio. Primero se pide como un cliente
-     * normal (es lo que hacía la v1 que funcionaba); si Cloudflare responde con su reto, se abre la
-     * WebView una vez, se reintenta con las cookies obtenidas y se cachea el resultado.
+     * GET validado: solo se sigue dentro del dominio del sitio. Si la respuesta es el reto de
+     * Cloudflare —403/503 **o un 200 con su página de verificación**, que es lo que se escapaba—
+     * se resuelve una vez y se reintenta con la cookie y el UA de la WebView.
      */
     private suspend fun fetch(input: String, referer: String? = null): Document {
         val url = absolute(input)
         require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD: $url" }
 
-        var response = app.get(url, headers = withReferer(referer) + clearanceHeaders(), timeout = PAGE_TIMEOUT_S)
-        if (response.code == 403 || response.code == 503) {
-            solveChallenge(mainUrl)
-            response = app.get(
-                url,
-                headers = withReferer(referer) + clearanceHeaders(),
-                timeout = PAGE_TIMEOUT_S,
-            )
+        var answer = ask(url, referer)
+        if (PeliCineHDMarkup.isChallenge(answer.first, answer.second)) {
+            solveChallenge()
+            answer = ask(url, referer)
         }
-        if (response.code == 403 || response.code == 503) {
+        val (code, text, finalUrl) = answer
+        if (PeliCineHDMarkup.isChallenge(code, text)) {
             throw ErrorLoadingException(
-                "PeliCineHD respondió HTTP ${response.code}: Cloudflare bloqueó la petición. " +
+                "PeliCineHD sigue respondiendo el reto de Cloudflare (HTTP $code). " +
                     "Abre pelicinehd.com en el navegador del dispositivo (o usa una VPN) y vuelve a intentarlo."
             )
         }
-        if (!response.isSuccessful) throw IllegalStateException("PeliCineHD respondió HTTP ${response.code}")
-        if (!PeliCineHDMarkup.siteUrl(response.url)) throw IllegalStateException("PeliCineHD redirigió fuera del sitio")
-        return Jsoup.parse(response.text, response.url)
+        if (code !in 200..299) throw IllegalStateException("PeliCineHD respondió HTTP $code")
+        if (!PeliCineHDMarkup.siteUrl(finalUrl)) throw IllegalStateException("PeliCineHD redirigió fuera del sitio")
+        return Jsoup.parse(text, finalUrl)
     }
 
-    private fun withReferer(referer: String?): Map<String, String> =
-        if (referer.isNullOrBlank()) headers else headers + mapOf("Referer" to referer)
+    /** Cabeceras base; si hay UA de WebView se usa ese, porque es el que vale con `cf_clearance`. */
+    private fun withReferer(referer: String?): Map<String, String> {
+        val base = if (browserUserAgent != null) headers + browserHeaders() else headers
+        return if (referer.isNullOrBlank()) base else base + mapOf("Referer" to referer)
+    }
 
     private fun absolute(input: String): String =
         if (input.startsWith("http")) input else URI("$mainUrl/").resolve(input.removePrefix("/")).toString()
@@ -306,6 +335,7 @@ class PeliCineHDProvider : MainAPI() {
     private suspend fun probe(url: String, referer: String?): List<String> = runCatching<List<String>> {
         val response = app.get(url, headers = withReferer(referer) + clearanceHeaders(), timeout = 15L)
         if (!response.isSuccessful) return emptyList()
+        if (PeliCineHDMarkup.isChallenge(response.code, response.text)) return emptyList()
         PeliCineHDMarkup.streamsFromHost(response.text)
     }.getOrDefault(emptyList())
 
@@ -333,7 +363,11 @@ class PeliCineHDProvider : MainAPI() {
                     headers = withReferer(pageUrl) + clearanceHeaders(),
                     timeout = 15L,
                 )
-                if (!response.isSuccessful) null else PeliCineHDMarkup.wrappedUrl(response.text, response.url)
+                if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.code, response.text)) {
+                    null
+                } else {
+                    PeliCineHDMarkup.wrappedUrl(response.text, response.url)
+                }
             }.getOrNull()
 
             // 2) Ese host puede estar cubierto por un extractor de CloudStream.

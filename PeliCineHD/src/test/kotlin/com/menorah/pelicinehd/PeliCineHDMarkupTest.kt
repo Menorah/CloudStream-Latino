@@ -204,4 +204,32 @@ class PeliCineHDMarkupTest {
         assertFalse(PeliCineHDMarkup.siteUrl("https://user:pass@pelicinehd.com/movies/x/"))
         assertFalse(PeliCineHDMarkup.siteUrl("https://pelicinehd.com:8443/movies/x/"))
     }
+
+    @Test
+    fun `el reto de cloudflare se detecta aunque llegue con 200`() {
+        val challenge = """
+            <!DOCTYPE html><html><head><title>Just a moment...</title>
+            <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1"></script>
+            </head><body><div id="cf-challenge-running">Checking your browser before accessing</div>
+            </body></html>
+        """.trimIndent()
+        assertTrue(PeliCineHDMarkup.isChallenge(200, challenge))
+        assertTrue(PeliCineHDMarkup.isChallenge(403, ""))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("inicio.html")))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("pelicula.html")))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, ""))
+    }
+
+    @Test
+    fun `el claro largo de cloudflare no se confunde con el reto`() {
+        val real = "<html><head><title>Inicio</title></head><body>" +
+            "<script src="/cdn-cgi/challenge-platform/x"></script>" +
+            "PeliCineHD ".repeat(6000) + "</body></html>"
+        assertFalse(PeliCineHDMarkup.isChallenge(200, real))
+    }
+
+    private fun fixture(name: String): String =
+        checkNotNull(javaClass.classLoader?.getResourceAsStream("$name.html")) {
+            "Falta el fixture $name.html"
+        }.use { it.readBytes().toString(Charsets.UTF_8) }
 }
