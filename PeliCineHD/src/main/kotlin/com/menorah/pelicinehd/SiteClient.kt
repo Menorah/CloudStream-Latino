@@ -2,6 +2,12 @@ package com.menorah.pelicinehd
 
 import android.content.Context
 import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.net.URI
@@ -35,9 +41,11 @@ internal interface CookieSource {
  * later HTTP request, so only that one page is loaded in the browser.
  *
  * A WebView page load takes seconds; sixteen home sections doing that in parallel is what made
- * the home screen time out. So the browser is a fallback for a page, never a preferred transport:
- * the only thing remembered between requests is "the browser works", which is used to go straight
- * to the single solve pass instead of wasting an HTTP attempt first.
+ * the home screen time out. So the browser is a fallback for a page, never a preferred transport.
+ *
+ * Solving runs in its own scope on purpose. The home sections are wrapped in a per-section
+ * timeout, and a solve awaited inside a section would be cancelled with it: the sixteen sections
+ * would cancel each other's solve over and over and every one of them would come back empty.
  */
 internal class SiteClient(
     private val http: SiteTransport,
@@ -48,6 +56,15 @@ internal class SiteClient(
     private val cookies = ConcurrentHashMap<String, String>()
     private val solved = AtomicBoolean(false)
     private val solveMutex = Mutex()
+
+    /** Not a child of any request: a section's timeout must never cancel the shared solve. */
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var solveJob: Deferred<Unit>? = null
+
+    @Volatile
+    private var lastAttemptAt = 0L
 
     private fun withCookies(headers: Map<String, String>): Map<String, String> {
         if (cookies.isEmpty()) return headers
@@ -80,8 +97,9 @@ internal class SiteClient(
             if (withJar.isSuccessful && !PeliCineHDMarkup.isChallenge(withJar.text)) return withJar
             if (!withJar.isSuccessful && withJar.code !in REFUSALS) return withJar
         }
-        // Cookies expired or the page is refused even with them: solve again, once.
+        // Cookies expired or the page is refused even with them: try a fresh solve.
         solved.set(false)
+        resetSolve()
         return viaBrowser(url, headers, withJar)
     }
 
@@ -105,17 +123,64 @@ internal class SiteClient(
             ?: throw IllegalStateException("No se pudo conectar con PeliCineHD desde la aplicación.")
     }
 
-    /** Opens the home page in the browser once, which is what makes Cloudflare issue cookies. */
-    private suspend fun solve(): Unit = solveMutex.withLock {
-        if (solved.get()) return@withLock
-        val home = PeliCineHDMarkup.BASE + "/"
-        val response = attempt { browser.get(home, emptyMap()) }
-        learnCookies(home)
-        val answered = response != null && response.isSuccessful &&
-            !PeliCineHDMarkup.isChallenge(response.text)
-        // Cookies are what later HTTP calls need; a challenge is solved by the browser visit even
-        // if the page it returned was not the catalogue yet.
-        if (answered || cookies.isNotEmpty()) solved.set(true)
+    /**
+     * Opens the home page in the browser once, which is what makes Cloudflare issue cookies.
+     *
+     * Callers wait for the shared job instead of doing the work themselves, so the sixteen home
+     * sections share one browser visit and none of them can cancel it.
+     */
+    private suspend fun solve() {
+        if (solved.get()) return
+        val job = synchronized(this) {
+            solveJob ?: startSolve().also { started -> solveJob = started }
+        }
+        try {
+            job.await()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // The caller gave up (section timeout); the solve keeps running in the background.
+            throw e
+        } catch (_: Exception) {
+            // Recorded by the solve itself; the caller falls back to the browser for its page.
+        }
+    }
+
+    /**
+     * Resolves the challenge before a screen asks for many pages at once. Bounded so a stuck
+     * browser never blocks the screen: the pages are still tried afterwards, one by one.
+     */
+    suspend fun warmUp(millis: Long = WARM_UP_MILLIS): Boolean {
+        if (solved.get()) return true
+        return try {
+            withTimeoutOrNull(millis) { solve(); true } ?: false
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Cancels the shared job so the next caller starts a fresh, current attempt. */
+    private fun resetSolve() = synchronized(this) {
+        solveJob?.cancel()
+        solveJob = null
+    }
+
+    private fun startSolve(): Deferred<Unit> = background.async(Dispatchers.IO) {
+        solveMutex.withLock {
+            if (solved.get()) return@withLock
+            // A retry storm is worse than a slow answer: do not reopen the browser every second.
+            val elapsed = System.currentTimeMillis() - lastAttemptAt
+            if (lastAttemptAt > 0 && elapsed < SOLVE_COOLDOWN_MS) return@withLock
+            lastAttemptAt = System.currentTimeMillis()
+            val home = PeliCineHDMarkup.BASE + "/"
+            val response = attempt { browser.get(home, emptyMap()) }
+            learnCookies(home)
+            val answered = response != null && response.isSuccessful &&
+                !PeliCineHDMarkup.isChallenge(response.text)
+            // Cookies are what later HTTP calls need; a challenge is solved by the browser visit
+            // even if the page it returned was not the catalogue yet.
+            if (answered || cookies.isNotEmpty()) solved.set(true)
+        }
     }
 
     /** POST for the theme's `admin-ajax.php` actions, with the same fallback order. */
@@ -148,6 +213,12 @@ internal class SiteClient(
         /** 403/429/503 are the answers Cloudflare gives to a client it does not trust. */
         private val REFUSALS = listOf(403, 429, 503)
         const val REQUEST_SECONDS = 25L
+
+        /** Minimum gap between two browser visits of the same session. */
+        private const val SOLVE_COOLDOWN_MS = 20_000L
+
+        /** Ceiling for the browser visit that solves the challenge before a screen starts. */
+        const val WARM_UP_MILLIS = 45_000L
 
         fun create(context: Context): SiteClient {
             val http = SiteTransport { url, headers ->
