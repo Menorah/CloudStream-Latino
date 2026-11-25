@@ -1,0 +1,13 @@
+name: Diagnóstico imágenes RePelis24.shop
+# Diagnóstico manual: no se ejecuta en cada push, solo desde la pestaña Actions.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/repelis24shop_images.py
