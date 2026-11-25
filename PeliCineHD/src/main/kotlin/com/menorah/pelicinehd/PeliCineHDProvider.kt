@@ -417,23 +417,36 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit
     ): List<ExtractorLink> {
         val raw = mutableListOf<ExtractorLink>()
-        val wrapper = try {
-            PeliCineHDMarkup.embed(fetch(playerUrl))
+        val page = try {
+            fetch(playerUrl)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             null
         }
+        val wrapper = page?.let { PeliCineHDMarkup.embed(it) }
         // 1. The hoster page itself, for the extractors CloudStream already knows (VidHide, Voe…).
         if (wrapper != null) {
             loadExtractor(wrapper.url, playerUrl, subtitleCallback) { link -> raw.add(link) }
         }
-        // 2. A media URL the page prints already (Playerjs setups), or one decoded from the
-        //    packed player. Those go straight to the player because there is nothing to extract.
+        // 2. The hoster page with its packed player (the site's own copies). `embed` already
+        //    decoded it if the wrapper returned it directly; this covers the case where the
+        //    wrapper only pointed at the hoster and its extractor found nothing.
+        if (raw.isEmpty() && wrapper != null && !isMedia(wrapper.url)) {
+            val media = try {
+                PeliCineHDMarkup.embed(fetch(wrapper.url))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (media != null && isMedia(media.url)) emitMedia(raw, media.url, wrapper.url)
+        }
+        // 3. A media URL the wrapper printed itself (Playerjs setups).
         if (raw.isEmpty() && isMedia(wrapper?.url)) {
             emitMedia(raw, wrapper!!.url, playerUrl)
         }
-        // 3. Last resort: let the extractor list try the wrapper URL as it is.
+        // 4. Last resort: let the extractor list try the wrapper URL as it is.
         if (raw.isEmpty()) {
             loadExtractor(playerUrl, referer, subtitleCallback) { link -> raw.add(link) }
         }

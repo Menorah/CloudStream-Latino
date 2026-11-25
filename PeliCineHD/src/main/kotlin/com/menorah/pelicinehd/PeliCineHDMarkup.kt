@@ -269,7 +269,9 @@ internal object PeliCineHDMarkup {
     /** Player list in page order; the iframe URL is what the site feeds its own player. */
     fun players(document: Document): List<PlayerOption> {
         // The wrapper is an <aside id="aa-options">, and each option a <div id="options-N">.
-        val options = document.select("#aa-options [id^=options-]")
+        // The site also prints a thumbnail/trailer block, which is not a player.
+        val options = document.select("#aa-options div.video[id^=options-]")
+            .ifEmpty { document.select("#aa-options [id^=options-]") }
         val labels = document.select("ul.aa-tbs-video li")
         return options.mapIndexedNotNull { index, block ->
             val iframe = block.selectFirst("iframe") ?: return@mapIndexedNotNull null
