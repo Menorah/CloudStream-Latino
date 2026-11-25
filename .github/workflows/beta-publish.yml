@@ -23,12 +23,12 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compilar y probar los diez complementos
+      - name: Compilar y probar los once complementos
         shell: bash
         run: |
           set +e
           ./gradlew \
-            :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest \
+            :AnimeOnlineNinja:testDebugUnitTest :animeonline2:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest \
             :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest \
             :PoseidonHD2:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :PeliCineHD:testDebugUnitTest \
             :CinecalidadOrg:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
@@ -47,6 +47,7 @@ jobs:
         run: |
           mkdir -p output
           cp AnimeOnlineNinja/build/AnimeOnlineNinja.cs3 output/
+          cp animeonline2/build/animeonline2.cs3 output/
           cp VerAni/build/VerAni.cs3 output/
           cp Repelis24CZ/build/Repelis24CZ.cs3 output/
           cp CinecalidadAM/build/CinecalidadAM.cs3 output/
@@ -69,7 +70,7 @@ jobs:
           pathlib.Path('output/repo.json').write_text(json.dumps(repo, ensure_ascii=False))
           names = {pathlib.Path(p['url']).name for p in plugins}
           expected = {
-              'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
+              'AnimeOnlineNinja.cs3', 'animeonline2.cs3', 'VerAni.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
               'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3',
               'PeliCineHD.cs3', 'CinecalidadOrg.cs3',
           }
