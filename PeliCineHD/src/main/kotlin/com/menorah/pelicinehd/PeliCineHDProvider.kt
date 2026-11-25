@@ -68,6 +68,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     override val loadLinksTimeoutMs: Long? = 240_000L
 
     override val mainPage = mainPageOf(
+        // First row: the home page itself, whose hero carousel the other rows do not show.
+        "inicio" to "Destacados",
         "peliculas" to "Películas",
         "series" to "Series",
         "category/accion" to "Acción",
@@ -153,6 +155,10 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // The home row can answer with the hero carousel only; that is still a success.
+            if (request.data == "inicio" && e !is ErrorLoadingException) {
+                return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+            }
             // One failing section must not empty the whole screen, but when the site rejects
             // every request the user has to read why instead of seeing an empty catalogue.
             if (failures.incrementAndGet() >= ALL_SECTIONS_FAILED) {
@@ -165,8 +171,14 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
             return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         }
         failures.set(0)
+        // The home page carries the hero carousel before its rows; both are the same cards.
+        val cards = if (request.data == "inicio") {
+            (PeliCineHDMarkup.heroCards(document) + PeliCineHDMarkup.cards(document)).distinctBy { it.url }
+        } else {
+            PeliCineHDMarkup.cards(document)
+        }
         return newHomePageResponse(
-            HomePageList(request.name, responses(PeliCineHDMarkup.cards(document))),
+            HomePageList(request.name, responses(cards)),
             hasNext = PeliCineHDMarkup.hasNext(document, page)
         )
     }
@@ -231,7 +243,14 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         }
 
         val episodes = loadEpisodes(document, pageUrl)
-        if (episodes.isEmpty()) return null
+        if (episodes.isEmpty()) {
+            // An empty series is a failure of its own (usually a rejected season switch), and
+            // CloudStream shows it as "Error loading" with no hint about where it came from.
+            throw ErrorLoadingException(
+                "PeliCineHD devolvió la ficha pero ningún episodio. " +
+                    "Abra la serie en el navegador y vuelva a intentarlo."
+            )
+        }
 
         return newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes.map { item ->
             newEpisode(item.url) {
@@ -376,7 +395,22 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit
     ): List<ExtractorLink> {
         val raw = mutableListOf<ExtractorLink>()
-        loadExtractor(playerUrl, referer, subtitleCallback) { link -> raw.add(link) }
+        // The option is a wrapper on pelicinehd.com, and no extractor understands that host, so
+        // the wrapper page is opened first and its real embed is what gets extracted. This is why
+        // the plugin used to answer "Enlaces no encontrados" even on pages full of players.
+        val direct = try {
+            PeliCineHDMarkup.embeddedUrl(fetch(playerUrl))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (direct != null) {
+            loadExtractor(direct, playerUrl, subtitleCallback) { link -> raw.add(link) }
+        }
+        if (raw.isEmpty()) {
+            loadExtractor(playerUrl, referer, subtitleCallback) { link -> raw.add(link) }
+        }
         // The audio track lives in the option label, so it is made visible in the link name.
         return raw.map { link ->
             if (language.isBlank() || link.name.contains(language, true)) {

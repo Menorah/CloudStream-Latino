@@ -106,9 +106,29 @@ internal object PeliCineHDMarkup {
 
     // --------------------------------------------------------------- cards
 
+    /**
+     * Cards of a catalogue, a search result and the home rows. The home page prints the same
+     * `article.post` with `.movies` / `.series`, plus a slide variant in its hero carousel.
+     */
+    private const val CARD_SELECTOR =
+        "article.post.movies, article.post.series, article.post.episodes"
+
+    /**
+     * The hero carousel of the home page. It is drawn by the theme from a slides list; the
+     * slides are `article`/`div` carrying a poster, a title and an in-site link.
+     */
+    fun heroCards(document: Document): List<Card> {
+        val slides = document.select(
+            "#hero .slide, .hero-slider .slide, .slider-home .item, .aa-hero .item, " +
+                ".swiper-slide, .glide__slide, section.hero article, .hero article.post"
+        )
+        return slides.mapNotNull { slide -> card(slide) }
+            .distinctBy { it.url }
+    }
+
     /** Catalog/搜索结果 cards. Ads and cross-host links are dropped because there is no `a.lnk-blk`. */
     fun cards(document: Document): List<Card> =
-        document.select("article.post.movies, article.post.series, article.post.episodes")
+        document.select(CARD_SELECTOR)
             .mapNotNull { card(it) }
             .distinctBy { it.url }
 
@@ -265,18 +285,62 @@ internal object PeliCineHDMarkup {
         }
     }
 
+    /**
+     * The player options point at the site's own wrapper (`?trembed=...`), which answers with the
+     * hoster player page. CloudStream has no extractor for `pelicinehd.com`, so the wrapper has to
+     * be opened here and the real embed taken out of it.
+     */
+    fun embeddedUrl(document: Document): String? {
+        val candidates = mutableListOf<String>()
+        document.select("iframe[src], iframe[data-src]").forEach { frame ->
+            candidates.add(frame.attr("data-src").ifBlank { frame.attr("src") })
+        }
+        document.select("a[href]").forEach { anchor -> candidates.add(anchor.attr("href")) }
+        // Players that build themselves from a script: file:"...m3u8", sources:[{src:"..."}]
+        MEDIA_URL.findAll(document.html()).forEach { match -> candidates.add(match.value) }
+        return candidates.asSequence()
+            .mapNotNull { absolute(it, document.location()) }
+            .firstOrNull { url -> !siteUrl(url) }
+    }
+
+    private val MEDIA_URL = Regex("""https?://[^"'\s]+?\.(?:m3u8|mp4)(?:\?[^"'\s]*)?""")
+
     // -------------------------------------------------------- seasons/episodes
 
+    /**
+     * Every season the theme offers.
+     *
+     * The markup is not uniform: a season can carry `data-season`, only `data-post` (season 1 of
+     * some series is emitted that way) or neither, so the number is taken from the attribute, then
+     * from the label (`Season 3`), then from the order in the list. Requiring `li` also lost
+     * seasons on templates that drop it, which is why some series showed fewer seasons than the
+     * site.
+     */
     fun seasons(document: Document): List<SeasonRef> {
         val post = seasonsPostId(document)
-        return document.select("div.choose-season li a[data-season]")
-            .mapNotNull { anchor ->
-                val season = anchor.attr("data-season").trim().toIntOrNull() ?: return@mapNotNull null
-                val owner = anchor.attr("data-post").trim().toIntOrNull() ?: post ?: return@mapNotNull null
+        val fromLinks: List<SeasonRef> = document
+            .select("div.choose-season a[data-post], div.choose-season a[data-season], div.aa-drp a[data-season]")
+            .mapIndexedNotNull { index, anchor ->
+                val owner = anchor.attr("data-post").trim().toIntOrNull() ?: post ?: return@mapIndexedNotNull null
+                val season = anchor.attr("data-season").trim().toIntOrNull()
+                    ?: seasonInText(anchor.text())
+                    ?: (index + 1)
                 SeasonRef(owner, season)
             }
-            .distinctBy { it.number }
-            .sortedBy { it.number }
+        val fromSelect: List<SeasonRef> = document.select("select[name=season] option[value], select.season option[value]")
+            .mapNotNull { option ->
+                val season = option.attr("value").trim().toIntOrNull() ?: return@mapNotNull null
+                val owner = post ?: return@mapNotNull null
+                SeasonRef(owner, season)
+            }
+        return (fromLinks + fromSelect).distinctBy { it.number }.sortedBy { it.number }
+    }
+
+    /** `Temporada 3`, `Season 3`, `T3` -> 3. */
+    fun seasonInText(text: String?): Int? {
+        if (text.isNullOrBlank()) return null
+        return Regex("""(?i)(?:temporada|season|temp|t)\s*\.?\s*(\d{1,3})""")
+            .find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     fun seasonsPostId(document: Document): Int? {
