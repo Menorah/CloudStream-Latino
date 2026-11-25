@@ -129,10 +129,7 @@ class PeliCineHDProvider : MainAPI() {
             )
         }
         val doc = Jsoup.parse(page.body, page.url)
-        if (cached) synchronized(pages) {
-            pages.clear() // Cada página nueva invalida las anteriores: el sitio cambia a diario.
-            pages[url] = doc
-        }
+        if (cached) synchronized(pages) { pages[url] = doc }
         return doc
     }
 

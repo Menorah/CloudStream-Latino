@@ -221,6 +221,22 @@ class PeliCineHDMarkupTest {
     }
 
     @Test
+    fun `la pagina del sitio no es un reto aunque enlace al script de cloudflare`() {
+        // `inicio.html` enlaza /cdn-cgi/challenge-platform/scripts/jsd/main.js en su HTML normal.
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("inicio")))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("catalogo-peliculas")))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("episodio")))
+    }
+
+    @Test
+    fun `una pagina de bloqueo no se toma por un reto`() {
+        val block = "<html><body>Sorry, you have been blocked. cf-error-details</body></html>"
+        assertFalse(PeliCineHDMarkup.isChallenge(403, block))
+        assertTrue(PeliCineHDMarkup.isChallenge(403, ""))
+        assertTrue(PeliCineHDMarkup.isChallenge(429, "<html></html>"))
+    }
+
+    @Test
     fun `el claro largo de cloudflare no se confunde con el reto`() {
         val real = "<html><head><title>Inicio</title></head><body>" +
             "<script src=\"/cdn-cgi/challenge-platform/x\"></script>" +
