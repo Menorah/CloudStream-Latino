@@ -1,4 +1,4 @@
-package com.menorah.animeonline2
+package com.menorah.animeonline
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.jsoup.Jsoup
@@ -80,7 +80,7 @@ data class SaidoServerOption(
     val url: String,
 )
 
-object AnimeOnline2Parser {
+object AnimeOnlineParser {
     const val BASE = "https://ww4.animeonline.ninja"
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"

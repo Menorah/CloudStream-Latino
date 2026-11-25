@@ -1,4 +1,4 @@
-package com.menorah.animeonline2
+package com.menorah.animeonline
 
 import android.content.Context
 import android.graphics.SurfaceTexture
@@ -33,7 +33,7 @@ object PlaybackProbe {
             try {
                 delay(4000)
                 withTimeout(600_000) {
-                    val provider = AnimeOnline2Provider(context)
+                    val provider = AnimeOnlineProvider(context)
                     val started = android.os.SystemClock.elapsedRealtime()
                     val homePages = withContext(Dispatchers.IO) {
                         coroutineScope {
@@ -112,7 +112,7 @@ object PlaybackProbe {
 
                     // Also exercise the hidden WebView poster cache fallback end-to-end and verify Coil loads file://
                     val siteImg = animeCards.firstNotNullOfOrNull { c ->
-                        c.posterUrl?.takeIf { it.startsWith("http") && AnimeOnline2Parser.isSiteUrl(it) }
+                        c.posterUrl?.takeIf { it.startsWith("http") && AnimeOnlineParser.isSiteUrl(it) }
                     }
                     if (siteImg != null) {
                         val cachedFileUri = provider.testCachePosterViaWebView(siteImg)
@@ -154,7 +154,7 @@ object PlaybackProbe {
 
     private suspend fun testPlayback(
         context: Context,
-        provider: AnimeOnline2Provider,
+        provider: AnimeOnlineProvider,
         label: String,
         data: String,
     ) {

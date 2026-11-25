@@ -1,15 +1,15 @@
-name: Pruebas Android de AnimeOnline2
+name: Reproducción real AnimeOnlineNinja
 on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['animeonline2/**', 'scripts/run_animeonline2_android.sh', '.github/workflows/animeonline2-android-test.yml']
+    paths: ['AnimeOnlineNinja/**', 'scripts/playback_probe/AnimeOnlineProbe.kt', 'scripts/playback_probe/run_animeonline_app.sh', '.github/workflows/animeonline-playback.yml']
 permissions:
   contents: read
 jobs:
-  android:
+  playback:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -21,18 +21,12 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Verificar catálogo, imágenes y endpoints en Android
+      - name: Probar proveedor y reproducción en CloudStream
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 28
           target: google_apis
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: ./scripts/run_animeonline2_android.sh
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: pruebas-animeonline2
-          path: animeonline2/build/reports/androidTests/
-          if-no-files-found: ignore
+          script: ./scripts/playback_probe/run_animeonline_app.sh

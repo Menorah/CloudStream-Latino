@@ -1,4 +1,4 @@
-package com.menorah.animeonline2
+package com.menorah.animeonline
 
 import org.junit.Assert.*
 import org.junit.Test
@@ -8,54 +8,54 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class AnimeOnline2ParserTest {
+class AnimeOnlineParserTest {
 
     @Test
     fun urlNormalizationAndBuilders() {
         assertEquals(
             "https://ww4.animeonline.ninja/online/dragon-ball-super/",
-            AnimeOnline2Parser.normalizeSiteUrl("https://www1.animeonline.ninja/online/dragon-ball-super/"),
+            AnimeOnlineParser.normalizeSiteUrl("https://www1.animeonline.ninja/online/dragon-ball-super/"),
         )
         assertEquals(
             "https://ww4.animeonline.ninja/genero/audio-latino/",
-            AnimeOnline2Parser.normalizeSiteUrl("https://www3.animeonline.ninja/genero/audio-latino/"),
+            AnimeOnlineParser.normalizeSiteUrl("https://www3.animeonline.ninja/genero/audio-latino/"),
         )
         assertEquals(
             "https://ww4.animeonline.ninja/pelicula/kimi-no-na-wa/",
-            AnimeOnline2Parser.normalizeSiteUrl("/pelicula/kimi-no-na-wa/"),
+            AnimeOnlineParser.normalizeSiteUrl("/pelicula/kimi-no-na-wa/"),
         )
         assertEquals(
             "https://ww4.animeonline.ninja/online/page/2/",
-            AnimeOnline2Parser.buildArchivePageUrl("/online/", 2),
+            AnimeOnlineParser.buildArchivePageUrl("/online/", 2),
         )
         assertEquals(
             "https://ww4.animeonline.ninja/?s=naruto+shippuden",
-            AnimeOnline2Parser.buildSearchUrl("naruto shippuden", 1),
+            AnimeOnlineParser.buildSearchUrl("naruto shippuden", 1),
         )
         assertEquals(
             "https://ww4.animeonline.ninja/search/page/2/?s=naruto",
-            AnimeOnline2Parser.buildSearchUrl("naruto", 2),
+            AnimeOnlineParser.buildSearchUrl("naruto", 2),
         )
         assertEquals(
             "https://ww4.animeonline.ninja/wp-content/uploads/2026/01/my%20poster.jpg",
-            AnimeOnline2Parser.normalizeImageUrl("http://ww3.animeonline.ninja/wp-content/uploads/2026/01/my poster.jpg"),
+            AnimeOnlineParser.normalizeImageUrl("http://ww3.animeonline.ninja/wp-content/uploads/2026/01/my poster.jpg"),
         )
         assertEquals(
             "https://cdn.animeonline.ninja/wp-content/uploads/cover.jpg",
-            AnimeOnline2Parser.normalizeImageUrl("http://cdn.animeonline.ninja/wp-content/uploads/cover.jpg"),
+            AnimeOnlineParser.normalizeImageUrl("http://cdn.animeonline.ninja/wp-content/uploads/cover.jpg"),
         )
         assertEquals(
             "https://image.tmdb.org/t/p/w500/abc.jpg",
-            AnimeOnline2Parser.normalizeImageUrl("http://image.tmdb.org/t/p/w500/abc.jpg"),
+            AnimeOnlineParser.normalizeImageUrl("http://image.tmdb.org/t/p/w500/abc.jpg"),
         )
-        assertNull(AnimeOnline2Parser.normalizeImageUrl("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"))
+        assertNull(AnimeOnlineParser.normalizeImageUrl("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"))
 
         val srcsetHtml = org.jsoup.Jsoup.parse(
             """<img src="data:image/svg+xml,foo" data-srcset="//www1.animeonline.ninja/wp-content/uploads/a.webp 185w, https://ww4.animeonline.ninja/wp-content/uploads/b.webp 300w" />""",
         ).selectFirst("img")
         assertEquals(
             "https://ww4.animeonline.ninja/wp-content/uploads/a.webp",
-            AnimeOnline2Parser.extractImgUrl(srcsetHtml),
+            AnimeOnlineParser.extractImgUrl(srcsetHtml),
         )
     }
 
@@ -104,7 +104,7 @@ class AnimeOnline2ParserTest {
             </body></html>
         """.trimIndent()
 
-        val home = AnimeOnline2Parser.parseHomeModules(html)
+        val home = AnimeOnlineParser.parseHomeModules(html)
         assertEquals(1, home.latestEpisodes.size)
         assertEquals("Mission: Yozakura Family 2", home.latestEpisodes[0].title)
         assertEquals(19, home.latestEpisodes[0].episodeNumber)
@@ -121,7 +121,7 @@ class AnimeOnline2ParserTest {
         assertTrue(home.latestMovies[0].isMovie)
         assertEquals(2026, home.latestMovies[0].year)
 
-        val archive = AnimeOnline2Parser.parseArchivePage(html, 1)
+        val archive = AnimeOnlineParser.parseArchivePage(html, 1)
         assertTrue(archive.hasNext)
         assertEquals(4, archive.items.size)
     }
@@ -143,7 +143,7 @@ class AnimeOnline2ParserTest {
             <div class="pagination"><a href="https://ww4.animeonline.ninja/search/page/2/?s=naruto">2</a></div>
         """.trimIndent()
 
-        val sr = AnimeOnline2Parser.parseSearchPage(searchHtml, 1)
+        val sr = AnimeOnlineParser.parseSearchPage(searchHtml, 1)
         assertTrue(sr.hasNext)
         assertEquals(1, sr.items.size)
         assertEquals("Naruto Shippuden", sr.items[0].title)
@@ -159,7 +159,7 @@ class AnimeOnline2ParserTest {
         """.trimIndent()
         assertEquals(
             "https://ww4.animeonline.ninja/online/radiant/",
-            AnimeOnline2Parser.findParentSeriesUrlFromEpisode(epHtml),
+            AnimeOnlineParser.findParentSeriesUrlFromEpisode(epHtml),
         )
     }
 
@@ -203,7 +203,7 @@ class AnimeOnline2ParserTest {
             </body></html>
         """.trimIndent()
 
-        val detail = AnimeOnline2Parser.parseDetailPage("https://ww4.animeonline.ninja/online/radiant/", detailHtml)
+        val detail = AnimeOnlineParser.parseDetailPage("https://ww4.animeonline.ninja/online/radiant/", detailHtml)
         assertEquals("Radiant", detail.title)
         assertFalse(detail.isMovie)
         assertEquals(2018, detail.year)
@@ -216,7 +216,7 @@ class AnimeOnline2ParserTest {
         assertEquals(1 to 1, detail.episodes[0].season to detail.episodes[0].episode)
         assertEquals(2 to 1, detail.episodes[1].season to detail.episodes[1].episode)
 
-        val opts = AnimeOnline2Parser.parsePlayerOptions(detailHtml)
+        val opts = AnimeOnlineParser.parsePlayerOptions(detailHtml)
         assertEquals(1, opts.size)
         assertEquals("51020", opts[0].postId)
         assertEquals("1", opts[0].nume)
@@ -226,7 +226,7 @@ class AnimeOnline2ParserTest {
     @Test
     fun parseSaidochestoGuploadAndByseCrypto() {
         val embJson = """{"embed_url":"https:\/\/saidochesto.top\/embed.php?id=51020","type":"iframe"}"""
-        assertEquals("https://saidochesto.top/embed.php?id=51020", AnimeOnline2Parser.parseDooplayerEmbedUrl(embJson))
+        assertEquals("https://saidochesto.top/embed.php?id=51020", AnimeOnlineParser.parseDooplayerEmbedUrl(embJson))
 
         val saidoHtml = """
             <div class="SelectLangDisp">
@@ -243,7 +243,7 @@ class AnimeOnline2ParserTest {
               </div>
             </div>
         """.trimIndent()
-        val servers = AnimeOnline2Parser.parseSaidochestoOptions(saidoHtml)
+        val servers = AnimeOnlineParser.parseSaidochestoOptions(saidoHtml)
         assertEquals(3, servers.size)
         assertEquals("Subtitulado", servers[0].languageLabel)
         assertEquals("https://gupload.site/data/e/abc", servers[0].url)
@@ -259,7 +259,7 @@ class AnimeOnline2ParserTest {
         val guploadHtml = """<script>var _p=['G7#k','P!2q','ZxV9','mRwL']; var _data="prefix~$b64";</script>"""
         assertEquals(
             "https://gupload.site/data/e/hls/test123/720p.m3u8",
-            AnimeOnline2Parser.extractGuploadVideoUrl(guploadHtml),
+            AnimeOnlineParser.extractGuploadVideoUrl(guploadHtml),
         )
 
         // Test ByseSX AES-GCM decryption
@@ -274,7 +274,7 @@ class AnimeOnline2ParserTest {
         val p2 = b64u.encodeToString(aesKey.copyOfRange(16, 32))
         assertEquals(
             "https://cdn.example/master.m3u8",
-            AnimeOnline2Parser.decryptBysePlayback(b64u.encodeToString(iv), b64u.encodeToString(enc), listOf(p1, p2)),
+            AnimeOnlineParser.decryptBysePlayback(b64u.encodeToString(iv), b64u.encodeToString(enc), listOf(p1, p2)),
         )
     }
 }

@@ -1,263 +1,498 @@
 package com.menorah.animeonline
 
-import android.util.Base64
 import android.content.Context
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.DrmExtractorLink
-import com.lagradost.cloudstream3.utils.newDrmExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONObject
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import java.net.URI
-import java.net.URLEncoder
 import java.util.Collections
-import java.util.concurrent.CancellationException
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-class AnimeOnlineProvider(context: Context) : MainAPI() {
-    override var mainUrl = "https://ww4.animeonline.ninja"
+class AnimeOnlineProvider(pluginContext: Context? = null) : MainAPI() {
+    override var mainUrl = AnimeOnlineParser.BASE
     override var name = "AnimeOnline Ninja"
     override var lang = "es"
     override val hasMainPage = true
     override val hasQuickSearch = true
-    override val hasChromecastSupport = false
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
-    private val site = SiteClient.create(context)
-    private val posters = PosterCache.create(context)
-    private val catalogue = CatalogPager { path -> document(fetch(path)) }
+    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    override val mainPage = mainPageOf(*CatalogSections.all.toTypedArray())
+    override val getMainPageTimeoutMs: Long? = 90_000L
+    override val searchTimeoutMs: Long? = 30_000L
+    override val quickSearchTimeoutMs: Long? = 25_000L
+    override val loadTimeoutMs: Long? = 45_000L
+    override val loadLinksTimeoutMs: Long? = 60_000L
 
-    private fun sitePath(url: String): String {
-        if (!url.startsWith("http")) return if (url.startsWith("/")) url else "/$url"
-        val uri = runCatching { URI(url) }.getOrNull() ?: return url
-        val host = uri.host.orEmpty().lowercase()
-        if (host != "animeonline.ninja" && !host.endsWith(".animeonline.ninja")) return url
-        return (uri.rawPath?.ifBlank { "/" } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
+    override val mainPage = mainPageOf(
+        "archive:/episodio/" to "Últimos Episodios",
+        "featured" to "En Emisión · Recomendados",
+        "archive:/online/" to "Animes",
+        "archive:/pelicula/" to "Películas",
+        "archive:/temporada/" to "Temporadas",
+        "archive:/genero/audio-latino/" to "Audio Latino",
+        "archive:/genero/anime-castellano/" to "Audio Castellano",
+        "archive:/tendencias/" to "Populares",
+        "archive:/ratings/" to "Mejores Valorados",
+        "archive:/genero/en-emision-1/" to "En Emisión",
+        "archive:/genero/blu-ray-dvd-2/" to "Blu-Ray / DVD",
+        "archive:/genero/sin-censura/" to "Sin Censura",
+        "archive:/genero/live-action/" to "Live Action",
+        "archive:/genero/award-winning-anime/" to "Ganadores de Premios",
+        "archive:/genero/proximamente/" to "Próximamente",
+    )
+
+    private val cfKillerActivated = AtomicBoolean(false)
+    private val cfKiller by lazy {
+        cfKillerActivated.set(true)
+        CloudflareKiller()
+    }
+    private val posterHelper = AnimeOnlinePosterHelper(
+        context = pluginContext,
+        cfKillerProvider = { cfKiller },
+        cfKillerActivated = cfKillerActivated,
+    )
+    private val linkGate = Semaphore(6)
+
+    internal suspend fun testCachePosterViaWebView(url: String): String? {
+        return posterHelper.testDownloadViaWebView(listOf(url))[url]
     }
 
-    private fun document(response: SiteResponse): Document = Jsoup.parse(response.text, response.url)
-    private fun document(response: NiceResponse): Document = Jsoup.parse(response.text, response.url)
+    private val baseHeaders = mapOf(
+        "User-Agent" to AnimeOnlineParser.USER_AGENT,
+        "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
+    )
 
-    /** Requests the catalogue host directly. ver2 is an entry page, not a mirror. */
-    private suspend fun fetch(path: String): SiteResponse {
-        val relative = sitePath(path)
-        val url = if (relative.startsWith("http")) relative else mainUrl.trimEnd('/') + relative
-        var response = site.get(url)
-        if (!response.isSuccessful) throw IllegalStateException("AnimeOnline rechazó el acceso (HTTP ${response.code}). Comprueba el sitio en el navegador del dispositivo.")
-        val entry = SiteMarkup.landingEntry(document(response), response.url)
-        if (entry != null) {
-            // The landing button leads to /inicio/. Visit it before retrying the requested path.
-            val home = site.get(entry, headers = mapOf("Referer" to response.url))
-            if (!home.isSuccessful || SiteMarkup.landingEntry(document(home), home.url) != null)
-                throw IllegalStateException("AnimeOnline redirige a su portada y no permite entrar en /inicio/.")
-            if (url.trimEnd('/') == entry.trimEnd('/')) return home
-            response = site.get(url, headers = mapOf("Referer" to entry))
-            if (!response.isSuccessful || SiteMarkup.landingEntry(document(response), response.url) != null)
-                throw IllegalStateException("AnimeOnline redirige a su portada en lugar del catálogo solicitado.")
+    private suspend fun getPageHtml(url: String, referer: String? = "$mainUrl/inicio/", allow404: Boolean = false): String? {
+        val norm = AnimeOnlineParser.normalizeSiteUrl(url)
+        val hdrs = if (referer.isNullOrBlank()) baseHeaders else baseHeaders + ("Referer" to referer)
+        var resp = if (cfKillerActivated.get()) {
+            app.get(norm, headers = hdrs, interceptor = cfKiller, timeout = 30)
+        } else {
+            app.get(norm, headers = hdrs, timeout = 25)
         }
-        return response
+        posterHelper.recordSetCookies(resp.headers.values("Set-Cookie"))
+        if (allow404 && resp.code == 404) return null
+        if (!resp.isSuccessful || AnimeOnlineParser.isCloudflareChallenge(resp.code, resp.text)) {
+            resp = app.get(norm, headers = hdrs, interceptor = cfKiller, timeout = 30)
+            posterHelper.recordSetCookies(resp.headers.values("Set-Cookie"))
+            posterHelper.refreshRuntimeInfo()
+            if (allow404 && resp.code == 404) return null
+        }
+        if (!resp.isSuccessful) {
+            throw IllegalStateException("AnimeOnline Ninja HTTP ${resp.code} en $norm")
+        }
+        return resp.text
     }
 
-    private suspend fun cards(items: List<CatalogCard>): List<SearchResponse> {
-        val cached = posters.resolve(items.map { it.poster })
-        return items.map { card ->
-            val type = if (card.movie) TvType.AnimeMovie else TvType.Anime
-            newTvSeriesSearchResponse(card.title, card.url, type) {
-                posterUrl = cached[card.poster] ?: card.poster
-                posterHeaders = card.poster?.takeIf(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/inicio/") }
+    private suspend fun getExternalHtml(url: String, referer: String): String {
+        val hdrs = baseHeaders + ("Referer" to referer)
+        val resp = app.get(url, headers = hdrs, timeout = 25)
+        if (!resp.isSuccessful) {
+            throw IllegalStateException("Servidor de enlace HTTP ${resp.code} en $url")
+        }
+        return resp.text
+    }
+
+    private fun AnimeCatalogCard.toSearchResponse(resolvedPosters: Map<String, ResolvedPoster>): SearchResponse {
+        val resolved = posterUrl?.let { resolvedPosters[it] ?: ResolvedPoster(it, posterHelper.buildSiteHeaders()) }
+        return if (isMovie) {
+            newAnimeSearchResponse(title, url, TvType.AnimeMovie) {
+                addPoster(resolved?.url ?: this@toSearchResponse.posterUrl, resolved?.headers)
+                this.year = this@toSearchResponse.year
+                this.score = Score.from10(this@toSearchResponse.rating)
+            }
+        } else {
+            newAnimeSearchResponse(title, url, TvType.Anime) {
+                addPoster(resolved?.url ?: this@toSearchResponse.posterUrl, resolved?.headers)
+                this.year = this@toSearchResponse.year
+                this.score = Score.from10(this@toSearchResponse.rating)
+                this@toSearchResponse.episodeNumber?.let { ep ->
+                    addDubStatus(isDub = false, episodes = ep)
+                }
             }
         }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val result = catalogue.get(request.data, page, CatalogSections.initialPageCount(request.data))
-        return newHomePageResponse(HomePageList(request.name, cards(result.cards)), hasNext = result.hasNext)
+        val data = request.data
+        val catalogPage = when {
+            data == "featured" -> {
+                if (page <= 1) {
+                    val html = getPageHtml("$mainUrl/inicio/") ?: ""
+                    val modules = AnimeOnlineParser.parseHomeModules(html)
+                    AnimeCatalogPage(items = modules.featuredOnAir, hasNext = true)
+                } else {
+                    val url = AnimeOnlineParser.buildArchivePageUrl("/genero/en-emision-1/", page)
+                    val html = getPageHtml(url, allow404 = true)
+                    if (html == null) AnimeCatalogPage(emptyList(), false)
+                    else AnimeOnlineParser.parseArchivePage(html, page)
+                }
+            }
+
+            data == "archive:/episodio/" && page <= 1 -> {
+                val html = getPageHtml("$mainUrl/inicio/") ?: ""
+                val eps = AnimeOnlineParser.parseHomeModules(html).latestEpisodes
+                if (eps.isNotEmpty()) {
+                    AnimeCatalogPage(items = eps, hasNext = true)
+                } else {
+                    val fallback = getPageHtml(AnimeOnlineParser.buildArchivePageUrl("/episodio/", page), allow404 = true)
+                    if (fallback == null) AnimeCatalogPage(emptyList(), false)
+                    else AnimeOnlineParser.parseArchivePage(fallback, page)
+                }
+            }
+
+            data.startsWith("archive:") -> {
+                val path = data.removePrefix("archive:")
+                val url = AnimeOnlineParser.buildArchivePageUrl(path, page)
+                val html = getPageHtml(url, allow404 = true)
+                if (html == null) AnimeCatalogPage(emptyList(), false)
+                else AnimeOnlineParser.parseArchivePage(html, page)
+            }
+
+            else -> AnimeCatalogPage(emptyList(), false)
+        }
+
+        val resolvedPosters = posterHelper.preparePosters(catalogPage.items.map { it.posterUrl })
+        val list = HomePageList(
+            name = request.name,
+            list = catalogPage.items.map { it.toSearchResponse(resolvedPosters) },
+            isHorizontalImages = request.horizontalImages,
+        )
+        return newHomePageResponse(list = list, hasNext = catalogPage.hasNext)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        if (query.isBlank()) return emptyList()
-        return cards(SiteMarkup.cards(document(fetch("/search/?s=${URLEncoder.encode(query.trim(), "UTF-8")}"))))
+    override suspend fun quickSearch(query: String): List<SearchResponse>? {
+        return search(query, 1)?.items
     }
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
+
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
+        val url = AnimeOnlineParser.buildSearchUrl(trimmed, page)
+        val html = getPageHtml(url, allow404 = true) ?: return newSearchResponseList(emptyList(), hasNext = false)
+        val parsed = AnimeOnlineParser.parseSearchPage(html, page)
+        val resolvedPosters = posterHelper.preparePosters(parsed.items.map { it.posterUrl })
+        return newSearchResponseList(
+            list = parsed.items.map { it.toSearchResponse(resolvedPosters) },
+            hasNext = parsed.hasNext,
+        )
+    }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = document(fetch(url))
-        val title = SiteMarkup.detailTitle(doc) ?: return null
-        val poster = SiteMarkup.image(doc.selectFirst(".sheader .poster img, #single .poster img") ?: doc.selectFirst(".poster img"))
-        val originalPoster = SiteMarkup.originalPoster(poster)
-        val backdrop = SiteMarkup.backdrop(doc)
-        val plot = doc.selectFirst("#info .wp-content, .wp-content, .sinopsis")?.text()?.trim()
-        val tags = doc.select(".sgeneros a").map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
-        val episodeData = SiteMarkup.episodes(doc)
-        val cached = posters.resolve(listOf(originalPoster, poster, backdrop) + episodeData.map { it.poster })
-        val episodes = episodeData.map { item ->
-            newEpisode(item.url) { name = item.title; season = item.season; episode = item.number; posterUrl = cached[item.poster] ?: item.poster }
-        }
-        val displayPoster = SiteMarkup.displayedPoster(poster, originalPoster, cached)
-        val displayBackdrop = cached[backdrop] ?: backdrop
-        val displayHeaders = listOfNotNull(poster, backdrop).firstOrNull(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/inicio/") }
-        if (sitePath(url).startsWith("/pelicula/")) {
-            return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
-                posterUrl = displayPoster; backgroundPosterUrl = displayBackdrop; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
-            }
-        }
-        if (episodes.isEmpty()) return null
-        return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-            posterUrl = displayPoster; backgroundPosterUrl = displayBackdrop; posterHeaders = displayHeaders; this.plot = plot; this.tags = tags
-        }
-    }
+        val normUrl = AnimeOnlineParser.normalizeSiteUrl(url)
+        var targetUrl = normUrl
+        var html = getPageHtml(targetUrl, allow404 = true) ?: return null
 
-    /** Do not swallow cancellation: CloudStream can stop a request when the user leaves. */
-    private suspend fun <T> attempt(block: suspend () -> T): T? = try {
-        block()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (_: Exception) {
-        null
-    }
-
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val emitted = AtomicBoolean(false)
-        val callbackLock = Any()
-        val emit: (ExtractorLink) -> Unit = { link ->
-            synchronized(callbackLock) { emitted.set(true); callback(link) }
-        }
-        // Stop before CloudStream's default 120-second timeout, even if several hosts are slow.
-        withTimeoutOrNull(75_000L) {
-            val page = fetch(data)
-            val pageUrl = page.url
-            val origin = origin(pageUrl) ?: mainUrl
-            val doc = document(page)
-            val visited = ConcurrentHashMap.newKeySet<String>()
-            for (option in doc.select("#playeroptionsul li[data-post][data-nume]").take(8)) {
-                val post = option.attr("data-post")
-                val nume = option.attr("data-nume")
-                if (post.isBlank() || nume.isBlank()) continue
-                val type = option.attr("data-type").ifBlank { if (sitePath(data).startsWith("/pelicula/")) "movie" else "tv" }
-                // The current site exposes the player through this GET endpoint.
-                val restUrl = "$origin/wp-json/dooplayer/v1/post/${URLEncoder.encode(post, "UTF-8")}?type=${URLEncoder.encode(type, "UTF-8")}&source=${URLEncoder.encode(nume, "UTF-8")}" 
-                val rest = attempt { site.get(restUrl, mapOf("Referer" to pageUrl)).text }
-                var embed = rest?.let { runCatching { JSONObject(it).optString("embed_url") }.getOrNull() }.orEmpty()
-                if (embed.isBlank()) {
-                    val ajax = attempt {
-                        app.post("$origin/wp-admin/admin-ajax.php", data = mapOf("action" to "doo_player_ajax", "post" to post, "nume" to nume, "type" to type), headers = mapOf("Referer" to pageUrl, "X-Requested-With" to "XMLHttpRequest"), timeout = SiteClient.REQUEST_SECONDS).text
-                    }
-                    embed = ajax?.let { runCatching { JSONObject(it).optString("embed_url") }.getOrNull() }.orEmpty()
+        // When user clicks an episode card from "Últimos Episodios", promote to the parent anime series
+        // if the page provides a "lista de episodios" link so they get full seasons, plot & HD poster.
+        if (targetUrl.contains("/episodio/")) {
+            val parentSeriesUrl = AnimeOnlineParser.findParentSeriesUrlFromEpisode(html)
+            if (!parentSeriesUrl.isNullOrBlank() && parentSeriesUrl != targetUrl) {
+                val parentHtml = getPageHtml(parentSeriesUrl, referer = targetUrl, allow404 = true)
+                if (!parentHtml.isNullOrBlank()) {
+                    targetUrl = parentSeriesUrl
+                    html = parentHtml
                 }
-                resolve(embed, pageUrl, subtitleCallback, emit, visited, 0)
             }
-            for (frame in doc.select("iframe[src]").take(8)) resolve(frame.absUrl("src"), pageUrl, subtitleCallback, emit, visited, 0)
+        }
+
+        val detail = AnimeOnlineParser.parseDetailPage(targetUrl, html)
+        val resolvedMainPosters = posterHelper.preparePosters(
+            listOf(detail.posterUrl, detail.backdropUrl) +
+                detail.related.map { it.posterUrl } +
+                detail.cast.map { it.imageUrl },
+        )
+        val initialPoster = detail.posterUrl?.let { resolvedMainPosters[it] ?: ResolvedPoster(it, posterHelper.buildSiteHeaders()) }
+        val resolvedBackdrop = detail.backdropUrl?.let { resolvedMainPosters[it] }
+        val finalPoster = posterHelper.ensureCookieIsolatedPoster(initialPoster, resolvedBackdrop?.url)
+
+        val resolvedEpisodePosters = if (detail.episodes.isNotEmpty()) {
+            posterHelper.preparePosters(
+                detail.episodes.map { it.posterUrl },
+                forEpisodesWithoutHeaders = true,
+                maxBatchCache = 24,
+            )
+        } else {
+            emptyMap()
+        }
+
+        val recs = detail.related.map { it.toSearchResponse(resolvedMainPosters) }
+        val actorData = detail.cast.map {
+            val actorImg = it.imageUrl?.let { img -> resolvedMainPosters[img]?.url ?: img }
+            ActorData(
+                actor = Actor(it.name, actorImg),
+                roleString = it.role,
+            )
+        }
+
+        if (detail.isMovie) {
+            return newMovieLoadResponse(detail.title, detail.url, TvType.AnimeMovie, detail.url) {
+                addPoster(finalPoster?.url ?: detail.posterUrl, finalPoster?.headers)
+                this.backgroundPosterUrl = resolvedBackdrop?.url ?: finalPoster?.url ?: detail.backdropUrl ?: detail.posterUrl
+                this.plot = detail.plot
+                this.year = detail.year
+                this.duration = detail.durationMinutes
+                this.score = Score.from10(detail.rating)
+                this.tags = detail.tags
+                this.recommendations = recs
+                this.actors = actorData
+                addTrailer(detail.trailerUrl)
+            }
+        }
+
+        val fallbackEpPoster = finalPoster?.url?.takeIf { it.startsWith("file://") } ?: detail.posterUrl
+        val episodeObjects = if (detail.episodes.isNotEmpty()) {
+            detail.episodes.map { ep ->
+                val epResolved = ep.posterUrl?.let { resolvedEpisodePosters[it]?.url ?: it }
+                newEpisode(ep.url) {
+                    this.name = ep.name
+                    this.season = ep.season
+                    this.episode = ep.episode
+                    this.posterUrl = epResolved ?: fallbackEpPoster
+                    addDate(ep.date)
+                }
+            }
+        } else if (detail.hasDirectPlayer) {
+            listOf(
+                newEpisode(detail.url) {
+                    this.name = detail.title
+                    this.season = 1
+                    this.episode = 1
+                    this.posterUrl = fallbackEpPoster
+                }
+            )
+        } else {
+            emptyList()
+        }
+
+        return newAnimeLoadResponse(detail.title, detail.url, TvType.Anime) {
+            addPoster(finalPoster?.url ?: detail.posterUrl, finalPoster?.headers)
+            this.backgroundPosterUrl = resolvedBackdrop?.url ?: finalPoster?.url ?: detail.backdropUrl ?: detail.posterUrl
+            this.plot = detail.plot
+            this.year = detail.year
+            this.duration = detail.durationMinutes
+            this.score = Score.from10(detail.rating)
+            this.tags = detail.tags
+            this.recommendations = recs
+            this.actors = actorData
+            addTrailer(detail.trailerUrl)
+            addEpisodes(DubStatus.Subbed, episodeObjects)
+        }
+    }
+
+    private suspend fun fetchPlayerEmbedUrl(pageUrl: String, option: AnimePlayerOption): String? {
+        val wpJsonUrl = "$mainUrl/wp-json/dooplayer/v1/post/${option.postId}?type=${option.type}&source=${option.nume}"
+        val jsonHeaders = baseHeaders + mapOf(
+            "Accept" to "application/json, */*",
+            "Referer" to pageUrl,
+        )
+        var jsonResp = try {
+            if (cfKillerActivated.get()) {
+                app.get(wpJsonUrl, headers = jsonHeaders, interceptor = cfKiller, timeout = 20)
+            } else {
+                app.get(wpJsonUrl, headers = jsonHeaders, timeout = 20)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (jsonResp != null && (!jsonResp.isSuccessful || AnimeOnlineParser.isCloudflareChallenge(jsonResp.code, jsonResp.text))) {
+            jsonResp = try {
+                app.get(wpJsonUrl, headers = jsonHeaders, interceptor = cfKiller, timeout = 25)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                jsonResp
+            }
+        }
+        if (jsonResp != null && jsonResp.isSuccessful) {
+            AnimeOnlineParser.parseDooplayerEmbedUrl(jsonResp.text)?.let { return it }
+        }
+
+        val ajaxHeaders = baseHeaders + mapOf(
+            "Accept" to "application/json, */*",
+            "Referer" to pageUrl,
+            "Origin" to mainUrl,
+            "X-Requested-With" to "XMLHttpRequest",
+        )
+        val ajaxResp = try {
+            if (cfKillerActivated.get()) {
+                app.post(
+                    "$mainUrl/wp-admin/admin-ajax.php",
+                    data = mapOf(
+                        "action" to "doo_player_ajax",
+                        "post" to option.postId,
+                        "nume" to option.nume,
+                        "type" to option.type,
+                    ),
+                    headers = ajaxHeaders,
+                    interceptor = cfKiller,
+                    timeout = 20,
+                )
+            } else {
+                app.post(
+                    "$mainUrl/wp-admin/admin-ajax.php",
+                    data = mapOf(
+                        "action" to "doo_player_ajax",
+                        "post" to option.postId,
+                        "nume" to option.nume,
+                        "type" to option.type,
+                    ),
+                    headers = ajaxHeaders,
+                    timeout = 20,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (ajaxResp != null && ajaxResp.isSuccessful) {
+            return AnimeOnlineParser.parseDooplayerEmbedUrl(ajaxResp.text)
+        }
+        return null
+    }
+
+    private suspend fun labelExtractorLink(langLabel: String, link: ExtractorLink): ExtractorLink {
+        val taggedName = if (link.name.startsWith("[")) link.name else "[$langLabel] ${link.name}"
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, taggedName, link.url, link.type, link.uuid) {
+                referer = link.referer
+                quality = link.quality
+                headers = link.headers
+                extractorData = link.extractorData
+                audioTracks = link.audioTracks
+                kid = link.kid
+                key = link.key
+                kty = link.kty
+                keyRequestParameters = link.keyRequestParameters
+                licenseUrl = link.licenseUrl
+            }
+        }
+        return newExtractorLink(link.source, taggedName, link.url, link.type) {
+            referer = link.referer
+            quality = link.quality
+            headers = link.headers
+            extractorData = link.extractorData
+            audioTracks = link.audioTracks
+        }
+    }
+
+    private suspend fun resolveSingleHost(
+        embedUrl: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+    ): List<ExtractorLink> {
+        val collected = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        val sink: (ExtractorLink) -> Unit = { collected.add(it) }
+        val lower = embedUrl.lowercase()
+        try {
+            when {
+                lower.contains("gupload.site") ->
+                    GUploadSiteExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("savefiles.top") ->
+                    SavefilesExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("uqload.vc") ->
+                    UqloadVcExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("peeplayer.com") ->
+                    PeeplayerExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("mxdrop.sx") ->
+                    MxdropSxExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("mxdrop.click") ->
+                    MxdropClickExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("mixdropjmk.pw") ->
+                    MixdropJmkExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("filemoon0.top") ->
+                    Filemoon0TopExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("filemooon.link") ->
+                    FilemooonLinkExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                lower.contains("luluvid.com") ->
+                    LuluvidExtractor().getUrl(embedUrl, referer, subtitleCallback, sink)
+                else ->
+                    loadExtractor(embedUrl, referer, subtitleCallback, sink)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+        return synchronized(collected) { collected.toList() }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val pageUrl = AnimeOnlineParser.normalizeSiteUrl(data)
+        val html = getPageHtml(pageUrl) ?: return false
+        val playerOptions = AnimeOnlineParser.parsePlayerOptions(html)
+        if (playerOptions.isEmpty()) return false
+
+        val targets = mutableListOf<Triple<String, String, String>>()
+        for (option in playerOptions) {
+            val embedUrl = fetchPlayerEmbedUrl(pageUrl, option) ?: continue
+            if (embedUrl.contains("saidochesto.top", ignoreCase = true) || embedUrl.contains("/embed.php")) {
+                val saidoHtml = try {
+                    getExternalHtml(embedUrl, referer = pageUrl)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                for (srv in AnimeOnlineParser.parseSaidochestoOptions(saidoHtml)) {
+                    targets.add(Triple(srv.url, embedUrl, srv.languageLabel))
+                }
+            } else {
+                val label = option.label.ifBlank { "Servidor" }
+                targets.add(Triple(embedUrl, pageUrl, label))
+            }
+        }
+
+        if (targets.isEmpty()) return false
+
+        val langPriority = mapOf("Latino" to 0, "Castellano" to 1, "Subtitulado" to 2)
+        val orderedTargets = targets.sortedBy { langPriority[it.third] ?: 3 }
+
+        val emitted = AtomicBoolean(false)
+        val collectedResults = Collections.synchronizedList(mutableListOf<Pair<Int, ExtractorLink>>())
+        val seen = Collections.synchronizedSet(mutableSetOf<String>())
+
+        withTimeoutOrNull(50_000L) {
+            coroutineScope {
+                orderedTargets.mapIndexed { idx, (url, ref, langLabel) ->
+                    async(Dispatchers.IO) {
+                        linkGate.withPermit {
+                            withTimeoutOrNull(18_000L) {
+                                val resolved = resolveSingleHost(url, ref, subtitleCallback)
+                                for (link in resolved) {
+                                    val labeled = labelExtractorLink(langLabel, link)
+                                    val key = "${labeled.url}|$langLabel"
+                                    if (!seen.add(key)) continue
+                                    collectedResults.add(idx to labeled)
+                                }
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+
+        val finalLinks = synchronized(collectedResults) {
+            collectedResults.sortedBy { it.first }.map { it.second }
+        }
+        for (link in finalLinks) {
+            emitted.set(true)
+            callback(link)
         }
         return emitted.get()
     }
-
-    private suspend fun resolve(input: String, referer: String, subtitles: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit, visited: MutableSet<String>, depth: Int, language: String? = null) {
-        if (depth > 3 || input.isBlank()) return
-        val cleaned = if (input.contains("<iframe")) Jsoup.parse(input, referer).selectFirst("iframe[src]")?.absUrl("src").orEmpty() else input.trim()
-        val url = runCatching { URI(referer).resolve(cleaned).toString() }.getOrNull() ?: return
-        if (!(url.startsWith("https://") || url.startsWith("http://")) || !visited.add("${language.orEmpty()}|$url")) return
-        val path = URI(url).path.orEmpty().lowercase()
-        if ((path.endsWith(".m3u8") || path.endsWith(".mp4")) && !MediaCheck.isKnownPlayerPage(url)) {
-            // An extension is only a hint: expired media can return HTML or error_nofile.
-            if (!MediaCheck.definitelyBroken(url, referer)) {
-                val type = if (path.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                val host = URI(url).host.orEmpty().removePrefix("www.").ifBlank { name }
-                callback(newExtractorLink(name, sourceLabel(language, host), url, type) { this.referer = referer })
-            }
-            return
-        }
-        // Buffer callbacks briefly so a suspendable builder can preserve DRM and all
-        // extractor metadata while adding the actual language to the visible name.
-        val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-        withTimeoutOrNull(7_000L) {
-            attempt { loadExtractor(url, referer, subtitles) { found.add(it) } }
-        }
-        val links = synchronized(found) { found.toList() }
-        for (link in links) {
-            // Preserve DRM and extractor headers. Do not treat network failures or
-            // access challenges as proof that a protected stream is unavailable.
-            if (link is DrmExtractorLink || !MediaCheck.definitelyBroken(link.url, link.referer, link.headers)) {
-                callback(withLanguage(link, language))
-            }
-        }
-        if (links.isNotEmpty()) return
-        val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = SiteClient.REQUEST_SECONDS) } ?: return
-        if (!response.isSuccessful) return
-        val doc = document(response)
-        // Several providers can be slow or offline. Resolve a few at a time so one
-        // dead host cannot consume the whole playback budget or starve a language.
-        val servers = SiteMarkup.playerServers(doc).take(24)
-        if (servers.isNotEmpty()) coroutineScope {
-            val permits = Semaphore(4)
-            servers.map { server ->
-                async {
-                    permits.withPermit {
-                        withTimeoutOrNull(12_000L) {
-                            resolve(server.url, response.url, subtitles, callback, visited, depth + 1, server.language)
-                        }
-                    }
-                }
-            }.awaitAll()
-        }
-        val raw = doc.selectFirst("script#msp-data")?.data()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("#msp[data-api]")?.absUrl("data-api")?.takeIf { it.isNotBlank() }?.let { api ->
-                attempt { app.get(api, headers = mapOf("Referer" to response.url), timeout = SiteClient.REQUEST_SECONDS).text }
-            }
-        val json = raw?.let { runCatching { JSONObject(it) }.getOrNull() }
-        val key = json?.optString("pk").orEmpty()
-        val langs = json?.optJSONArray("langs")
-        if (key.isNotEmpty() && langs != null) {
-            var count = 0
-            for (i in 0 until langs.length()) {
-                val group = langs.optJSONObject(i) ?: continue
-                val items = group.optJSONArray("items") ?: continue
-                val groupLanguage = languageLabel(group.optString("name").ifBlank { group.optString("label").ifBlank { group.optString("lang").ifBlank { group.optString("code") } } }) ?: language
-                for (j in 0 until items.length()) {
-                    if (count++ >= 12) break
-                    val encoded = items.optJSONObject(j)?.optString("url").orEmpty()
-                    val decoded = runCatching {
-                        val bytes = Base64.decode(encoded.replace('-', '+').replace('_', '/'), Base64.DEFAULT)
-                        String(ByteArray(bytes.size) { n -> (bytes[n].toInt() xor key[n % key.length].code).toByte() }, Charsets.UTF_8)
-                    }.getOrNull().orEmpty()
-                    resolve(decoded, response.url, subtitles, callback, visited, depth + 1, groupLanguage)
-                }
-            }
-        }
-        for (frame in doc.select("iframe[src]").take(8)) resolve(frame.absUrl("src"), response.url, subtitles, callback, visited, depth + 1, language)
-    }
-
-    private suspend fun withLanguage(link: ExtractorLink, language: String?): ExtractorLink {
-        if (language == null) return link
-        val label = sourceLabel(language, link.name)
-        if (link is DrmExtractorLink) {
-            return newDrmExtractorLink(link.source, label, link.url, link.type, link.uuid) {
-                referer = link.referer; quality = link.quality; headers = link.headers
-                extractorData = link.extractorData; audioTracks = link.audioTracks
-                kid = link.kid; key = link.key; kty = link.kty
-                keyRequestParameters = link.keyRequestParameters; licenseUrl = link.licenseUrl
-            }
-        }
-        return newExtractorLink(link.source, label, link.url, link.type) {
-            referer = link.referer; quality = link.quality; headers = link.headers
-            extractorData = link.extractorData; audioTracks = link.audioTracks
-        }
-    }
-
-    private fun origin(url: String): String? = runCatching {
-        val uri = URI(url)
-        if (uri.scheme == null || uri.host == null) null else "${uri.scheme}://${uri.authority}"
-    }.getOrNull()
 }

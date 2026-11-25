@@ -1,4 +1,4 @@
-package com.menorah.animeonline2
+package com.menorah.animeonline
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -52,7 +52,7 @@ class GUploadSiteExtractor : ExtractorApi() {
     ) {
         val base = hostBaseUrl(url, mainUrl)
         val html = app.get(url, referer = referer ?: "https://saidochesto.top/", timeout = 20).text
-        val videoUrl = AnimeOnline2Parser.extractGuploadVideoUrl(html) ?: return
+        val videoUrl = AnimeOnlineParser.extractGuploadVideoUrl(html) ?: return
         val headers = mapOf("Referer" to "$base/", "Origin" to base)
         if (videoUrl.contains(".m3u8", ignoreCase = true)) {
             M3u8Helper.generateM3u8(
@@ -223,7 +223,7 @@ class PeeplayerExtractor : ExtractorApi() {
                 headers = mapOf("Referer" to embedUrl),
                 timeout = 15,
             ).text
-            AnimeOnline2Parser.parseJsonMap(authText)?.get("t")?.toString()?.ifBlank { null }
+            AnimeOnlineParser.parseJsonMap(authText)?.get("t")?.toString()?.ifBlank { null }
         }.getOrNull() ?: stok ?: return
 
         val masterUrl = "$strimBase/m/$msgId/master.m3u8?t=$authToken"
@@ -278,7 +278,7 @@ open class ByseFilemoonExtractor(override var mainUrl: String) : ExtractorApi() 
             app.get("$base/api/videos/$code/embed/details", referer = url, timeout = 15).text
         }.getOrNull()
         val embedFrameUrl = detailsJson?.let {
-            AnimeOnline2Parser.parseJsonMap(it)?.get("embed_frame_url")?.toString()?.trim()
+            AnimeOnlineParser.parseJsonMap(it)?.get("embed_frame_url")?.toString()?.trim()
         }
         if (!embedFrameUrl.isNullOrBlank()) {
             val embedBase = hostBaseUrl(embedFrameUrl, base)
@@ -295,7 +295,7 @@ open class ByseFilemoonExtractor(override var mainUrl: String) : ExtractorApi() 
                 )
             }.getOrNull()
             if (pbResp != null && pbResp.isSuccessful) {
-                val root = AnimeOnline2Parser.parseJsonMap(pbResp.text)
+                val root = AnimeOnlineParser.parseJsonMap(pbResp.text)
                 @Suppress("UNCHECKED_CAST")
                 val playback = root?.get("playback") as? Map<String, Any?>
                 val iv = playback?.get("iv")?.toString()
@@ -304,7 +304,7 @@ open class ByseFilemoonExtractor(override var mainUrl: String) : ExtractorApi() 
                 val keyParts = (playback?.get("key_parts") as? List<Any?>)?.mapNotNull { it?.toString() }
                 if (!iv.isNullOrBlank() && !payload.isNullOrBlank() && !keyParts.isNullOrEmpty()) {
                     val streamUrl = runCatching {
-                        AnimeOnline2Parser.decryptBysePlayback(iv, payload, keyParts)
+                        AnimeOnlineParser.decryptBysePlayback(iv, payload, keyParts)
                     }.getOrNull()
                     if (!streamUrl.isNullOrBlank()) {
                         M3u8Helper.generateM3u8(

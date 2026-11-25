@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # The caller runs in a disposable Actions checkout; only the temporary build is modified.
-cp scripts/playback_probe/AnimeOnline2Probe.kt animeonline2/src/main/kotlin/com/menorah/animeonline2/PlaybackProbe.kt
+cp scripts/playback_probe/AnimeOnlineProbe.kt AnimeOnlineNinja/src/main/kotlin/com/menorah/animeonline/PlaybackProbe.kt
 python3 - <<'PY'
-p = 'animeonline2/src/main/kotlin/com/menorah/animeonline2/AnimeOnline2Plugin.kt'
+p = 'AnimeOnlineNinja/src/main/kotlin/com/menorah/animeonline/AnimeOnlinePlugin.kt'
 s = open(p).read().replace('registerExtractorAPI(LuluvidExtractor())', 'registerExtractorAPI(LuluvidExtractor()); PlaybackProbe.start(context)')
 assert 'PlaybackProbe.start(context)' in s
 open(p, 'w').write(s)
 
-p = 'animeonline2/build.gradle.kts'
+p = 'AnimeOnlineNinja/build.gradle.kts'
 s = open(p).read().replace(
     'dependencies {',
     'dependencies {\n    compileOnly("androidx.media3:media3-exoplayer:1.9.3")\n    compileOnly("androidx.media3:media3-exoplayer-hls:1.9.3")\n    compileOnly("io.coil-kt.coil3:coil:3.3.0")\n    compileOnly("io.coil-kt.coil3:coil-network-okhttp:3.3.0")',
@@ -17,7 +17,7 @@ s = open(p).read().replace(
 open(p, 'w').write(s)
 PY
 set +e
-./gradlew :animeonline2:make --stacktrace > probe-build.log 2>&1
+./gradlew :AnimeOnlineNinja:make --stacktrace > probe-build.log 2>&1
 bstatus=$?
 cat probe-build.log
 if [ "$bstatus" -ne 0 ]; then
@@ -32,7 +32,7 @@ package=com.lagradost.cloudstream3.prerelease
 adb shell pm grant "$package" android.permission.READ_EXTERNAL_STORAGE
 adb shell pm grant "$package" android.permission.WRITE_EXTERNAL_STORAGE
 adb shell mkdir -p /sdcard/Cloudstream3/plugins
-adb push animeonline2/build/animeonline2.cs3 /sdcard/Cloudstream3/plugins/animeonline2.cs3
+adb push AnimeOnlineNinja/build/AnimeOnlineNinja.cs3 /sdcard/Cloudstream3/plugins/AnimeOnlineNinja.cs3
 adb logcat -c
 adb shell monkey -p "$package" 1
 for i in $(seq 1 145); do
@@ -41,7 +41,7 @@ for i in $(seq 1 145); do
   if echo "$log" | grep -q 'PASS all'; then
     echo "$log"
     echo "$log" | grep -E 'home sections=|PASS coil posters=|PASS webview poster fallback|extracted=|PASS .* frame' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
-    echo '::notice::CloudStream comprobó animeonline2 y reprodujo las muestras con Media3'
+    echo '::notice::CloudStream comprobó AnimeOnlineNinja y reprodujo las muestras con Media3'
     exit 0
   fi
   if echo "$log" | grep -q 'FAIL '; then

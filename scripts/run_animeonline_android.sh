@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set +e
-./gradlew :animeonline2:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.live=true --stacktrace > animeonline2-android.log 2>&1
+./gradlew :AnimeOnlineNinja:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.live=true --stacktrace > animeonline-android.log 2>&1
 status=$?
-cat animeonline2-android.log
+cat animeonline-android.log
 if [ "$status" -ne 0 ]; then
   python3 - <<'PY'
 import pathlib, xml.etree.ElementTree as ET
 failures = []
-for path in pathlib.Path('animeonline2/build/outputs/androidTest-results').glob('**/*.xml'):
+for path in pathlib.Path('AnimeOnlineNinja/build/outputs/androidTest-results').glob('**/*.xml'):
     try:
         for case in ET.parse(path).findall('.//testcase'):
             for fail in case.findall('failure') + case.findall('error'):
@@ -15,7 +15,7 @@ for path in pathlib.Path('animeonline2/build/outputs/androidTest-results').glob(
     except Exception:
         pass
 if not failures:
-    lines = pathlib.Path('animeonline2-android.log').read_text(errors='replace').splitlines()
+    lines = pathlib.Path('animeonline-android.log').read_text(errors='replace').splitlines()
     failures = [s for s in lines if s.startswith('e: ') or 'FAILED' in s or 'What went wrong:' in s][-10:]
 print('::error::' + (' | '.join(failures) or 'Ver registro').replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D'))
 PY

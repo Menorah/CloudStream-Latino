@@ -1,4 +1,4 @@
-package com.menorah.animeonline2
+package com.menorah.animeonline
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -41,7 +41,7 @@ data class ResolvedPoster(
     val headers: Map<String, String>?,
 )
 
-internal class AnimeOnline2PosterHelper(
+internal class AnimeOnlinePosterHelper(
     context: Context?,
     private val cfKillerProvider: () -> CloudflareKiller,
     private val cfKillerActivated: AtomicBoolean,
@@ -69,7 +69,7 @@ internal class AnimeOnline2PosterHelper(
 
     private val cacheDir: File? by lazy {
         appContext?.let { ctx ->
-            File(ctx.cacheDir, "ao2_posters").apply { mkdirs() }
+            File(ctx.cacheDir, "ao_posters").apply { mkdirs() }
         }
     }
 
@@ -98,7 +98,7 @@ internal class AnimeOnline2PosterHelper(
         return capturedWebViewUa
             ?: appContext?.let { ctx -> runCatching { WebSettings.getDefaultUserAgent(ctx) }.getOrNull() }
                 ?.takeIf { it.isNotBlank() }
-            ?: AnimeOnline2Parser.USER_AGENT
+            ?: AnimeOnlineParser.USER_AGENT
     }
 
     private fun resolveCookieString(): String? {
@@ -110,7 +110,7 @@ internal class AnimeOnline2PosterHelper(
             }
         }
         runCatching {
-            val cmCookie = CookieManager.getInstance()?.getCookie(AnimeOnline2Parser.BASE).orEmpty()
+            val cmCookie = CookieManager.getInstance()?.getCookie(AnimeOnlineParser.BASE).orEmpty()
             for (part in cmCookie.split(";")) {
                 val eq = part.indexOf('=')
                 if (eq > 0) {
@@ -127,7 +127,7 @@ internal class AnimeOnline2PosterHelper(
     fun buildSiteHeaders(includeCookies: Boolean = true): Map<String, String> {
         val headers = linkedMapOf(
             "User-Agent" to resolveUserAgent(),
-            "Referer" to "${AnimeOnline2Parser.BASE}/inicio/",
+            "Referer" to "${AnimeOnlineParser.BASE}/inicio/",
             "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
         )
@@ -138,7 +138,7 @@ internal class AnimeOnline2PosterHelper(
     }
 
     fun headersForExternal(): Map<String, String> = mapOf(
-        "User-Agent" to AnimeOnline2Parser.USER_AGENT,
+        "User-Agent" to AnimeOnlineParser.USER_AGENT,
         "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
     )
@@ -151,7 +151,7 @@ internal class AnimeOnline2PosterHelper(
         val distinctUrls = urls.mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }.distinct()
         if (distinctUrls.isEmpty()) return emptyMap()
 
-        val siteUrls = distinctUrls.filter { it.startsWith("http") && AnimeOnline2Parser.isSiteUrl(it) }
+        val siteUrls = distinctUrls.filter { it.startsWith("http") && AnimeOnlineParser.isSiteUrl(it) }
         val result = LinkedHashMap<String, ResolvedPoster>(distinctUrls.size)
 
         if (siteUrls.isEmpty()) {
@@ -192,7 +192,7 @@ internal class AnimeOnline2PosterHelper(
                 result[u] = when {
                     cached != null -> ResolvedPoster(cached.toURI().toString(), null)
                     u.startsWith("file://") -> ResolvedPoster(u, null)
-                    AnimeOnline2Parser.isSiteUrl(u) -> ResolvedPoster(u, siteHeaders)
+                    AnimeOnlineParser.isSiteUrl(u) -> ResolvedPoster(u, siteHeaders)
                     else -> ResolvedPoster(u, extHeaders)
                 }
             }
@@ -204,7 +204,7 @@ internal class AnimeOnline2PosterHelper(
         for (u in distinctUrls) {
             result[u] = when {
                 u.startsWith("file://") -> ResolvedPoster(u, null)
-                AnimeOnline2Parser.isSiteUrl(u) -> ResolvedPoster(u, siteHeaders)
+                AnimeOnlineParser.isSiteUrl(u) -> ResolvedPoster(u, siteHeaders)
                 else -> ResolvedPoster(u, extHeaders)
             }
         }
@@ -224,7 +224,7 @@ internal class AnimeOnline2PosterHelper(
         val hasCookie = poster.headers?.containsKey("Cookie") == true
         val externalBackdrop = !backdropUrl.isNullOrBlank() &&
             !backdropUrl.startsWith("file://") &&
-            !AnimeOnline2Parser.isSiteUrl(backdropUrl)
+            !AnimeOnlineParser.isSiteUrl(backdropUrl)
         if (!hasCookie || !externalBackdrop || appContext == null) return poster
 
         val existing = getValidCachedFile(poster.url)
@@ -259,7 +259,7 @@ internal class AnimeOnline2PosterHelper(
             val (directOk, bareOk) = coroutineScope {
                 val withHdrs = async(Dispatchers.IO) { probeAndMaybeCache(probeUrl, buildSiteHeaders()) }
                 val bare = async(Dispatchers.IO) {
-                    probeOnly(probeUrl, mapOf("User-Agent" to AnimeOnline2Parser.USER_AGENT))
+                    probeOnly(probeUrl, mapOf("User-Agent" to AnimeOnlineParser.USER_AGENT))
                 }
                 withHdrs.await() to bare.await()
             }
@@ -306,7 +306,7 @@ internal class AnimeOnline2PosterHelper(
                 }
                 if (afterKillerOk) {
                     bareOkHttpWorks = withContext(Dispatchers.IO) {
-                        probeOnly(probeUrl, mapOf("User-Agent" to AnimeOnline2Parser.USER_AGENT))
+                        probeOnly(probeUrl, mapOf("User-Agent" to AnimeOnlineParser.USER_AGENT))
                     }
                     deliveryMode = DeliveryMode.DIRECT_WITH_HEADERS
                     return
@@ -501,7 +501,7 @@ internal class AnimeOnline2PosterHelper(
 
                         private fun checkAndFetch(view: WebView, pageUrl: String, gen: Int) {
                             if (finished.get() || gen != generation || fetchStarted) return
-                            if (!AnimeOnline2Parser.isSiteUrl(pageUrl)) return
+                            if (!AnimeOnlineParser.isSiteUrl(pageUrl)) return
                             val probeJs = "JSON.stringify({ready:document.readyState,title:document.title||'',html:(document.documentElement&&document.documentElement.innerHTML||'').slice(0,4000)})"
                             view.evaluateJavascript(probeJs) { raw ->
                                 if (finished.get() || gen != generation || fetchStarted) return@evaluateJavascript
@@ -557,7 +557,7 @@ internal class AnimeOnline2PosterHelper(
                         }
                     }
 
-                    view.loadUrl("${AnimeOnline2Parser.BASE}/inicio/")
+                    view.loadUrl("${AnimeOnlineParser.BASE}/inicio/")
                 }.onFailure {
                     handler.removeCallbacks(timeoutRunnable)
                     cleanup()

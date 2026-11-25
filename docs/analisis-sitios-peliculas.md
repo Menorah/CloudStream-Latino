@@ -14,7 +14,8 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | Cinecalidad.am | **Publicado** | Película y episodio reproducidos con CloudStream+Media3. |
 | Cinecalidad.my | **Publicado** | Cuatro películas reproducidas vía VOE. |
 | RePelis24.shop | **Descartado** (decisión del usuario, 24-nov) | Reproducción verificada en CI el 24-nov (abajo), pero en la red del usuario fallaron imágenes (el CDN `/cdn/` devuelve reto 403 de Cloudflare) y aparecieron enlaces CONTAINER_MALFORMED; tras varias rondas de arreglos el usuario decidió retirarlo. |
-| AnimeOnlineNinja / VerAni | Publicados (tareas previas) | Pendientes conocidos: error 3003 y servidores de AnimeOnline. |
+| AnimeOnlineNinja | **Reconstruido y verificado (v9)** | Sustituye por completo al complemento antiguo; catálogo completo, portadas Coil + respaldo WebView y reproducción Media3 verificada. |
+| VerAni | Publicado (tareas previas) | Mantiene su módulo propio para VerAni.me. |
 | SoloLatino | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario siempre mostró «Enlaces no encontrados»: los botones `data-player-token` los inserta JavaScript y el sitio va tras Cloudflare; el usuario decidió retirarlo tras varias rondas de arreglos. |
 | PoseidonHD2 | **Publicado** | Reproducción representativa verificada el 24-nov: película + 3 episodios reproducidos con Media3; se corrigieron episodios sin enlaces (variante `thisEpisode` y fuentes directas). Ciudad de Dios 2x3 y Yellowjackets 1x1 se informan como no disponibles por sus hosts (DNS/403/JS) desde la red de CI. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
@@ -139,14 +140,14 @@ SPA WordPress + React cuya portada SSR expone `window.siteConfig` (`imageUrl` y 
 - Carga completa de fichas (portada, fondo, logotipo, reparto, relacionadas, tráiler y temporadas ordenadas numéricamente con 232 episodios / 10 temporadas en `csi-miami-2002`).
 - Reproducción real verificada con CloudStream pre-release + Media3 ExoPlayer (frames decodificados): película (`Perfectos mentirosos` vía Voe), película (`Bulldozer` vía Vimeos), episodio de serie (`CSI: Miami` 1x1 vía Vimeos) y episodio de anime (`Dragon Ball Super: Beerus` 1x1 vía Vimeos).
 
-## animeonline2 — reproducción verificada (25-nov, run 45710360085)
+## AnimeOnlineNinja (v9) — reconstrucción y reproducción verificada (25-nov, runs 45716845070 / 45717526695)
 
-Extensión agnóstica escrita desde cero a partir de `https://ww4.animeonline.ninja/inicio/`:
-- Portada completa (15 secciones en paralelo en ~2,9 s, 0 vacías): Últimos Episodios (`/inicio/` y `/episodio/`), En Emisión · Recomendados (`#featured-titles`), Animes (`/online/`), Películas (`/pelicula/`), Temporadas (`/temporada/`), Audio Latino, Audio Castellano, Populares, Mejores Valorados, En Emisión, Blu-Ray/DVD, Sin Censura, Live Action, Ganadores de Premios y Próximamente.
+Extensión reconstruida desde cero (originalmente probada como `animeonline2` y consolidada en `AnimeOnlineNinja` v9 reemplazando la implementación anterior) a partir de `https://ww4.animeonline.ninja/inicio/`:
+- Portada completa (15 secciones en paralelo en ~2,9-5,1 s, 0 vacías): Últimos Episodios (`/inicio/` y `/episodio/`), En Emisión · Recomendados (`#featured-titles`), Animes (`/online/`), Películas (`/pelicula/`), Temporadas (`/temporada/`), Audio Latino, Audio Castellano, Populares, Mejores Valorados, En Emisión, Blu-Ray/DVD, Sin Censura, Live Action, Ganadores de Premios y Próximamente.
 - Búsqueda paginada (`/?s=<q>` y `/search/page/N/?s=<q>`), limpieza de enlaces SEO spam en `.sgeneros`, resolución de episodios recientes desde portada hacia su serie padre vía `.pag_episodes`, y soporte para fichas `/temporada/...`.
 - Resolución multi-idioma (`Latino`, `Castellano`, `Subtitulado`) mediante `/wp-json/dooplayer/v1/post/...` (respaldo `admin-ajax.php`) y `saidochesto.top/embed.php?id=...`, con extractores nativos de CloudStream más extractores propios para `gupload.site`, `savefiles.top`, `uqload.vc`, `peeplayer.com`, `mxdrop.sx`/`mxdrop.click`/`mixdropjmk.pw`, `filemoon0.top`/`filemooon.link` (ByseSX + WebView) y `luluvid.com`.
 - Reproducción real verificada con CloudStream pre-release + Media3 ExoPlayer (frames decodificados): último episodio de portada (`sekai-saikyou-no-majo-hajimemashita-cap-8`), episodio `dragon-ball-daima` cap 1 (vía `GUpload` en `gupload.site`) y película `All You Need Is Kill`.
-- Carga de portadas verificada en v2 (`AnimeOnline2PosterHelper`): adjunta `posterHeaders` (`Referer`, `Accept`, `Accept-Language`, `User-Agent` y `Cookie` de `CloudflareKiller`/`CookieManager`) vía `addPoster(...)`, comprueba el `OkHttpClient` usado por Coil y activa caché local en `cacheDir/ao2_posters` vía `WebView` (`fetch(..., {credentials:'include'})`) si OkHttp es rechazado por Cloudflare o para miniaturas de episodios (`EpisodeAdapter`); comprobadas 17 portadas/fondos con `Coil 3.3.0` (`SingletonImageLoader`) y el respaldo `WebView` (60.203 bytes) en CloudStream pre-release.
+- Carga de portadas verificada (`AnimeOnlinePosterHelper`): adjunta `posterHeaders` (`Referer`, `Accept`, `Accept-Language`, `User-Agent` y `Cookie` de `CloudflareKiller`/`CookieManager`) vía `addPoster(...)`, comprueba el `OkHttpClient` usado por Coil y activa caché local en `cacheDir/ao_posters` vía `WebView` (`fetch(..., {credentials:'include'})`) si OkHttp es rechazado por Cloudflare o para miniaturas de episodios (`EpisodeAdapter`); comprobadas 17 portadas/fondos con `Coil 3.3.0` (`SingletonImageLoader`) y el respaldo `WebView` (60.203 bytes) en CloudStream pre-release.
 
 ## Prácticas fijadas
 
