@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import http.cookiejar
 import json
-import re
 import subprocess
 import traceback
 import urllib.error
@@ -25,23 +24,22 @@ def req_url(url, data=None, referer=None):
     headers = {
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
     }
     if referer:
         headers["Referer"] = referer
     encoded = urllib.parse.urlencode(data).encode() if data is not None else None
     req = urllib.request.Request(url, data=encoded, headers=headers)
-    try:
-        with opener.open(req, timeout=25) as r:
-            return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
+    with opener.open(req, timeout=25) as r:
+        return r.status, r.geturl(), r.read().decode("utf-8", "replace")
 
 
 try:
-    jst, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer="https://financialtrust.info/")
-    # Extract the outer IIFE and intercept `Function` directly
-    patched = re.sub(r"var HqX=NjM\[Lmb\];", "var HqX=global.__MYFN;", js_body)
+    jst, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer="https://financialtrust.info/")
+    # Find the decoder preamble before `var kPN=`
+    idx = js_body.find("var kPN=")
+    emit("1_shape", {"head": js_body[max(0, idx-120):idx+80], "tail": js_body[-250:]})
+    # Replace final execution `Plo(...)()` or `return ...` or replace `var HqX=NjM[Lmb]` with our logger
+    patched = js_body.replace("var HqX=NjM[Lmb]", "var HqX=global.__MYFN")
     open("/tmp/app.patched.js", "w").write(patched)
     harness = r"""
 const fs = require('fs');
@@ -49,27 +47,29 @@ const code = fs.readFileSync('/tmp/app.patched.js', 'utf8');
 const origFunction = global.Function;
 let captured = [];
 global.__MYFN = function(...args) {
-  if (args.length === 2) return origFunction(...args);
-  if (args.length === 1 && typeof args[0] === 'string') {
-    captured.push(args[0]);
-    return function() {};
+  if (args.length === 2) {
+    const dec = origFunction(...args);
+    return function(s) {
+      const res = dec(s);
+      captured.push(res);
+      return res;
+    };
   }
-  return origFunction(...args);
+  captured.push(args.join('|'));
+  return function() {};
 };
 global.window = global;
-global.document = { cookie: '', addEventListener() {}, getElementById() { return {}; }, querySelector() { return null; }, body: {} };
-global.navigator = { userAgent: 'Mozilla/5.0' };
-global.location = { href: 'https://financialtrust.info', hostname: 'financialtrust.info' };
 eval(code);
 console.log(JSON.stringify(captured));
 """
     open("/tmp/decode.js", "w").write(harness)
-    dec = subprocess.check_output(["node", "/tmp/decode.js"], text=True)
-    arr = json.loads(dec)
-    full_decoded = "\n---\n".join(str(x) for x in arr)
-    emit("1_meta", {"jst": jst, "dec_len": len(full_decoded), "count": len(arr)})
-    for idx in range(0, min(len(full_decoded), 28000), 3500):
-        emit(f"2_dec_{idx//3500}", full_decoded[idx:idx+3500])
+    proc = subprocess.run(["node", "/tmp/decode.js"], capture_output=True, text=True)
+    emit("2_node", {"rc": proc.returncode, "err": proc.stderr[:800], "out_len": len(proc.stdout)})
+    if proc.returncode == 0:
+        arr = json.loads(proc.stdout)
+        full_decoded = "\n---\n".join(str(x) for x in arr)
+        for i in range(0, min(len(full_decoded), 24000), 3500):
+            emit(f"3_dec_{i//3500}", full_decoded[i:i+3500])
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
