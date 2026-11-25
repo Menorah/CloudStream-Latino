@@ -1,5 +1,6 @@
 package com.menorah.pelicinehd
 
+import android.webkit.CookieManager
 import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.ErrorLoadingException
@@ -20,10 +21,11 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
@@ -52,6 +54,11 @@ class PeliCineHDProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
+    private companion object {
+        const val PAGE_TIMEOUT_S = 20L
+        const val CHALLENGE_TIMEOUT_MS = 20_000L
+    }
+
     override val mainPage = mainPageOf(
         "latest" to "Novedades",
         // `%d` marca los listados paginados; la primera página se pide sin `/page/1/`.
@@ -72,45 +79,74 @@ class PeliCineHDProvider : MainAPI() {
         "/category/terror/page/%d/" to "Terror",
     )
 
-    /**
-     * El sitio está detrás de Cloudflare y devuelve 403 a un cliente que no ha resuelto el reto.
-     * `CloudflareKiller` es el interceptor que trae la propia app: cuando ve ese 403 abre una
-     * WebView, resuelve el reto y reutiliza las cookies `cf_clearance` en las peticiones siguientes.
-     */
-    private val cloudflare by lazy { CloudflareKiller() }
-
     private val headers = mapOf(
         "User-Agent" to USER_AGENT,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
     )
 
-    /** Cookies de Cloudflare ya resueltas, para las imágenes y los enlaces de vídeo. */
+    /**
+     * Cookies `cf_clearance` que la WebView deja en el `CookieManager` cuando resuelve el reto.
+     * Se leen de ahí (no de `CloudflareKiller`, que bloquea la petición hasta el timeout de la app).
+     */
     private fun clearanceHeaders(): Map<String, String> = runCatching {
-        cloudflare.getCookieHeaders(mainUrl).toMap()
+        val raw = CookieManager.getInstance().getCookie(mainUrl).orEmpty()
+        if (!raw.contains("cf_clearance")) return@runCatching emptyMap()
+        raw.split(';').mapNotNull { part ->
+            val pair = part.trim().split('=', limit = 2)
+            if (pair.size == 2 && pair[0].isNotBlank() && pair[1].isNotBlank()) pair[0] to pair[1] else null
+        }.toMap()
     }.getOrDefault(emptyMap())
 
-    private fun withReferer(referer: String?): Map<String, String> =
-        if (referer.isNullOrBlank()) headers else headers + mapOf("Referer" to referer)
+    /**
+     * Deja una WebView acotada (`timeout`) resolver el reto de Cloudflare y guardar las cookies.
+     * A diferencia de `CloudflareKiller`, nunca deja la petición colgada hasta el timeout de la app.
+     */
+    private suspend fun solveChallenge(url: String) {
+        runCatching {
+            WebViewResolver(
+                interceptUrl = Regex("""hello_never_matches_local_test"""),
+                userAgent = null, // Cloudflare exige el UA real de la WebView.
+                useOkhttp = false,
+                timeout = CHALLENGE_TIMEOUT_MS,
+            ).resolveUsingWebView(url)
+        }
+    }
 
-    private fun absolute(input: String): String =
-        if (input.startsWith("http")) input else URI("$mainUrl/").resolve(input.removePrefix("/")).toString()
-
-    /** GET validado: solo se sigue dentro del dominio del sitio. */
-    private suspend fun fetch(input: String, referer: String? = null, timeout: Long = 18L): Document {
+    /**
+     * GET validado: solo se sigue dentro del dominio del sitio. Primero se pide como un cliente
+     * normal (es lo que hacía la v1 que funcionaba); si Cloudflare responde con su reto, se abre la
+     * WebView una vez, se reintenta con las cookies obtenidas y se cachea el resultado.
+     */
+    private suspend fun fetch(input: String, referer: String? = null): Document {
         val url = absolute(input)
         require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD: $url" }
-        val response = app.get(url, headers = withReferer(referer), timeout = timeout, interceptor = cloudflare)
+
+        var response = app.get(url, headers = withReferer(referer) + clearanceHeaders(), timeout = PAGE_TIMEOUT_S)
+        if (response.code == 403 || response.code == 503) {
+            solveChallenge(mainUrl)
+            response = app.get(
+                url,
+                headers = withReferer(referer) + clearanceHeaders(),
+                timeout = PAGE_TIMEOUT_S,
+            )
+        }
         if (response.code == 403 || response.code == 503) {
             throw ErrorLoadingException(
-                "PeliCineHD respondió HTTP ${response.code}: Cloudflare no resolvió el reto. " +
-                    "Abre el sitio en el navegador del dispositivo o usa una VPN y reintenta."
+                "PeliCineHD respondió HTTP ${response.code}: Cloudflare bloqueó la petición. " +
+                    "Abre pelicinehd.com en el navegador del dispositivo (o usa una VPN) y vuelve a intentarlo."
             )
         }
         if (!response.isSuccessful) throw IllegalStateException("PeliCineHD respondió HTTP ${response.code}")
         if (!PeliCineHDMarkup.siteUrl(response.url)) throw IllegalStateException("PeliCineHD redirigió fuera del sitio")
         return Jsoup.parse(response.text, response.url)
     }
+
+    private fun withReferer(referer: String?): Map<String, String> =
+        if (referer.isNullOrBlank()) headers else headers + mapOf("Referer" to referer)
+
+    private fun absolute(input: String): String =
+        if (input.startsWith("http")) input else URI("$mainUrl/").resolve(input.removePrefix("/")).toString()
 
     /**
      * Las portadas van en el mismo dominio protegido, así que se adjuntan las cabeceras de
@@ -249,9 +285,8 @@ class PeliCineHDProvider : MainAPI() {
                                     "post" to post,
                                 ),
                                 headers = withReferer(PeliCineHDMarkup.canonical(doc) ?: absolute(doc.location())) +
-                                    mapOf("X-Requested-With" to "XMLHttpRequest"),
-                                timeout = 18L,
-                                interceptor = cloudflare,
+                                    mapOf("X-Requested-With" to "XMLHttpRequest") + clearanceHeaders(),
+                                timeout = PAGE_TIMEOUT_S,
                             )
                             if (!response.isSuccessful) return@runCatching emptyList()
                             PeliCineHDMarkup.episodes(Jsoup.parse(response.text)).filter { it.season == season }
@@ -269,7 +304,7 @@ class PeliCineHDProvider : MainAPI() {
 
     /** Sondeo corto de los enlaces de vídeo; nunca bloquea más del tiempo indicado. */
     private suspend fun probe(url: String, referer: String?): List<String> = runCatching<List<String>> {
-        val response = app.get(url, headers = withReferer(referer), timeout = 15L, interceptor = cloudflare)
+        val response = app.get(url, headers = withReferer(referer) + clearanceHeaders(), timeout = 15L)
         if (!response.isSuccessful) return emptyList()
         PeliCineHDMarkup.streamsFromHost(response.text)
     }.getOrDefault(emptyList())
@@ -293,7 +328,11 @@ class PeliCineHDProvider : MainAPI() {
 
             // 1) El wrapper `?trembed=…` revela el host real.
             val host = runCatching<String?> {
-                val response = app.get(option.url, headers = withReferer(pageUrl), timeout = 15L, interceptor = cloudflare)
+                val response = app.get(
+                    option.url,
+                    headers = withReferer(pageUrl) + clearanceHeaders(),
+                    timeout = 15L,
+                )
                 if (!response.isSuccessful) null else PeliCineHDMarkup.wrappedUrl(response.text, response.url)
             }.getOrNull()
 
@@ -309,15 +348,29 @@ class PeliCineHDProvider : MainAPI() {
 
             // 3) Si no, se lee el JW Player del host directamente y, en último caso, el del wrapper.
             val referer = host ?: option.url
-            val direct = (host?.let { probe(it, pageUrl) }.orEmpty()).ifEmpty { probe(option.url, pageUrl) }
-            for (stream in direct) {
-                emitted = true
-                callback(
-                    newExtractorLink("PeliCineHD", label, stream, ExtractorLinkType.M3U8) {
+            val streams = (host?.let { probe(it, pageUrl) }.orEmpty()).ifEmpty { probe(option.url, pageUrl) }
+            for (stream in streams) {
+                val links = runCatching {
+                    M3u8Helper.generateM3u8(
+                        source = label,
+                        streamUrl = stream,
+                        referer = referer,
+                        headers = headers + clearanceHeaders(),
+                        name = label,
+                    )
+                }.getOrElse { emptyList() }
+
+                // Si el manifiesto no se pudo leer se publica igualmente el enlace base.
+                val resolved = links.ifEmpty {
+                    listOf(newExtractorLink("PeliCineHD", label, stream, ExtractorLinkType.M3U8) {
                         this.referer = referer
                         this.headers = headers + clearanceHeaders()
-                    }
-                )
+                    })
+                }
+                resolved.forEach { link ->
+                    emitted = true
+                    callback(link)
+                }
             }
         }
         return emitted
