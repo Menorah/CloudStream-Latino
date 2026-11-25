@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect Cuevana3v.pro player JS, tungtungsahur token/v resolution, series/seasons/episodes, and full DOM metadata."""
+"""Inspect tungtungsahur.cuevana3v.pro scripts, serie-player.js, multi-season series, and downstream hosts."""
 import base64
 import json
 import re
@@ -17,105 +17,68 @@ HEADERS = {
 }
 
 
-def emit(tag: str, obj):
-    text = json.dumps({tag: obj}, ensure_ascii=True).replace("%", "%25")
-    # Print to stdout (for CI log) AND 1 concise notice per tag (<= 3800 chars)
-    print(f"=== {tag} ===\n" + text)
-    print("::notice::" + text[:3800])
-
-
-def fetch(url: str, referer: str = f"{BASE}/", method: str = "GET", body: bytes | None = None, extra: dict | None = None):
+def fetch(url: str, referer: str = f"{BASE}/"):
     hdrs = dict(HEADERS)
     hdrs["Referer"] = referer
-    if extra:
-        hdrs.update(extra)
-    req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+    req = urllib.request.Request(url, headers=hdrs)
     with urllib.request.urlopen(req, timeout=20) as resp:
-        return resp.status, resp.geturl(), dict(resp.headers), resp.read().decode("utf-8", "replace")
+        return resp.status, resp.geturl(), resp.read().decode("utf-8", "replace")
 
 
-# 1. Movie / Episode player JS
-for path in ["/js/movie-player.js", "/js/favorite-button.js", "/js/favorites-manager.js"]:
-    try:
-        _, _, _, js = fetch(BASE + path)
-        emit(f"js:{path}", {"len": len(js), "head": js[:3200], "tail": js[3200:6400] if len(js) > 3200 else ""})
-    except Exception as e:
-        emit(f"js:{path}", repr(e))
+def notice_lines(tag: str, text: str):
+    clean = text.replace("%", "%25")
+    for idx in range(0, len(clean), 3600):
+        print(f"::notice::[{tag}#{idx // 3600}] " + clean[idx : idx + 3600])
 
-# 2. Home page sections & selectors
-_, _, _, home = fetch(BASE + "/")
-hs = BeautifulSoup(home, "html.parser")
-sections = []
-for sec in hs.select("section, main > div, div.MovieListTop, div.widget"):
-    h = sec.select_one("h1, h2, h3, .Title")
-    links = sec.select("a[href*='/pelicula/'], a[href*='/serie/']")
-    if links:
-        sections.append({
-            "tag": sec.name,
-            "cls": sec.get("class"),
-            "heading": h.get_text(" ", strip=True) if h else None,
-            "count": len(links),
-            "first_html": str(links[0].parent)[:500],
-        })
-emit("home_sections", sections[:8])
 
-# 3. Series & multi-season page structure
-for spath in ["/serie/yellowjackets", "/serie/a-la-deriva-2", "/serie/yellowjackets/episodio-4x1", "/serie/a-la-deriva-2/episodio-1x10"]:
-    _, _, _, sh = fetch(BASE + spath)
-    ss = BeautifulSoup(sh, "html.parser")
-    scripts = [s.get("src") for s in ss.select("script[src]")]
-    season_links = [(a.get_text(" ", strip=True), a.get("href"), str(a)[:250]) for a in ss.select("a[href*='temporada']")]
-    ep_links = [(a.get_text(" ", strip=True), a.get("href")) for a in ss.select("a[href*='episodio']")]
-    tabs = []
-    for li in ss.select("#player ul.tabs-video > li.tab-video-item"):
-        tab_name = (li.select_one(".tab-item-name") or li).get_text(" ", strip=True)
-        servers = [{"name": s.get_text(" ", strip=True), "data_server": s.get("data-server")} for s in li.select("li[data-server]")]
-        tabs.append({"tab": tab_name, "servers": servers})
-    emit(f"serie:{spath}", {"scripts": scripts, "seasons": season_links[:10], "eps": ep_links[:10], "tabs": tabs, "meta_html": str(ss.select_one("main, .Container, .backdrop"))[:1200]})
+# 1. Full tungtungsahur HTML for ?token= and ?v=
+for label, url in [
+    ("token_hyper", "https://tungtungsahur.cuevana3v.pro/?token=1VkUEEAYMURVIQwNM"),
+    ("token_nebula", "https://tungtungsahur.cuevana3v.pro/?token=3G1tFFgZNVgZCS0lc"),
+    ("v_gold", "https://tungtungsahur.cuevana3v.pro/?v=aHR0cHM6Ly92c2VtYmVkLnJ1L2VtYmVkL21vdmllP3RtZGI9MTMwMDk2OCZkc19sYW5nPWVz"),
+]:
+    st, fu, html = fetch(url, referer=f"{BASE}/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha")
+    s = BeautifulSoup(html, "html.parser")
+    scripts = "\n---SCRIPT---\n".join(sc.get_text() for sc in s.select("script") if sc.get_text(strip=True))
+    notice_lines(label, f"status={st} url={fu}\n{scripts}")
 
-# 4. Movie full metadata, player tabs, trailer, recommendations & tungtungsahur probing
-for mpath in ["/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha", "/pelicula/una-navidad-para-escribir-y-amar", "/pelicula/matrix-resurrections"]:
-    _, _, _, mh = fetch(BASE + mpath)
-    ms = BeautifulSoup(mh, "html.parser")
-    tabs = []
-    server_urls = []
-    for li in ms.select("#player ul.tabs-video > li.tab-video-item"):
-        tab_name = (li.select_one(".tab-item-name") or li).get_text(" ", strip=True)
-        servers = []
-        for s in li.select("li[data-server]"):
-            ds = s.get("data-server", "")
-            servers.append({"name": s.get_text(" ", strip=True), "data_server": ds})
-            server_urls.append((tab_name, s.get_text(" ", strip=True), ds))
-        tabs.append({"tab": tab_name, "servers": servers})
-    # Metadata blocks
-    meta_blocks = [str(el)[:600] for el in ms.select(".backdrop-info, .info-details, .details, .meta, ul.InfoList, div.Description, section")]
-    ld_json = [s.get_text(strip=True)[:1000] for s in ms.select("script[type='application/ld+json']")]
-    emit(f"movie:{mpath}", {"tabs": tabs, "ld_json": ld_json, "meta": meta_blocks[:6]})
+# 2. /js/serie-player.js
+try:
+    _, _, js = fetch(BASE + "/js/serie-player.js")
+    notice_lines("serie_player_js", js)
+except Exception as e:
+    notice_lines("serie_player_js_err", repr(e))
 
-    # Probe each distinct server type once
-    probed_hosts = set()
-    probe_results = []
-    for tab_name, srv_name, ds in server_urls:
-        key = (srv_name, "token=" in ds)
-        if key in probed_hosts:
-            continue
-        probed_hosts.add(key)
-        entry = {"tab": tab_name, "srv": srv_name, "ds": ds}
-        if "?v=" in ds or "&v=" in ds:
-            v_b64 = urllib.parse.parse_qs(urllib.parse.urlparse(ds).query).get("v", [""])[0]
-            try:
-                entry["v_decoded"] = base64.b64decode(v_b64 + "==").decode("utf-8", "replace")
-            except Exception as e:
-                entry["v_err"] = str(e)
-        try:
-            st, final_u, hdrs, phtml = fetch(ds, referer=BASE + mpath)
-            entry["fetch_status"] = st
-            entry["fetch_final"] = final_u
-            entry["html_snippet"] = phtml[:1400]
-            ps = BeautifulSoup(phtml, "html.parser")
-            entry["iframes"] = [i.get("src") or i.get("data-src") for i in ps.select("iframe")]
-            entry["scripts_inline"] = [sc.get_text(strip=True)[:900] for sc in ps.select("script:not([src])") if sc.get_text(strip=True)]
-        except Exception as e:
-            entry["fetch_err"] = repr(e)
-        probe_results.append(entry)
-    emit(f"players:{mpath}", probe_results)
+# 3. Multi-season series HTML & episode selector
+for spath in ["/serie/yellowjackets", "/serie/yellowjackets/temporada-1", "/serie/yellowjackets/episodio-4x1"]:
+    _, _, html = fetch(BASE + spath)
+    s = BeautifulSoup(html, "html.parser")
+    main = s.select_one("main") or s
+    # find season links, episode links, backdrop, poster, genres, cast, vote, trailer, year
+    summary = {
+        "path": spath,
+        "h1": s.select_one("h1").get_text(" ", strip=True) if s.select_one("h1") else None,
+        "seasons": [(a.get_text(" ", strip=True), a.get("href")) for a in s.select("a[href*='/temporada-']")],
+        "episodes": [(a.get_text(" ", strip=True), a.get("href"), (a.select_one("img") or {}).get("src")) for a in s.select("a[href*='/episodio-']")][:25],
+        "selects": [[(o.get_text(" ", strip=True), o.get("value"), o.get("data-season")) for o in sel.select("option")] for sel in s.select("select")],
+        "tabs": [
+            {
+                "tab": (li.select_one(".tab-item-name") or li).get_text(" ", strip=True),
+                "servers": [(x.get_text(" ", strip=True), x.get("data-server")) for x in li.select("li[data-server]")],
+            }
+            for li in s.select("#player ul.tabs-video > li.tab-video-item")
+        ],
+    }
+    notice_lines(f"s_{spath}", json.dumps(summary, ensure_ascii=True))
+
+# 4. Also check movie details: genres, cast, duration, year, related, images
+_, _, mhtml = fetch(BASE + "/pelicula/una-navidad-para-escribir-y-amar")
+ms = BeautifulSoup(mhtml, "html.parser")
+details = {
+    "meta_divs": [str(d)[:700] for d in ms.select("div.backdrop, div.info, div.details, main > div, main > section")][:8],
+    "genres": [(a.get_text(" ", strip=True), a.get("href")) for a in ms.select("a[href*='genero=']")],
+    "related": [(a.get_text(" ", strip=True), a.get("href"), (a.select_one("img") or {}).get("src")) for a in ms.select("section a[href*='/pelicula/'], section a[href*='/serie/']")][:6],
+    "all_a_classes": sorted({tuple(a.get("class", [])) for a in ms.select("a") if a.get("class")}),
+    "iframes_or_trailer": [str(x)[:300] for x in ms.select("iframe, [data-trailer], a[href*='youtube']")],
+}
+notice_lines("movie_details", json.dumps(details, ensure_ascii=True))
