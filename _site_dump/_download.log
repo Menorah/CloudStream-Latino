@@ -1,7 +1,0 @@
-== python urllib
-OK https://tmpfiles.org/dl/1795611062.e3750b7cfe9db9d1/wyAFaaTTlcbA/paginaweb.zip 200
-== curl verbose
-curl_code=200 size=23685945
--rw-r--r-- 1 runner runner 23685945 Nov 25 12:48 /tmp/alt.zip
--rw-r--r-- 1 runner runner 23685945 Nov 25 12:48 /tmp/paginaweb.zip
-b'PK\x03\x04\x14\x00\x00\x00'
