@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect tungtungsahur.cuevana3v.pro scripts, serie-player.js, multi-season series, and downstream hosts."""
+"""Compact single-line JSON probe for tungtungsahur.cuevana3v.pro, movie/series metadata, and downstream embeds."""
 import base64
 import json
 import re
@@ -22,63 +22,45 @@ def fetch(url: str, referer: str = f"{BASE}/"):
     hdrs["Referer"] = referer
     req = urllib.request.Request(url, headers=hdrs)
     with urllib.request.urlopen(req, timeout=20) as resp:
-        return resp.status, resp.geturl(), resp.read().decode("utf-8", "replace")
+        return resp.status, resp.geturl(), dict(resp.headers), resp.read().decode("utf-8", "replace")
 
 
-def notice_lines(tag: str, text: str):
-    clean = text.replace("%", "%25")
-    for idx in range(0, len(clean), 3600):
-        print(f"::notice::[{tag}#{idx // 3600}] " + clean[idx : idx + 3600])
+def emit(tag: str, obj):
+    line = json.dumps({tag: obj}, ensure_ascii=True).replace("%", "%25")
+    assert "\n" not in line
+    for i in range(0, min(len(line), 7600), 3800):
+        print("::notice::" + line[i : i + 3800])
 
 
-# 1. Full tungtungsahur HTML for ?token= and ?v=
+# 1. Exact inline script of tungtungsahur for Hyper token, Nebula token, and ?v=
 for label, url in [
-    ("token_hyper", "https://tungtungsahur.cuevana3v.pro/?token=1VkUEEAYMURVIQwNM"),
-    ("token_nebula", "https://tungtungsahur.cuevana3v.pro/?token=3G1tFFgZNVgZCS0lc"),
-    ("v_gold", "https://tungtungsahur.cuevana3v.pro/?v=aHR0cHM6Ly92c2VtYmVkLnJ1L2VtYmVkL21vdmllP3RtZGI9MTMwMDk2OCZkc19sYW5nPWVz"),
+    ("t_hyper", "https://tungtungsahur.cuevana3v.pro/?token=1VkUEEAYMURVIQwNM"),
+    ("t_nebula", "https://tungtungsahur.cuevana3v.pro/?token=3G1tFFgZNVgZCS0lc"),
+    ("t_ep_hyper", "https://tungtungsahur.cuevana3v.pro/?token=1EQRBH1FFBVQZRl5e"),
+    ("t_v", "https://tungtungsahur.cuevana3v.pro/?v=aHR0cHM6Ly92c2VtYmVkLnJ1L2VtYmVkL21vdmllP3RtZGI9MTMwMDk2OCZkc19sYW5nPWVz"),
 ]:
-    st, fu, html = fetch(url, referer=f"{BASE}/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha")
-    s = BeautifulSoup(html, "html.parser")
-    scripts = "\n---SCRIPT---\n".join(sc.get_text() for sc in s.select("script") if sc.get_text(strip=True))
-    notice_lines(label, f"status={st} url={fu}\n{scripts}")
+    try:
+        st, fu, hdrs, html = fetch(url, referer=f"{BASE}/")
+        s = BeautifulSoup(html, "html.parser")
+        main_script = next((sc.get_text() for sc in s.select("script:not([src])") if "loadVideo" in sc.get_text() or "videoUrl" in sc.get_text() or "params" in sc.get_text()), "")
+        emit(label, {"status": st, "url": fu, "body_no_ad": re.sub(r'\(function\(\)\{\s*var VAST_LIST.*?\}\)\(\)', '', main_script, flags=re.S)[:3400]})
+    except Exception as e:
+        emit(label, repr(e))
 
-# 2. /js/serie-player.js
+# 2. Check /js/serie-player.js compactly
 try:
-    _, _, js = fetch(BASE + "/js/serie-player.js")
-    notice_lines("serie_player_js", js)
+    _, _, _, js = fetch(BASE + "/js/serie-player.js")
+    emit("serie_player_js", js[:3500])
 except Exception as e:
-    notice_lines("serie_player_js_err", repr(e))
+    emit("serie_player_js", repr(e))
 
-# 3. Multi-season series HTML & episode selector
-for spath in ["/serie/yellowjackets", "/serie/yellowjackets/temporada-1", "/serie/yellowjackets/episodio-4x1"]:
-    _, _, html = fetch(BASE + spath)
+# 3. Movie metadata structure + Episode/Series metadata structure
+for path in ["/pelicula/una-navidad-para-escribir-y-amar", "/serie/yellowjackets", "/serie/a-la-deriva-2/episodio-1x10"]:
+    _, _, _, html = fetch(BASE + path)
     s = BeautifulSoup(html, "html.parser")
-    main = s.select_one("main") or s
-    # find season links, episode links, backdrop, poster, genres, cast, vote, trailer, year
-    summary = {
-        "path": spath,
-        "h1": s.select_one("h1").get_text(" ", strip=True) if s.select_one("h1") else None,
-        "seasons": [(a.get_text(" ", strip=True), a.get("href")) for a in s.select("a[href*='/temporada-']")],
-        "episodes": [(a.get_text(" ", strip=True), a.get("href"), (a.select_one("img") or {}).get("src")) for a in s.select("a[href*='/episodio-']")][:25],
-        "selects": [[(o.get_text(" ", strip=True), o.get("value"), o.get("data-season")) for o in sel.select("option")] for sel in s.select("select")],
-        "tabs": [
-            {
-                "tab": (li.select_one(".tab-item-name") or li).get_text(" ", strip=True),
-                "servers": [(x.get_text(" ", strip=True), x.get("data-server")) for x in li.select("li[data-server]")],
-            }
-            for li in s.select("#player ul.tabs-video > li.tab-video-item")
-        ],
-    }
-    notice_lines(f"s_{spath}", json.dumps(summary, ensure_ascii=True))
-
-# 4. Also check movie details: genres, cast, duration, year, related, images
-_, _, mhtml = fetch(BASE + "/pelicula/una-navidad-para-escribir-y-amar")
-ms = BeautifulSoup(mhtml, "html.parser")
-details = {
-    "meta_divs": [str(d)[:700] for d in ms.select("div.backdrop, div.info, div.details, main > div, main > section")][:8],
-    "genres": [(a.get_text(" ", strip=True), a.get("href")) for a in ms.select("a[href*='genero=']")],
-    "related": [(a.get_text(" ", strip=True), a.get("href"), (a.select_one("img") or {}).get("src")) for a in ms.select("section a[href*='/pelicula/'], section a[href*='/serie/']")][:6],
-    "all_a_classes": sorted({tuple(a.get("class", [])) for a in ms.select("a") if a.get("class")}),
-    "iframes_or_trailer": [str(x)[:300] for x in ms.select("iframe, [data-trailer], a[href*='youtube']")],
-}
-notice_lines("movie_details", json.dumps(details, ensure_ascii=True))
+    # Remove scripts, styles, header, footer to inspect content structure cleanly
+    for tag in s.select("script, style, svg, header, footer"):
+        tag.decompose()
+    main = s.select_one("main") or s.body
+    txt = str(main)
+    emit(f"dom:{path}", {"len": len(txt), "part1": txt[:3500], "part2": txt[3500:7000]})
