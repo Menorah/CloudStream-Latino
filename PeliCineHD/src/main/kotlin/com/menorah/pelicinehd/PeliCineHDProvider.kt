@@ -27,11 +27,15 @@ private const val FAILURE_WINDOW_MS = 10_000L
 private const val REQUEST_TIMEOUT = 25L
 
 /**
- * Request headers the site (and its Cloudflare setup) expect from a browser. The User-Agent
- * matters: Cloudflare answers 403 to clients that identify themselves as an app or a WebView.
+ * Headers every page request carries.
+ *
+ * There is deliberately **no User-Agent** here. Cloudflare ties `cf_clearance` to the User-Agent
+ * that obtained it, so the cookies the browser hands over are only valid for the browser's own
+ * UA; sending a different one from the HTTP client made every page look refused and pushed every
+ * request into the WebView. Without the header the client's own UA is used and the cookies are
+ * accepted.
  */
 private val PAGE_HEADERS = mapOf(
-    "User-Agent" to BrowserSiteTransport.BROWSER_AGENT,
     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
     "Upgrade-Insecure-Requests" to "1",

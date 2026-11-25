@@ -42,7 +42,6 @@ internal class SiteClient(
     private val cookieSource: CookieSource? = null,
 ) {
     private val cookies = ConcurrentHashMap<String, String>()
-    private val browserPreferred = ConcurrentHashMap.newKeySet<String>()
     private val solved = AtomicBoolean(false)
     private val solveMutex = Mutex()
 
@@ -60,17 +59,6 @@ internal class SiteClient(
     }
 
     suspend fun get(url: String, headers: Map<String, String> = emptyMap()): SiteResponse {
-        val host = runCatching { URI(url).host?.lowercase() }.getOrNull().orEmpty()
-        if (host in browserPreferred) {
-            val fromBrowser = attempt { browser.get(url, headers) }
-            if (fromBrowser != null && fromBrowser.isSuccessful &&
-                !PeliCineHDMarkup.isChallenge(fromBrowser.text)
-            ) {
-                return fromBrowser
-            }
-            browserPreferred.remove(host)
-        }
-
         val direct = attempt { http.get(url, withCookies(headers)) }
         if (direct != null) {
             if (direct.isSuccessful && !PeliCineHDMarkup.isChallenge(direct.text)) return direct
@@ -89,24 +77,24 @@ internal class SiteClient(
         val fromBrowser = attempt { browser.get(url, headers) }
         if (fromBrowser != null && fromBrowser.isSuccessful) {
             learnCookies(url)
-            if (host.isNotEmpty() && !PeliCineHDMarkup.isChallenge(fromBrowser.text)) {
-                browserPreferred.add(host)
-            }
             return fromBrowser
         }
         return direct ?: retried ?: fromBrowser
             ?: throw IllegalStateException("No se pudo conectar con PeliCineHD desde la aplicación.")
     }
 
-    /** Opens the home page in the browser once, which is what makes Cloudflare issue cookies. */
+    /**
+     * Opens the home page in the browser once, which is what makes Cloudflare issue cookies.
+     *
+     * The cookies are what the following HTTP requests need, so they are taken from the browser
+     * even when the page it returned still looks like a challenge.
+     */
     private suspend fun solve(): Unit = solveMutex.withLock {
         if (solved.get()) return@withLock
         val home = PeliCineHDMarkup.BASE + "/"
-        val response = attempt { browser.get(home, emptyMap()) }
-        if (response != null && response.isSuccessful) {
-            learnCookies(home)
-            solved.set(true)
-        }
+        attempt { browser.get(home, emptyMap()) }
+        learnCookies(home)
+        if (cookies.isNotEmpty()) solved.set(true)
     }
 
     /** POST for the theme's `admin-ajax.php` actions, with the same fallback order. */

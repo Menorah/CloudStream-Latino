@@ -171,6 +171,46 @@ class SiteClientTest {
     }
 
     @Test
+    fun `the browser is never the transport for a page once cookies exist`() = runBlocking {
+        // v5 regression: after one success the host was marked "browser preferred" and every
+        // later page went through the WebView (25 s each, three retries), so the home screen
+        // could never finish and the app showed a 300 s timeout.
+        var browserCalls = 0
+        val client = SiteClient(
+            SiteTransport { requested, headers ->
+                if (headers["Cookie"] == null) response(403, challenge) else response(200, page, requested)
+            },
+            SiteTransport { call -> browserCalls++; response(200, page, call) },
+            cookieSource = object : CookieSource {
+                override suspend fun cookiesFor(url: String): Map<String, String> =
+                    mapOf("cf_clearance" to "abc")
+            }
+        )
+        repeat(16) { index ->
+            assertEquals(page, client.get("https://pelicinehd.com/peliculas/page/${index + 1}/").text)
+        }
+        assertEquals("browser used only for the first page", 1, browserCalls)
+    }
+
+    @Test
+    fun `solving counts as done when the browser hands cookies over`() = runBlocking {
+        // The solve page may still look like a challenge; the cookies are the useful part.
+        var httpCalls = 0
+        val client = SiteClient(
+            SiteTransport { requested, headers ->
+                httpCalls++
+                if (headers["Cookie"] == null) response(403, challenge) else response(200, page, requested)
+            },
+            SiteTransport { response(200, challenge, home) },
+            cookieSource = object : CookieSource {
+                override suspend fun cookiesFor(url: String): Map<String, String> =
+                    mapOf("cf_clearance" to "abc")
+            }
+        )
+        assertEquals(page, client.get(url).text)
+    }
+
+    @Test
     fun `the browser user agent is not a webview`() {
         // Cloudflare answers 403 to UAs containing "; wv", so the transport must not send one.
         assertFalse(BrowserSiteTransport.BROWSER_AGENT.contains("wv"))

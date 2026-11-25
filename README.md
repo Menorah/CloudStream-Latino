@@ -71,12 +71,18 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
-**Versión 10: base de la v5 con un índice de secciones unificado.** El código vuelve a ser exactamente el de la v5 (idéntico a la v6 en el proveedor y en el transporte, comprobado con `diff`), que es la que funcionaba en el dispositivo. El único cambio es la fila «Destacados», eliminada, y su selector.
+**Versión 11: por qué el inicio nunca terminaba (causa medida, no supuesta).** Con la captura de 300 s quedó claro que el plazo no era el problema: el inicio **no terminaba nunca**. La causa estaba en el transporte heredado de la v5, en dos partes que se reforzaban entre sí:
 
-Además, para que un catálogo lento no agote el plazo:
+1. **`cf_clearance` iba atada a un User-Agent distinto.** Cloudflare vincula la cookie al User-Agent con el que se obtuvo, es decir, al del navegador. El cliente HTTP enviaba un User-Agent propio, así que **cada página con la cookie puesta seguía pareciendo rechazada**.
+2. **`browserPreferred`.** Tras el primer éxito del navegador, el host quedaba marcado como «preferido en navegador» y **todas** las páginas siguientes se pedían dentro del WebView (25 s de espera máxima por página, 3 reintentos). Dieciséis secciones en un WebView no terminan nunca: de ahí los 180 s y luego los 300 s agotados.
 
-- Un único índice de secciones (`Semaphore(4)`) compartido por el inicio, la búsqueda y las fichas, de modo que nunca haya más de cuatro páginas del sitio en vuelo a la vez.
-- El plazo de la pantalla de inicio sube a **300 s** (antes 180 s). Las 16 secciones pasan por el navegador para resolver Cloudflare, y antes el propio plazo cortaba la carga a la mitad.
+Cambios en la v11:
+
+- Las peticiones HTTP **ya no envían User-Agent**: usan el del propio cliente, de modo que las cookies del navegador son aceptadas.
+- Se elimina `browserPreferred`: el navegador solo se usa para **resolver** la sesión y para una página concreta que siga rechazada, nunca como transporte general.
+- La resolución cuenta como hecha en cuanto el navegador entrega cookies, aunque la página que devuelva siga siendo el interstitial.
+
+Resultado esperado: **una sola** visita al navegador por sesión y el resto por HTTP; el inicio debe cargar en segundos, no en minutos.
 
 **Versión 4: ficha, temporadas, reproductores y portada.**
 
