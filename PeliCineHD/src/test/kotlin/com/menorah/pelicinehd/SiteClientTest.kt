@@ -79,28 +79,36 @@ class SiteClientTest {
     }
 
     @Test
-    fun `the browser is only opened once for many pages`() = runBlocking {
-        var cookieReady = false
-        val browser = FakeBrowser({ call ->
-            cookieReady = true
-            response(200, page, call)
+    fun `once solved, every page uses plain http and never the browser again`() = runBlocking {
+        // This is the bug behind the 180 s timeout: a working browser used to become the
+        // transport for every later page, and sixteen home sections loaded in a WebView.
+        var cookiesLearned = false
+        var httpCalls = 0
+        val browser = FakeBrowser({ _ ->
+            cookiesLearned = true
+            response(200, page, home)
         }, mapOf("cf_clearance" to "abc"))
         val client = SiteClient(
             SiteTransport { requested, headers ->
-                if (headers["Cookie"] != null) response(200, page, requested) else response(403, challenge)
+                httpCalls++
+                if (headers["Cookie"] != null || cookiesLearned) response(200, page, requested)
+                else response(403, challenge)
             },
             browser,
             cookieSource = browser
         )
-        // The cookie jar is only learned after the browser answers, so make the first call
-        // populate it and then check that later calls never touch the browser again.
-        client.get(url)
-        val callsAfterFirst = browser.calls.size
-        client.get(url)
-        client.get(url)
-        assertTrue(cookieReady)
-        assertEquals(callsAfterFirst, browser.calls.size)
-        assertEquals(listOf(home), browser.calls.distinct())
+
+        // First page: refused, so the browser opens the site once and hands over its cookies.
+        assertEquals(page, client.get(url).text)
+        val browserCalls = browser.calls.size
+        val httpCallsAfterFirst = httpCalls
+
+        repeat(14) { index ->
+            assertEquals(page, client.get("https://pelicinehd.com/peliculas/page/${index + 2}/").text)
+        }
+        assertEquals("browser opened only once", browserCalls, browser.calls.size)
+        assertEquals(httpCallsAfterFirst + 14, httpCalls)
+        assertTrue(browser.calls.all { it == home })
     }
 
     @Test
