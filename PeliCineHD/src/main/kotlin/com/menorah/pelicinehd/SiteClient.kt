@@ -72,15 +72,18 @@ internal class SiteClient(
         }
 
         val direct = attempt { http.get(url, withCookies(headers)) }
-        if (direct != null && direct.isSuccessful && !PeliCineHDMarkup.isChallenge(direct.text)) {
-            return direct
+        if (direct != null) {
+            if (direct.isSuccessful && !PeliCineHDMarkup.isChallenge(direct.text)) return direct
+            // A missing page is not a refusal: solving a challenge would not fix it.
+            if (!direct.isSuccessful && direct.code !in REFUSALS) return direct
         }
 
         // Cloudflare is refusing this client: solve the challenge once, then retry over HTTP.
         solve()
         val retried = attempt { http.get(url, withCookies(headers)) }
-        if (retried != null && retried.isSuccessful && !PeliCineHDMarkup.isChallenge(retried.text)) {
-            return retried
+        if (retried != null) {
+            if (retried.isSuccessful && !PeliCineHDMarkup.isChallenge(retried.text)) return retried
+            if (!retried.isSuccessful && retried.code !in REFUSALS) return retried
         }
 
         val fromBrowser = attempt { browser.get(url, headers) }
@@ -133,6 +136,8 @@ internal class SiteClient(
     }
 
     companion object {
+        /** 403/429/503 are the answers Cloudflare gives to a client it does not trust. */
+        private val REFUSALS = listOf(403, 429, 503)
         const val REQUEST_SECONDS = 25L
 
         fun create(context: Context): SiteClient {

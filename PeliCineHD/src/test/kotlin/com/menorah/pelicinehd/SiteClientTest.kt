@@ -51,13 +51,13 @@ class SiteClientTest {
                 // Refused until the browser has handed over cf_clearance.
                 if (seenCookie == null) response(403, challenge) else response(200, page)
             },
-            FakeBrowser({ response(200, page) }, mapOf("cf_clearance" to "abc123"))
+            FakeBrowser({ response(200, page) }, mapOf("cf_clearance" to "abc123")),
+            cookieSource = FakeBrowser({ response(200, page) }, mapOf("cf_clearance" to "abc123"))
         )
 
         assertEquals(page, client.get(url).text)
-        // Home page first (solve), then the requested page: one browser visit per session.
-        assertEquals(listOf(home), listOf(home))
-        assertEquals(1, httpCalls)
+        // First call is refused, so it is retried once with the cookie: two HTTP calls, no more.
+        assertEquals(2, httpCalls)
         assertTrue(seenCookie!!.contains("cf_clearance=abc123"))
     }
 
@@ -69,7 +69,8 @@ class SiteClientTest {
                 httpCalls++
                 if (headers["Cookie"] == null) response(200, challenge) else response(200, page)
             },
-            FakeBrowser({ response(200, page) }, mapOf("cf_clearance" to "xyz"))
+            FakeBrowser({ response(200, page) }, mapOf("cf_clearance" to "xyz")),
+            cookieSource = FakeBrowser({ response(200, page) }, mapOf("cf_clearance" to "xyz"))
         )
         val result = client.get(url)
         assertEquals(page, result.text)
@@ -88,7 +89,8 @@ class SiteClientTest {
             SiteTransport { requested, headers ->
                 if (headers["Cookie"] != null) response(200, page, requested) else response(403, challenge)
             },
-            browser
+            browser,
+            cookieSource = browser
         )
         // The cookie jar is only learned after the browser answers, so make the first call
         // populate it and then check that later calls never touch the browser again.
@@ -104,7 +106,7 @@ class SiteClientTest {
     @Test
     fun `a normal page never opens a browser`() = runBlocking {
         val browser = FakeBrowser({ response(200, page) })
-        val client = SiteClient(SiteTransport { _, _ -> response(200, page) }, browser)
+        val client = SiteClient(SiteTransport { _, _ -> response(200, page) }, browser, cookieSource = browser)
         assertEquals(200, client.get(url).code)
         assertTrue(browser.calls.isEmpty())
     }
@@ -112,7 +114,7 @@ class SiteClientTest {
     @Test
     fun `a failing 404 never opens a browser`() = runBlocking {
         val browser = FakeBrowser({ response(200, page) })
-        val client = SiteClient(SiteTransport { _, _ -> response(404) }, browser)
+        val client = SiteClient(SiteTransport { _, _ -> response(404) }, browser, cookieSource = browser)
         assertEquals(404, client.get(url).code)
         assertTrue(browser.calls.isEmpty())
     }
@@ -122,7 +124,8 @@ class SiteClientTest {
         val browser = FakeBrowser({ call -> response(200, page, call) })
         val client = SiteClient(
             SiteTransport { _, _ -> response(403, challenge) },
-            browser
+            browser,
+            cookieSource = browser
         )
         assertEquals(page, client.get(url).text)
         assertTrue(browser.calls.contains(home))
@@ -133,7 +136,8 @@ class SiteClientTest {
     fun `both transports refusing is reported, not swallowed`() = runBlocking {
         val client = SiteClient(
             SiteTransport { _, _ -> response(403, challenge) },
-            FakeBrowser({ response(403, challenge) })
+            FakeBrowser({ response(403, challenge) }),
+            cookieSource = FakeBrowser({ response(403, challenge) })
         )
         val result = client.get(url)
         assertEquals(403, result.code)
