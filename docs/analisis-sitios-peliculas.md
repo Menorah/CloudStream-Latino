@@ -139,6 +139,14 @@ SPA WordPress + React cuya portada SSR expone `window.siteConfig` (`imageUrl` y 
 - Carga completa de fichas (portada, fondo, logotipo, reparto, relacionadas, tráiler y temporadas ordenadas numéricamente con 232 episodios / 10 temporadas en `csi-miami-2002`).
 - Reproducción real verificada con CloudStream pre-release + Media3 ExoPlayer (frames decodificados): película (`Perfectos mentirosos` vía Voe), película (`Bulldozer` vía Vimeos), episodio de serie (`CSI: Miami` 1x1 vía Vimeos) y episodio de anime (`Dragon Ball Super: Beerus` 1x1 vía Vimeos).
 
+## animeonline2 — reproducción verificada (25-nov, run 45710360085)
+
+Extensión agnóstica escrita desde cero a partir de `https://ww4.animeonline.ninja/inicio/`:
+- Portada completa (15 secciones en paralelo en ~2,9 s, 0 vacías): Últimos Episodios (`/inicio/` y `/episodio/`), En Emisión · Recomendados (`#featured-titles`), Animes (`/online/`), Películas (`/pelicula/`), Temporadas (`/temporada/`), Audio Latino, Audio Castellano, Populares, Mejores Valorados, En Emisión, Blu-Ray/DVD, Sin Censura, Live Action, Ganadores de Premios y Próximamente.
+- Búsqueda paginada (`/?s=<q>` y `/search/page/N/?s=<q>`), limpieza de enlaces SEO spam en `.sgeneros`, resolución de episodios recientes desde portada hacia su serie padre vía `.pag_episodes`, y soporte para fichas `/temporada/...`.
+- Resolución multi-idioma (`Latino`, `Castellano`, `Subtitulado`) mediante `/wp-json/dooplayer/v1/post/...` (respaldo `admin-ajax.php`) y `saidochesto.top/embed.php?id=...`, con extractores nativos de CloudStream más extractores propios para `gupload.site`, `savefiles.top`, `uqload.vc`, `peeplayer.com`, `mxdrop.sx`/`mxdrop.click`/`mixdropjmk.pw`, `filemoon0.top`/`filemooon.link` (ByseSX + WebView) y `luluvid.com`.
+- Reproducción real verificada con CloudStream pre-release + Media3 ExoPlayer (frames decodificados): último episodio de portada (`sekai-saikyou-no-majo-hajimemashita-cap-8`), episodio `dragon-ball-daima` cap 1 (vía `GUpload` en `gupload.site`) y película `All You Need Is Kill`.
+
 ## Prácticas fijadas
 
 - Reproducción real (frames decodificados) antes de publicar; las muestras se informan

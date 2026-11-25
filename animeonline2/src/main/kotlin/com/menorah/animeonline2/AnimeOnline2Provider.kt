@@ -387,13 +387,16 @@ class AnimeOnline2Provider : MainAPI() {
 
         if (targets.isEmpty()) return false
 
+        val langPriority = mapOf("Latino" to 0, "Castellano" to 1, "Subtitulado" to 2)
+        val orderedTargets = targets.sortedBy { langPriority[it.third] ?: 3 }
+
         val emitted = AtomicBoolean(false)
-        val lock = Any()
+        val collectedResults = Collections.synchronizedList(mutableListOf<Pair<Int, ExtractorLink>>())
         val seen = Collections.synchronizedSet(mutableSetOf<String>())
 
         withTimeoutOrNull(50_000L) {
             coroutineScope {
-                targets.map { (url, ref, langLabel) ->
+                orderedTargets.mapIndexed { idx, (url, ref, langLabel) ->
                     async(Dispatchers.IO) {
                         linkGate.withPermit {
                             withTimeoutOrNull(18_000L) {
@@ -402,16 +405,21 @@ class AnimeOnline2Provider : MainAPI() {
                                     val labeled = labelExtractorLink(langLabel, link)
                                     val key = "${labeled.url}|$langLabel"
                                     if (!seen.add(key)) continue
-                                    synchronized(lock) {
-                                        emitted.set(true)
-                                        callback(labeled)
-                                    }
+                                    collectedResults.add(idx to labeled)
                                 }
                             }
                         }
                     }
                 }.awaitAll()
             }
+        }
+
+        val finalLinks = synchronized(collectedResults) {
+            collectedResults.sortedBy { it.first }.map { it.second }
+        }
+        for (link in finalLinks) {
+            emitted.set(true)
+            callback(link)
         }
         return emitted.get()
     }
