@@ -285,7 +285,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         val pending = seasons.filter { it.number != renderedSeason }
         val post = PeliCineHDMarkup.seasonsPostId(document)
 
-        val extra = if (pending.isEmpty() || post == null) {
+        val extra = if (pending.isEmpty() || post == null || post <= 0) {
             emptyList()
         } else {
             val gate = Semaphore(3)

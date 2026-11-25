@@ -324,7 +324,9 @@ internal object PeliCineHDMarkup {
                     "div.aa-drp a[data-post], div.aa-drp a[data-season]"
             )
             .mapIndexedNotNull { index, anchor ->
-                val owner = anchor.attr("data-post").trim().toIntOrNull() ?: post ?: return@mapIndexedNotNull null
+                // 0 means "the page did not say which post owns this season"; the season is still
+                // listed, and the provider only sends the AJAX request when it has a real id.
+                val owner = anchor.attr("data-post").trim().toIntOrNull() ?: post ?: 0
                 val season = anchor.attr("data-season").trim().toIntOrNull()
                     ?: seasonInText(anchor.text())
                     ?: (index + 1)
@@ -333,8 +335,7 @@ internal object PeliCineHDMarkup {
         val fromSelect: List<SeasonRef> = document.select("select[name=season] option[value], select.season option[value]")
             .mapNotNull { option ->
                 val season = option.attr("value").trim().toIntOrNull() ?: return@mapNotNull null
-                val owner = post ?: return@mapNotNull null
-                SeasonRef(owner, season)
+                SeasonRef(post ?: 0, season)
             }
         return (fromLinks + fromSelect).distinctBy { it.number }.sortedBy { it.number }
     }
