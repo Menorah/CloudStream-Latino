@@ -21,7 +21,7 @@ set +e
 bstatus=$?
 cat probe-build.log
 if [ "$bstatus" -ne 0 ]; then
-  errs=$(grep -E '^e: |What went wrong:|FAILURE:' probe-build.log | tail -10 | tr '\n' '|' | sed 's/%/%25/g')
+  errs=$(grep -E '^e: |^> |Execution failed|Could not |Caused by:|What went wrong:' probe-build.log | head -20 | tr '\n' '|' | sed 's/%/%25/g')
   echo "::error::Gradle make failed: $errs"
   exit "$bstatus"
 fi
