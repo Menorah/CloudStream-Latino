@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 import json
-import re
-from curl_cffi import requests as cffi_req
-
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-s = cffi_req.Session(impersonate="chrome124")
-s.headers.update({"User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9,en;q=0.8"})
-
+from playwright.sync_api import sync_playwright
 
 def emit(tag, obj):
     raw = json.dumps({"tag": tag, "data": obj}, ensure_ascii=False)
     safe = raw.replace("%", "%25").replace("\r", " ").replace("\n", "\\n")
     print(f"::notice title={tag}::{safe[:3850]}", flush=True)
 
+reqs = []
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True)
+    ctx = b.new_context()
+    pg = ctx.new_page()
+    pg.on("request", lambda r: reqs.append({"m": r.method, "u": r.url, "hdr": {k: v for k, v in r.headers.items() if k.lower() in ("referer", "x-embed-parent", "origin") or "pow" in k.lower() or "x-" in k.lower()}}) if ("/api/" in r.url or ".m3u8" in r.url) else None)
+    pg.on("response", lambda r: reqs.append({"resp_code": r.status, "u": r.url}) if ("/api/" in r.url or ".m3u8" in r.url) else None)
+    pg.goto("https://filemoon0.top/e/swxub14kn31t/animeonlineninja-the-detective-is-already-dead-2-08", wait_until="domcontentloaded", timeout=20000)
+    pg.wait_for_timeout(6000)
+    b.close()
 
-rc = s.get("https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js", timeout=15).text
-rpow = s.get("https://n1mwq.org/assets/pow-DEJGtdh2.js", timeout=15).text
-hits_v = [m.group(0) for m in re.finditer(r'.{0,100}(?:videos/|embed|playback|payload|key_parts|edge_1|decrypt|x-embed).{0,160}', rc)]
-emit("1_byse_video_bundle", {"v_len": len(rc), "pow_len": len(rpow), "pow_head": rpow[:1200], "hits": hits_v[:15]})
+emit("1_byse_network", reqs[:25])
 PY
