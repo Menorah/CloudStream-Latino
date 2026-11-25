@@ -2,7 +2,6 @@
 import http.cookiejar
 import json
 import re
-import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -47,10 +46,9 @@ def req_url(url, data=None, referer=None, raw_body=None):
 
 try:
     movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
-    mst, _, _, m_html = req_url(movie_url)
+    _, _, _, m_html = req_url(movie_url)
     ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
     ft_url = ft_el["href"] if ft_el else "https://financialtrust.info/l.php?o=ZXFNNUNsWU85bFJsck1jMzZMenBMdVl4YzJJZUhRZnJvRGZSTW9wVkhMY2QyWWN1TmpGRnpPNHZoV21xUDhnM0k5NUNqYWdzVFh0bVp3VkJyTS9WTjVJSDUyY1hkV2FDOE1TQXcwRUFpVFRTM3J5eTlWdWxiNEQwTGdNU1hrd24="
-
     _, cur, _, body = req_url(ft_url, referer=movie_url)
     form = BeautifulSoup(body, "html.parser").select_one("form")
     inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
@@ -58,29 +56,24 @@ try:
 
     api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
     link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
-
-    # 1) Send "a"
     sa, _, _, ba = req_url("https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/")
-    # 2) Immediately try "c" and /r.php
-    sc0, _, _, bc0 = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/")
-    emit("1_ac_immediate", {"sa": (sa, ba[:200]), "sc0": (sc0, bc0[:200])})
 
-    r_url = f"https://financialtrust.info/r.php?f={urllib.parse.quote(link_out)}&t={urllib.parse.quote(api_key)}"
-    rst0, rcur0, _, rbody0 = req_url(r_url, referer="https://financialtrust.info/")
-    emit("2_r0", {"st": rst0, "url": rcur0, "len": len(rbody0), "title": BeautifulSoup(rbody0, "html.parser").title.string if rbody0 else None})
-
-    # 3) Wait 46s? No — first check if fotise.com or 46s matters if rcur0 is still 404!
-    if "Error 404" in rbody0:
-        fst, fcur, _, fbody = req_url(
-            "https://fotise.com",
-            data={"openAds": api_key, "formAd": "hs8mOLoaWTlzHDdm", "el_link": link_out},
-            referer="https://financialtrust.info/",
-        )
-        emit("3_fotise", {"st": fst, "url": fcur, "body": fbody[:1200]})
-        time.sleep(46)
-        sc1, _, _, bc1 = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/")
-        rst1, rcur1, _, rbody1 = req_url(r_url, referer="https://financialtrust.info/")
-        emit("4_after_46s", {"sc1": (sc1, bc1[:200]), "rst1": rst1, "rcur1": rcur1, "title": BeautifulSoup(rbody1, "html.parser").title.string if rbody1 else None, "body": rbody1[:2400]})
+    fst, fcur, _, fbody = req_url(
+        "https://fotise.com",
+        data={"openAds": api_key, "formAd": "hs8mOLoaWTlzHDdm", "el_link": link_out},
+        referer="https://financialtrust.info/",
+    )
+    fs = BeautifulSoup(fbody, "html.parser")
+    scripts = [s.get("src") or s.get_text() for s in fs.select("script")]
+    emit("1_fotise_scripts", {"len": len(fbody), "script_srcs": [s for s in scripts if len(s) < 200], "cookies": [c.name + "=" + c.value for c in cj]})
+    inline = "\n---\n".join(s for s in scripts if len(s) >= 200 or ("postMessage" in s or "ajax" in s or "check" in s or "hs8m" in s))
+    for i in range(0, min(len(inline), 14000), 3500):
+        emit(f"2_fjs_{i//3500}", inline[i:i+3500])
+    # Also fetch any custom local JS referenced by fotise
+    for src in [s for s in scripts if isinstance(s, str) and len(s) < 200 and not any(x in s for x in ["jquery", "wp-", "google", "cloudflare"])]:
+        u = urllib.parse.urljoin(fcur, src)
+        _, _, _, sb = req_url(u, referer=fcur)
+        emit("3_ext_js", {"url": u, "body": sb[:3500]})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
