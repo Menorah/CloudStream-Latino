@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import http.cookiejar
 import json
+import re
 import subprocess
 import traceback
 import urllib.error
@@ -39,40 +40,35 @@ def req_url(url, data=None, referer=None):
 
 try:
     jst, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer="https://financialtrust.info/")
-    open("/tmp/app.packed.js", "w").write(js_body)
+    # Extract the outer IIFE and intercept `Function` directly
+    patched = re.sub(r"var HqX=NjM\[Lmb\];", "var HqX=global.__MYFN;", js_body)
+    open("/tmp/app.patched.js", "w").write(patched)
     harness = r"""
 const fs = require('fs');
-const code = fs.readFileSync('/tmp/app.packed.js', 'utf8');
+const code = fs.readFileSync('/tmp/app.patched.js', 'utf8');
 const origFunction = global.Function;
 let captured = [];
-global.window = global;
-global.document = { cookie: '', addEventListener() {}, getElementById() { return {}; }, querySelector() { return null; }, body: {} };
-global.navigator = { userAgent: 'Mozilla/5.0' };
-global.location = { href: 'https://financialtrust.info', hostname: 'financialtrust.info' };
-String.prototype.constructor = function(...args) {
-  if (args.length === 1 && typeof args[0] === 'string' && args[0].includes('arguments')) {
-    const fn = origFunction(...args);
-    return function(...inner) {
-      const out = fn(...inner);
-      captured.push(out);
-      return out;
-    };
-  }
-  if (args.length === 1 && typeof args[0] === 'string' && args[0].length > 200) {
+global.__MYFN = function(...args) {
+  if (args.length === 2) return origFunction(...args);
+  if (args.length === 1 && typeof args[0] === 'string') {
     captured.push(args[0]);
     return function() {};
   }
   return origFunction(...args);
 };
-try { eval(code); } catch (e) { captured.push('ERR:' + e); }
+global.window = global;
+global.document = { cookie: '', addEventListener() {}, getElementById() { return {}; }, querySelector() { return null; }, body: {} };
+global.navigator = { userAgent: 'Mozilla/5.0' };
+global.location = { href: 'https://financialtrust.info', hostname: 'financialtrust.info' };
+eval(code);
 console.log(JSON.stringify(captured));
 """
     open("/tmp/decode.js", "w").write(harness)
     dec = subprocess.check_output(["node", "/tmp/decode.js"], text=True)
     arr = json.loads(dec)
     full_decoded = "\n---\n".join(str(x) for x in arr)
-    emit("1_meta", {"jst": jst, "raw_len": len(js_body), "dec_len": len(full_decoded), "count": len(arr)})
-    for idx in range(0, min(len(full_decoded), 24000), 3500):
+    emit("1_meta", {"jst": jst, "dec_len": len(full_decoded), "count": len(arr)})
+    for idx in range(0, min(len(full_decoded), 28000), 3500):
         emit(f"2_dec_{idx//3500}", full_decoded[idx:idx+3500])
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
