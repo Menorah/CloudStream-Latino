@@ -70,8 +70,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     override val usesWebView = true
     private val site = SiteClient.create(context)
 
-    // Every section asks its own page, and the browser fallback is slower than plain HTTP.
-    // Every section asks its own page through the browser first, so the screen gets room.
+    // The home screen asks every section at once and the browser fallback is slow, so the
+    // deadlines are generous; the catalogue gate below keeps the site from being flooded.
     override val getMainPageTimeoutMs: Long? = 300_000L
     override val searchTimeoutMs: Long? = 60_000L
     override val loadTimeoutMs: Long? = 90_000L
@@ -89,7 +89,9 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         "category/drama" to "Drama",
         "category/familia" to "Familia",
         "category/fantasia" to "Fantasía",
-        "category/kids" to "Infantil",
+        // The series use their own taxonomy names, which also work as archive pages.
+        "category/action-adventure" to "Acción y aventura",
+        "category/sci-fi-fantasy" to "Ciencia ficción y fantasía",
         "category/misterio" to "Misterio",
         "category/romance" to "Romance",
         "category/suspense" to "Suspenso",
@@ -257,26 +259,9 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
                     "Abra la serie en el navegador y vuelva a intentarlo."
             )
         }
-        // Seasons with no episode of their own would leave gaps in the list, so the season
-        // switch is also tried for the seasons the page does not render.
-        val pendingSeasons = PeliCineHDMarkup.seasons(document)
-            .map { it.number }
-            .filter { number -> episodes.none { it.season == number } }
-        val filled = if (pendingSeasons.isEmpty()) {
-            episodes
-        } else {
-            val post = PeliCineHDMarkup.seasonsPostId(document) ?: 0
-            pendingSeasons.flatMap { number ->
-                try {
-                    seasonEpisodes(post, number, pageUrl)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    emptyList()
-                }
-            }
-        }
-        val allEpisodes = (episodes + filled).distinctBy { it.url }
+        // `loadEpisodes` already switches every season the page does not render, so the list is
+        // complete here; a season whose AJAX call failed is simply absent, not empty.
+        val allEpisodes = episodes.distinctBy { it.url }
             .sortedWith(compareBy({ it.season }, { it.number }))
 
         return newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, allEpisodes.map { item ->
