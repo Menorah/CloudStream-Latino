@@ -81,5 +81,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create beta --title "Extensiones CloudStream beta" --notes "Canal beta de las extensiones CloudStream Latino." --prerelease || true
-          gh release upload beta output/* --clobber
-          gh release view beta --json assets --jq '.assets[].name'
+          # El endpoint de subida de GitHub devuelve EOF de vez en cuando: se reintenta cada
+          # archivo por separado para que un fallo puntual no deje la release a medias.
+          failed=0
+          for file in output/*; do
+            name=$(basename "$file")
+            for attempt in 1 2 3 4 5; do
+              if gh release upload beta "$file" --clobber; then
+                echo "subido: $name"
+                break
+              fi
+              echo "reintento $attempt de $name"
+              sleep $((attempt * 15))
+              if [ "$attempt" = 5 ]; then
+                echo "::error::No se pudo subir $name"
+                failed=1
+              fi
+            done
+          done
+          gh release view beta --json assets --jq '.assets[] | "\(.name) \(.size)"'
+          exit $failed
