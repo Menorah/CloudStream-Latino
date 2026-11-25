@@ -2,10 +2,12 @@
 import http.cookiejar
 import json
 import re
-import subprocess
+import time
 import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
+from bs4 import BeautifulSoup
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -20,44 +22,67 @@ cj = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
 
-def req_url(url, data=None, referer=None):
-    headers = {"User-Agent": UA, "Accept": "*/*"}
+def req_url(url, data=None, referer=None, raw_body=None, origin=None):
+    headers = {
+        "User-Agent": UA,
+        "Accept": "*/*",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
     if referer:
         headers["Referer"] = referer
-    encoded = urllib.parse.urlencode(data).encode() if data is not None else None
-    req = urllib.request.Request(url, data=encoded, headers=headers)
-    with opener.open(req, timeout=25) as r:
-        return r.status, r.geturl(), r.read().decode("utf-8", "replace")
-
-
-def unpack(js_text):
-    # Replace the last Function(key, code)(num) invocation with global.__OUT=code
-    m = re.search(r"var\s+(\w+)=([A-Za-z0-9_]+)\(([^)]+)\);\s*var\s+\w+=\w+\([^,]+,\1\s*\);", js_text)
-    if not m:
-        # Generic fallback: replace the final `var X=Y(A,B);X(N);`
-        patched = re.sub(r"var\s+(\w+)=([A-Za-z0-9_]+)\(([^,]+),([^)]+)\);\1\(\d+\);return\s+\d+\}\)\(\)\s*$", r"global.__OUT=\4;return;})()", js_text)
+    if origin:
+        headers["Origin"] = origin
+    if raw_body is not None:
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        payload = raw_body.encode()
+    elif data is not None:
+        payload = urllib.parse.urlencode(data).encode()
     else:
-        patched = re.sub(r"var\s+(\w+)=([A-Za-z0-9_]+)\(([^,]+),([^)]+)\);\1\(\d+\);return\s+\d+\}\)\(\)\s*$", r"global.__OUT=\4;return;})()", js_text)
-    open("/tmp/u.js", "w").write(patched)
-    out = subprocess.check_output(["node", "-e", "eval(require('fs').readFileSync('/tmp/u.js','utf8')); console.log(global.__OUT);"], text=True)
-    # Inline var a=[...] if present
-    am = re.match(r"var a=(\[[\s\S]*?\]);", out)
-    if am:
-        node_in = f"const a={am.group(1)}; let s={json.dumps(out[am.end():])}; console.log(s.replace(/a\\[(\\d+)\\]/g, (_,i)=>JSON.stringify(a[+i])));"
-        return subprocess.check_output(["node", "-e", node_in], text=True)
-    return out
+        payload = None
+    req = urllib.request.Request(url, data=payload, headers=headers)
+    try:
+        with opener.open(req, timeout=25) as r:
+            return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
 
 
 try:
-    for name, u in [
-        ("start", "https://fotise.com/wp-content/plugins/ls_adsclick_plugin/assets/js/js_start.min.js?x77541"),
-        ("main", "https://fotise.com/wp-content/plugins/ls_adsclick_plugin/assets/js/js_main.min.js?x77541"),
-    ]:
-        _, _, body = req_url(u, referer="https://fotise.com/")
-        dec = unpack(body)
-        emit(f"1_{name}_len", len(dec))
-        for idx in range(0, min(len(dec), 14000), 3400):
-            emit(f"2_{name}_{idx//3400}", dec[idx:idx+3400])
+    movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
+    mst, _, _, m_html = req_url(movie_url)
+    ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
+    ft_url = ft_el["href"] if ft_el else "https://financialtrust.info/l.php?o=ZXFNNUNsWU85bFJsck1jMzZMenBMdVl4YzJJZUhRZnJvRGZSTW9wVkhMY2QyWWN1TmpGRnpPNHZoV21xUDhnM0k5NUNqYWdzVFh0bVp3VkJyTS9WTjVJSDUyY1hkV2FDOE1TQXcwRUFpVFRTM3J5eTlWdWxiNEQwTGdNU1hrd24="
+
+    _, cur, _, body = req_url(ft_url, referer=movie_url)
+    form = BeautifulSoup(body, "html.parser").select_one("form")
+    inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
+    st, cur2, _, body2 = req_url(urllib.parse.urljoin(cur, form["action"]), data=inputs, referer=cur)
+    api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
+    link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
+    cd = re.search(r'countdownTime:\s*"([^"]+)"', body2).group(1)
+    emit("1_start", {"st": st, "apiKey": api_key, "cd": cd, "cookies": [c.name + "=" + c.value for c in cj]})
+
+    # Send "a" (verifyServer) with Origin header just like fetch("/check.php")!
+    sa, _, _, ba = req_url("https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/", origin="https://financialtrust.info")
+    # Also simulate fotise.com open + ccounter
+    _, _, _, fbody = req_url("https://fotise.com", data={"openAds": api_key, "formAd": "hs8mOLoaWTlzHDdm", "el_link": link_out}, referer="https://financialtrust.info/")
+    aj_st, _, _, aj_b = req_url("https://fotise.com/wp-admin/admin-ajax.php", raw_body="cc=1&action=ccounter", referer="https://financialtrust.info/", origin="https://financialtrust.info")
+    emit("2_a_and_cc", {"sa": (sa, ba[:200]), "ajax": (aj_st, aj_b[:200])})
+
+    # Wait 47s WITHOUT touching /check.php("c")!
+    time.sleep(47)
+    sc, _, _, bc = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/", origin="https://financialtrust.info")
+    r_url = f"https://financialtrust.info/r.php?f={urllib.parse.quote(link_out)}&t={urllib.parse.quote(api_key)}"
+    rst, rcur, _, rbody = req_url(r_url, referer="https://financialtrust.info/")
+    rs = BeautifulSoup(rbody, "html.parser")
+    emit("3_final", {
+        "sc": (sc, bc[:200]),
+        "rst": rst,
+        "rcur": rcur,
+        "title": rs.title.string if rs.title else None,
+        "links": [[a.get_text(" ", strip=True), a.get("href")] for a in rs.select("a[href]")][:30],
+        "body": rbody[:2500],
+    })
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
