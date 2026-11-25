@@ -9,8 +9,8 @@ permissions:
 jobs:
   browser_probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4 curl_cffi patchright
-      - run: xvfb-run -a python3 scripts/pelicinehd_probe.py
+      - run: python3 -m pip install curl_cffi
+      - run: python3 scripts/pelicinehd_probe.py
