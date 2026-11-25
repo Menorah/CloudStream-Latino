@@ -61,8 +61,9 @@ class PeliCineHDPlayerTest {
         )
         assertNotNull(embed)
         val url = embed!!.url
-        assertTrue(url, url.startsWith("https://dD2STLiWT0bC.dramiyos-cdn.com/hls2/"))
-        assertTrue(url, url.contains("/ei06pqvqtfey_n/master.m3u8"))
+        assertTrue(url, url.startsWith("https://dD2STLiWT0bC.dramiyos-cdn.com/hls2/01/01071/"))
+        // The manifest is named after the hoster's own file id, not after the wrapper's id.
+        assertTrue(url, url.contains("/t8ktplkons7j_n/master.m3u8"))
     }
 
     @Test
@@ -84,14 +85,15 @@ class PeliCineHDPlayerTest {
 
     @Test
     fun `an unpacker decodes the radix-36 dictionary of the site`() {
-        // The obfuscator replaces tokens in one pass and indents its numbers in base 36; decoding
-        // with the classic ordered loop produced an empty result on the real pages.
+        // The obfuscator replaces tokens in one pass and writes them in base 36; decoding with the
+        // classic ordered loop and a base-62 alphabet produced an empty result on the real pages.
         val packed = """
-            eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}('b n={"1d":"1r://6s.dg-df.1q","15":"1r://6n.cc/cy.6m"};',36,3,'file|m3u8|https://cdn.example.com/master.m3u8'.split('|')))
+            eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}('0 1={"2":"3"};',36,4,'var|links|file|https://cdn.example.com/master.m3u8'.split('|')))
         """.trimIndent()
-        val decoded = PeliCineHDMarkup.unpack(packed)
-        assertNotNull(decoded)
-        assertTrue(decoded!!, decoded.contains("var"))
+        assertEquals(
+            "var links={\"file\":\"https://cdn.example.com/master.m3u8\"};",
+            PeliCineHDMarkup.unpack(packed)
+        )
     }
 
     @Test
