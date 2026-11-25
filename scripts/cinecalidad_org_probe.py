@@ -17,17 +17,15 @@ def emit(tag, obj):
 
 try:
     home_html = s.get("https://cinecalidad.org/", timeout=20).text
-    m_cfg = re.search(r"window\.siteConfig\s*=\s*(\{.*?\});\s*</script>", home_html, re.S)
-    cfg = json.loads(m_cfg.group(1))
+    m_cfg = re.search(r"window\.siteConfig\s*=\s*", home_html)
+    cfg, _ = json.JSONDecoder().raw_decode(home_html[m_cfg.end():])
     datas = cfg.get("datas", {})
     emit("1_sitecfg", {
-        "keys": list(cfg.keys()),
         "imageUrl": cfg.get("imageUrl"),
         "permalinks": cfg.get("permalinks"),
-        "datas_keys": list(datas.keys()),
         "genres": [(g.get("term_id"), g.get("name"), g.get("slug")) for g in datas.get("genres", [])],
         "langs": [(l.get("term_id"), l.get("name"), l.get("slug")) for l in datas.get("langs", [])],
-        "years_top": [(y.get("term_id"), y.get("name"), y.get("slug")) for y in datas.get("years", [])[:12]],
+        "years_top": [(y.get("term_id"), y.get("name"), y.get("slug")) for y in datas.get("years", [])[:10]],
     })
 
     any_p1 = s.get("https://cinecalidad.org/wp-api/v1/listing/any?page=1&orderBy=latest&order=desc&postType=any&postsPerPage=24", timeout=20).json()
