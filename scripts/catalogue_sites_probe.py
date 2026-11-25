@@ -15,7 +15,6 @@ PAGES = {
  'pelisplus-to': ('https://pelisplus-to.com/inicio/', 'https://pelisplus-to.com/peliculas/en-el-corazon-de-la-bestia-A1263337Bx2/ver/'),
  'sololatino': ('https://sololatino.net/', 'https://sololatino.net/serie/black-clover/temporada-1/episodio-1'),
  'poseidon': ('https://www.poseidonhd2.co/', 'https://www.poseidonhd2.co/pelicula/9909/mentes-peligrosas'),
- 'pelicine': ('https://pelicinehd.com/', 'https://pelicinehd.com/'),
  'cinecalidad-my': ('https://www.cinecalidad.my/', 'https://www.cinecalidad.my/pelicula/hermanastras-2026-online-descarga/'),
  'cinecalidad-am': ('https://www.cinecalidad.am/', 'https://www.cinecalidad.am/ver-pelicula/madden/'),
  'pelisjuanita': ('https://pelisjuanita.com/movies/', 'https://pelisjuanita.com/movies/'),
