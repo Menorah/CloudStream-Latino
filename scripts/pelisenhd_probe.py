@@ -2,7 +2,7 @@
 import http.cookiejar
 import json
 import re
-import subprocess
+import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -25,7 +25,7 @@ opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 def req_url(url, data=None, referer=None, raw_body=None):
     headers = {
         "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "*/*",
         "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
     }
     if referer:
@@ -46,25 +46,41 @@ def req_url(url, data=None, referer=None, raw_body=None):
 
 
 try:
-    _, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer="https://financialtrust.info/")
-    patched = re.sub(r"var\s+guW\s*=\s*Plo\([^)]*\)\s*;[^}]*\}\)\(\)\s*$", "global.__OUT=kPN;return;})()", js_body)
-    open("/tmp/app.patched.js", "w").write(patched)
-    node_code = r"""
-const fs = require('fs');
-eval(fs.readFileSync('/tmp/app.patched.js', 'utf8'));
-const src = global.__OUT;
-const m = src.match(/var a=(\[[\s\S]*?\]);/);
-const arr = eval(m[1]);
-let clean = src.slice(m[0].length);
-clean = clean.replace(/a\[(\d+)\]/g, (_, i) => JSON.stringify(arr[+i]));
-const lm = clean.slice(clean.indexOf('class m{'));
-console.log(JSON.stringify({ lm, arr: arr.slice(130) }));
-"""
-    res = json.loads(subprocess.check_output(["node", "-e", node_code], text=True))
-    lm = res["lm"]
-    emit("1_lm_0", lm[:3500])
-    emit("1_lm_1", lm[3500:7000])
-    emit("1_arr_tail", res["arr"])
+    movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
+    mst, _, _, m_html = req_url(movie_url)
+    ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
+    ft_url = ft_el["href"] if ft_el else "https://financialtrust.info/l.php?o=ZXFNNUNsWU85bFJsck1jMzZMenBMdVl4YzJJZUhRZnJvRGZSTW9wVkhMY2QyWWN1TmpGRnpPNHZoV21xUDhnM0k5NUNqYWdzVFh0bVp3VkJyTS9WTjVJSDUyY1hkV2FDOE1TQXcwRUFpVFRTM3J5eTlWdWxiNEQwTGdNU1hrd24="
+
+    _, cur, _, body = req_url(ft_url, referer=movie_url)
+    form = BeautifulSoup(body, "html.parser").select_one("form")
+    inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
+    st, cur2, _, body2 = req_url(urllib.parse.urljoin(cur, form["action"]), data=inputs, referer=cur)
+
+    api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
+    link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
+
+    # 1) Send "a"
+    sa, _, _, ba = req_url("https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/")
+    # 2) Immediately try "c" and /r.php
+    sc0, _, _, bc0 = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/")
+    emit("1_ac_immediate", {"sa": (sa, ba[:200]), "sc0": (sc0, bc0[:200])})
+
+    r_url = f"https://financialtrust.info/r.php?f={urllib.parse.quote(link_out)}&t={urllib.parse.quote(api_key)}"
+    rst0, rcur0, _, rbody0 = req_url(r_url, referer="https://financialtrust.info/")
+    emit("2_r0", {"st": rst0, "url": rcur0, "len": len(rbody0), "title": BeautifulSoup(rbody0, "html.parser").title.string if rbody0 else None})
+
+    # 3) Wait 46s? No — first check if fotise.com or 46s matters if rcur0 is still 404!
+    if "Error 404" in rbody0:
+        fst, fcur, _, fbody = req_url(
+            "https://fotise.com",
+            data={"openAds": api_key, "formAd": "hs8mOLoaWTlzHDdm", "el_link": link_out},
+            referer="https://financialtrust.info/",
+        )
+        emit("3_fotise", {"st": fst, "url": fcur, "body": fbody[:1200]})
+        time.sleep(46)
+        sc1, _, _, bc1 = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/")
+        rst1, rcur1, _, rbody1 = req_url(r_url, referer="https://financialtrust.info/")
+        emit("4_after_46s", {"sc1": (sc1, bc1[:200]), "rst1": rst1, "rcur1": rcur1, "title": BeautifulSoup(rbody1, "html.parser").title.string if rbody1 else None, "body": rbody1[:2400]})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
