@@ -71,12 +71,12 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
-**Versión 9: vuelta a la base que funcionaba.** Las versiones 7 y 8 intentaron arreglar el tiempo de espera del inicio y empeoraron el complemento: el inicio tardaba más de 40 s y terminaba sin títulos. Se detuvo ese camino y se **restauró el código de la versión 5**, la que el usuario confirmó que funcionaba (catálogo, fichas, las tres temporadas y reproducción), con un solo cambio: la eliminación de la fila «Destacados», que era lo único pedido. Concretamente, respecto de la v5:
+**Versión 10: base de la v5 con un índice de secciones unificado.** El código vuelve a ser exactamente el de la v5 (idéntico a la v6 en el proveedor y en el transporte, comprobado con `diff`), que es la que funcionaba en el dispositivo. El único cambio es la fila «Destacados», eliminada, y su selector.
 
-- Fuera la fila «Destacados» y el selector del carrusel (`heroCards`).
-- Todo lo demás idéntico: transporte con navegador + cookies, 3 intentos por página, 4 catálogos simultáneos y `getMainPageTimeoutMs` de 180 s.
+Además, para que un catálogo lento no agote el plazo:
 
-Lección aplicada: no se vuelve a tocar el transporte ni los tiempos sin una medición del dispositivo que lo justifique.
+- Un único índice de secciones (`Semaphore(4)`) compartido por el inicio, la búsqueda y las fichas, de modo que nunca haya más de cuatro páginas del sitio en vuelo a la vez.
+- El plazo de la pantalla de inicio sube a **300 s** (antes 180 s). Las 16 secciones pasan por el navegador para resolver Cloudflare, y antes el propio plazo cortaba la carga a la mitad.
 
 **Versión 4: ficha, temporadas, reproductores y portada.**
 
