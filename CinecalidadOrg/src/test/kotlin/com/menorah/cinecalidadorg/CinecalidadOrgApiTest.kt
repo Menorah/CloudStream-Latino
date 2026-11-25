@@ -133,7 +133,7 @@ class CinecalidadOrgApiTest {
                 "slug": "madden-2026",
                 "type": "movies",
                 "overview": "Historia &amp; deporte",
-                "images": {"poster": "/thumbs/p.webp", "backdrop": "/backdrops/b.webp"},
+                "images": {"poster": "/thumbs/p.webp", "backdrop": "/backdrops/b.webp", "logo": "/logos/l.webp"},
                 "release_date": "2026-11-18",
                 "runtime": "112.0",
                 "vote_average": null,
@@ -148,6 +148,7 @@ class CinecalidadOrgApiTest {
         assertEquals(112, detail.durationMinutes)
         assertNull(detail.rating)
         assertEquals("https://www.youtube.com/watch?v=P3uI5sLosKU", detail.trailerUrl)
+        assertEquals("https://cinecalidad.org/wp-content/uploads/logos/l.webp", detail.logo)
         assertEquals(listOf(122, 123), detail.genreIds)
 
         val castJson = """

@@ -1,7 +1,6 @@
 package com.menorah.cinecalidadorg
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.Dispatchers
@@ -272,13 +271,14 @@ class CinecalidadOrgProvider : MainAPI() {
                 ) {
                     posterUrl = detail.poster
                     backgroundPosterUrl = detail.backdrop
+                    logoUrl = detail.logo
                     plot = detail.overview
                     year = detail.year
                     duration = detail.durationMinutes
                     tags = genreTags
                     score = Score.from10(detail.rating)
                     this.recommendations = recommendations
-                    if (actors.isNotEmpty()) addActors(actors)
+                    if (actors.isNotEmpty()) this.actors = actors
                     addTrailer(detail.trailerUrl)
                 }
             }
@@ -311,6 +311,7 @@ class CinecalidadOrgProvider : MainAPI() {
             newTvSeriesLoadResponse(detail.title, detail.url, tvType, episodeItems) {
                 posterUrl = detail.poster
                 backgroundPosterUrl = detail.backdrop
+                logoUrl = detail.logo
                 plot = detail.overview
                 year = detail.year
                 duration = detail.durationMinutes
@@ -318,7 +319,7 @@ class CinecalidadOrgProvider : MainAPI() {
                 score = Score.from10(detail.rating)
                 this.recommendations = recommendations
                 if (seasonsList.isNotEmpty()) seasonNames = seasonsList
-                if (actors.isNotEmpty()) addActors(actors)
+                if (actors.isNotEmpty()) this.actors = actors
                 addTrailer(detail.trailerUrl)
             }
         }

@@ -49,6 +49,7 @@ internal data class OrgDetail(
     val overview: String?,
     val poster: String?,
     val backdrop: String?,
+    val logo: String?,
     val year: Int?,
     val durationMinutes: Int?,
     val rating: Double?,
@@ -438,6 +439,7 @@ internal object CinecalidadOrgApi {
             ?: resolveUploadOrTmdbImage(postNode.path("poster_path").asTextOrNull(), false, "w342")
         val backdrop = resolveUploadOrTmdbImage(images.path("backdrop").asTextOrNull(), true, "w780")
             ?: resolveUploadOrTmdbImage(postNode.path("backdrop_path").asTextOrNull(), false, "w780")
+        val logo = resolveUploadOrTmdbImage(images.path("logo").asTextOrNull(), true, "w500")
 
         val genreIds = postNode.path("genres")
             .takeIf { it.isArray }
@@ -453,6 +455,7 @@ internal object CinecalidadOrgApi {
             overview = decodeText(postNode.path("overview").asText("")).takeIf { it.isNotBlank() },
             poster = poster,
             backdrop = backdrop,
+            logo = logo,
             year = parseYear(postNode.path("release_date").asTextOrNull(), title),
             durationMinutes = parseDurationMinutes(postNode.path("runtime")),
             rating = parseRating(postNode.path("vote_average")),
