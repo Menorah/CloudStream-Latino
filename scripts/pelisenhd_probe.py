@@ -2,6 +2,7 @@
 import http.cookiejar
 import json
 import re
+import subprocess
 import traceback
 import urllib.error
 import urllib.parse
@@ -45,40 +46,25 @@ def req_url(url, data=None, referer=None, raw_body=None):
 
 
 try:
-    movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
-    mst, _, _, m_html = req_url(movie_url)
-    ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
-    emit("0_movie", {"st": mst, "has_ft": bool(ft_el)})
-    ft_url = ft_el["href"] if ft_el else "https://financialtrust.info/l.php?o=ZXFNNUNsWU85bFJsck1jMzZMenBMdVl4YzJJZUhRZnJvRGZSTW9wVkhMY2QyWWN1TmpGRnpPNHZoV21xUDhnM0k5NUNqYWdzVFh0bVp3VkJyTS9WTjVJSDUyY1hkV2FDOE1TQXcwRUFpVFRTM3J5eTlWdWxiNEQwTGdNU1hrd24="
-
-    st1, cur, _, body = req_url(ft_url, referer=movie_url)
-    form = BeautifulSoup(body, "html.parser").select_one("form")
-    if form and form.get("action"):
-        inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
-        st, cur2, _, body2 = req_url(urllib.parse.urljoin(cur, form["action"]), data=inputs, referer=cur)
-    else:
-        emit("0_noform", {"st1": st1, "cur": cur, "body": body[:1000]})
-        body2 = ""
-
-    api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
-    link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
-    emit("1_cfg", {"apiKey": api_key, "linkOut": link_out})
-
-    # Notice app.packed.js: first verifyServer() calls check.php with body="view", then finishCountdown calls check.php with body="ok", or GET /r.php?f=<linkOut>&t=<apiKey>
-    cst1, ccur1, _, cb1 = req_url("https://financialtrust.info/check.php", raw_body="view", referer="https://financialtrust.info/")
-    cst2, ccur2, _, cb2 = req_url("https://financialtrust.info/check.php", raw_body="ok", referer="https://financialtrust.info/")
-    emit("2_checks", {"v": (cst1, cb1[:200]), "ok": (cst2, cb2[:200])})
-
-    r_url = f"https://financialtrust.info/r.php?f={urllib.parse.quote(link_out)}&t={urllib.parse.quote(api_key)}"
-    rst, rcur, rhdrs, rbody = req_url(r_url, referer="https://financialtrust.info/")
-    rs = BeautifulSoup(rbody, "html.parser")
-    emit("3_r_php", {
-        "status": rst,
-        "final": rcur,
-        "title": rs.title.string if rs.title else None,
-        "links": [[a.get_text(" ", strip=True), a.get("href")] for a in rs.select("a[href]")][:25],
-        "body": rbody[:2400],
-    })
+    _, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer="https://financialtrust.info/")
+    patched = re.sub(r"var\s+guW\s*=\s*Plo\([^)]*\)\s*;[^}]*\}\)\(\)\s*$", "global.__OUT=kPN;return;})()", js_body)
+    open("/tmp/app.patched.js", "w").write(patched)
+    node_code = r"""
+const fs = require('fs');
+eval(fs.readFileSync('/tmp/app.patched.js', 'utf8'));
+const src = global.__OUT;
+const m = src.match(/var a=(\[[\s\S]*?\]);/);
+const arr = eval(m[1]);
+let clean = src.slice(m[0].length);
+clean = clean.replace(/a\[(\d+)\]/g, (_, i) => JSON.stringify(arr[+i]));
+const lm = clean.slice(clean.indexOf('class m{'));
+console.log(JSON.stringify({ lm, arr: arr.slice(130) }));
+"""
+    res = json.loads(subprocess.check_output(["node", "-e", node_code], text=True))
+    lm = res["lm"]
+    emit("1_lm_0", lm[:3500])
+    emit("1_lm_1", lm[3500:7000])
+    emit("1_arr_tail", res["arr"])
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
