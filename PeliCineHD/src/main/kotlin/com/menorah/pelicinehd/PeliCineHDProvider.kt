@@ -29,13 +29,14 @@ private const val REQUEST_TIMEOUT = 25L
 /**
  * Headers every page request carries.
  *
- * There is deliberately **no User-Agent** here. Cloudflare ties `cf_clearance` to the User-Agent
- * that obtained it, so the cookies the browser hands over are only valid for the browser's own
- * UA; sending a different one from the HTTP client made every page look refused and pushed every
- * request into the WebView. Without the header the client's own UA is used and the cookies are
- * accepted.
+ * The User-Agent is the **same** one the off-screen WebView sends. Cloudflare ties
+ * `cf_clearance` to the User-Agent that obtained it, so the cookies the browser hands over are
+ * only valid for the browser's own UA: sending a different one from the HTTP client made every
+ * page look refused and pushed every request into the WebView. Sending the browser's UA (and not
+ * the `; wv` one Android would use by default) keeps a single identity for both transports.
  */
-private val PAGE_HEADERS = mapOf(
+internal val PAGE_HEADERS = mapOf(
+    "User-Agent" to BrowserSiteTransport.BROWSER_AGENT,
     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
     "Upgrade-Insecure-Requests" to "1",
