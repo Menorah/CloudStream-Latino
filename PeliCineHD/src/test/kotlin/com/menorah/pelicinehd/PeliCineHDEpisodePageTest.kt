@@ -26,7 +26,10 @@ class PeliCineHDEpisodePageTest {
               </div>
             </header>
             <div class="description">Galadriel está perturbada por las señales del regreso de un antiguo mal.</div>
-            <ul class="cast-lst"><li><span>Director</span><p><a href="https://pelicinehd.com/director_tv/john-d-payne/">John D. Payne</a></p></li></ul>
+            <ul class="cast-lst">
+              <li><span>Director</span><p><a href="https://pelicinehd.com/director_tv/john-d-payne/">John D. Payne</a></p></li>
+              <li><span>Actores</span><p><a href="https://pelicinehd.com/cast_tv/morfydd-clark/">Morfydd Clark</a>, <a href="https://pelicinehd.com/cast_tv/robert-aramayo/">Robert Aramayo</a></p></li>
+            </ul>
           </aside>
           <footer><span class="vote fa-star"><span class="num">7.346</span><span>TMDB</span></span></footer>
         </article>
@@ -78,7 +81,8 @@ class PeliCineHDEpisodePageTest {
         // The panel label says the audio track, so the link is labelled even before extraction.
         assertEquals("Latino", PeliCineHDMarkup.players(page)[0].language)
         assertEquals(listOf("Drama"), PeliCineHDMarkup.genres(page))
-        assertEquals(listOf("John D. Payne"), PeliCineHDMarkup.actors(page))
+        // The director row is not cast, even when the label also reads "Reparto" on some pages.
+        assertEquals(listOf("Morfydd Clark", "Robert Aramayo"), PeliCineHDMarkup.actors(page))
         assertEquals(7.346, PeliCineHDMarkup.score(page)!!, 0.0001)
     }
 
