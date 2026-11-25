@@ -211,12 +211,18 @@ internal object PeliCineHDMarkup {
             .filter { it.isNotEmpty() }
             .distinct()
 
+    /**
+     * Cast rows are `<li><span>Director|Actores</span><p><a>…</a></p></li>`. The theme prints the
+     * label twice for directors ("Director" and "Reparto" in series), so the whole row text is
+     * checked instead of the first span only.
+     */
     fun actors(document: Document): List<String> =
         document.select("article.post.single ul.cast-lst li")
-            .filter { it.selectFirst("span")?.text()?.contains("Actor", true) == true }
+            .filter { row -> row.text().contains("Actor", true) || row.text().contains("Reparto", true) }
             .flatMap { it.select("p a") }
             .map { it.text().trim() }
             .filter { it.isNotEmpty() }
+            .distinct()
 
     fun score(document: Document): Double? =
         document.selectFirst("article.post.single span.vote span.num")
@@ -274,14 +280,24 @@ internal object PeliCineHDMarkup {
         }.distinctBy { it.url }
     }
 
-    /** `Minochinos -LATÍNO HD` -> `Latino`, `Voe -CASTELLANO HD` -> `Castellano`. */
+    /**
+     * `Morencius   -LAT HD` -> `Latino`, `Voe -CASTELLANO HD` -> `Castellano`.
+     *
+     * The theme abbreviates: `LAT`, `LATÍNO`, `LATINO`, `CAST`, `ESP`, `SUB`. Matching only the
+     * long forms silently labelled the site's own player as "Latino" by default, so the short
+     * forms are matched too. Diacritics are folded (`LATÍNO`, `ESPANOL`) before comparing.
+     */
     fun language(label: String?): String {
-        val text = label?.uppercase() ?: return ""
+        val text = label?.uppercase()
+            ?.replace('Á', 'A').replace('É', 'E').replace('Í', 'I')
+            ?.replace('Ó', 'O').replace('Ú', 'U')
+            ?: return ""
         return when {
-            text.contains("CASTELLAN") || text.contains("ESPAÑA") || text.contains("ESPA\\") -> "Castellano"
+            text.contains("CASTELLAN") || text.contains("CAST ") || text.endsWith("CAST") ||
+                text.contains("ESPANA") || text.contains("ESPANOL") -> "Castellano"
             text.contains("SUB") -> "Subtitulado"
             text.contains("INGL") || text.contains("ENGLISH") -> "Inglés"
-            text.contains("LATIN") || text.contains("LATÍNO") -> "Latino"
+            text.contains("LATIN") || Regex("""(^|[^A-Z])LAT([^A-Z]|$)""").containsMatchIn(text) -> "Latino"
             else -> ""
         }
     }
