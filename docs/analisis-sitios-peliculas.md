@@ -16,7 +16,6 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | RePelis24.shop | **Descartado** (decisión del usuario, 24-nov) | Reproducción verificada en CI el 24-nov (abajo), pero en la red del usuario fallaron imágenes (el CDN `/cdn/` devuelve reto 403 de Cloudflare) y aparecieron enlaces CONTAINER_MALFORMED; tras varias rondas de arreglos el usuario decidió retirarlo. |
 | AnimeOnlineNinja / VerAni | Publicados (tareas previas) | Pendientes conocidos: error 3003 y servidores de AnimeOnline. |
 | SoloLatino | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario siempre mostró «Enlaces no encontrados»: los botones `data-player-token` los inserta JavaScript y el sitio va tras Cloudflare; el usuario decidió retirarlo tras varias rondas de arreglos. |
-| PeliCineHD | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario devolvió HTTP 403 (Cloudflare) y, con el respaldo WebView, no cargaba contenido; el usuario decidió retirarlo. |
 | PoseidonHD2 | **Publicado** | Reproducción representativa verificada el 24-nov: película + 3 episodios reproducidos con Media3; se corrigieron episodios sin enlaces (variante `thisEpisode` y fuentes directas). Ciudad de Dios 2x3 y Yellowjackets 1x1 se informan como no disponibles por sus hosts (DNS/403/JS) desde la red de CI. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
 | pelisplus.fit | **Sin complemento viable** | Ídem. |
@@ -80,21 +79,6 @@ automatizará el CAPTCHA ni se pedirán cookies. **No se publica complemento.**
 Los canales de TV en vivo que expone `home.php` incluyen claves de DRM de TV por
 suscripción: quedan fuera de alcance.
 
-## PeliCineHD.com
-
-WordPress con tema Dooplay, detrás de Cloudflare (403 desde la red de CI; accesible
-desde navegadores reales). Mecánica documentada de implementaciones públicas
-(mangayomi-extensions, alfa-addon) y comprobada parcialmente por HTTP:
-- Catálogo `/peliculas/`, `/series/`; búsqueda `/?s=`; fichas `/movies/<slug>/`;
-  episodios `/episodios/<slug>-temporada-T-capitulo-E/`;
-- Temporadas: `POST /wp-admin/admin-ajax.php` con `action=action_select_season&season=&post=`;
-- Servidores: `span.server` por página; cada reproductor es `/?trembed=<n>&trid=<postid>&trtype=<1|2>`,
-  una página con `<iframe src>` del hoster (VOE, StreamWish, VidHide, Dood…);
-- Idiomas en el texto del servidor («UqLoad - LATÍNO»).
-
-Implementación: módulo `PeliCineHD` (análisis + proveedor), pruebas de análisis en CI.
-Pendiente: reproducción real desde una red sin bloqueo (la del usuario).
-
 ## SoloLatino.net
 
 Cadena completa documentada (implementaciones MiPlugin y CS_latino + investigación):
@@ -111,7 +95,6 @@ Cadena completa documentada (implementaciones MiPlugin y CS_latino + investigaci
 
 Implementación: módulo `SoloLatino` (parsers con fixtures reales Apache-2.0 +
 proveedor con la cadena completa + pruebas JVM/Android). El sitio bloquea la red de
-CI (403), igual que PeliCineHD; el usuario confirma que reproduce desde su navegador
 (Black Clover T1E1) y CloudStream está en esa misma red. Pendiente: verificación de
 reproducción desde esa red (la release es el único canal de instalación del usuario).
 

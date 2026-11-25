@@ -89,7 +89,6 @@ def main():
     checks = []
     for name, url in [
         ("sololatino", "https://sololatino.net/"),
-        ("pelicine", "https://pelicinehd.com/movies/matrix/"),
         ("pelisjuanita", "https://pelisjuanita.com/movies/"),
     ]:
         try:
