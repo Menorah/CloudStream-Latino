@@ -17,14 +17,6 @@ def emit(tag, obj):
 
 
 try:
-    # 1. List ALL routes under /wp-json/wpf/v1 and /wp-json/
-    wpf = s.get("https://cinecalidad.org/wp-json/wpf/v1", timeout=20).json()
-    emit("1_wpf_routes", list(wpf.get("routes", {}).keys()))
-
-    wp_all = s.get("https://cinecalidad.org/wp-json/", timeout=20).json()
-    emit("1b_namespaces", {"ns": wp_all.get("namespaces"), "custom_routes": [r for r in wp_all.get("routes", {}).keys() if not r.startswith("/wp/v2") and not r.startswith("/oembed")][:60]})
-
-    # 2. Extract the tail / non-siteConfig parts of <script> in home, movie, series, ep
     for name, url in [
         ("home", "https://cinecalidad.org/"),
         ("movie", "https://cinecalidad.org/peliculas/perfectos-mentirosos-2026/"),
@@ -33,29 +25,31 @@ try:
     ]:
         html = s.get(url, timeout=20).text
         soup = BeautifulSoup(html, "html.parser")
-        parts = []
+        blocks = []
         for idx, sc in enumerate(soup.select("script")):
             txt = sc.get_text().strip()
             if not txt or "ld+json" in (sc.get("type") or "") or "speculationrules" in (sc.get("type") or ""):
                 continue
-            # strip the static window.siteConfig.datas block if huge
-            cleaned = re.sub(r'datas:\{.*?\},\r?\n', 'datas:{...},\n', txt, flags=re.S)
-            parts.append(f"[{idx}] {cleaned}")
-        joined = "\n===SCRIPT===\n".join(parts)
-        emit(f"2_{name}", joined[:3500])
-        if len(joined) > 3500:
-            emit(f"2_{name}_b", joined[3500:7000])
+            if idx == 0 or ("siteConfig.homeGrid" in txt and len(txt) < 1000):
+                continue
+            # Strip static siteConfig object cleanly up to `window.siteConfig.homeGrid` or `};`
+            if "window.siteConfig =" in txt:
+                tail_pos = txt.find("window.siteConfig.homeGrid")
+                blocks.append(f"[{idx}] TAIL={txt[tail_pos:]}" if tail_pos != -1 else f"[{idx}] LAST2000={txt[-2000:]}")
+            else:
+                blocks.append(f"[{idx}] FULL({len(txt)})={txt}")
+        out = "\n===BLK===\n".join(blocks)
+        emit(f"1_{name}", out[:3500])
+        if len(out) > 3500:
+            emit(f"1_{name}_b", out[3500:7000])
 
-    # 3. Inspect app.js around apiUrl / wpf/v1 / post / listing / search / player calls
+    # Also check app.js for `fastApi` / `apiUrl` / `window.` data globals
     jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20).text
-    ctx = []
-    for m in re.finditer(r'(?:apiUrl|fastApi|wpf/v1|__INITIAL|__DATA|single/episodes|single/related|/listing|/catalog|/search)', jr):
-        st = max(0, m.start() - 100)
-        en = min(len(jr), m.end() + 180)
-        ctx.append(jr[st:en])
-        if len(ctx) >= 18:
-            break
-    emit("3_appjs_api_ctx", ctx)
+    globals_used = sorted(set(re.findall(r'window\.[A-Za-z0-9_$]+', jr)))
+    api_calls = []
+    for m in re.finditer(r'(?:fastApi|apiUrl)\b[^;]{0,120}', jr):
+        api_calls.append(m.group(0))
+    emit("2_appjs_meta", {"globals": globals_used[:40], "api_calls": api_calls[:25]})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
