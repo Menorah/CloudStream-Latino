@@ -309,27 +309,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
      * the site need the site referer, so the list would show broken thumbnails.
      */
     private suspend fun loadEpisodes(document: Document, pageUrl: String): List<EpisodeItem> {
-        // Seasons with no episode of their own would leave gaps in the list, so the season
-        // switch is also tried for the seasons the page does not render.
-        val pendingSeasons = PeliCineHDMarkup.seasons(document)
-            .map { it.number }
-            .filter { number -> episodes.none { it.season == number } }
-        val filled = if (pendingSeasons.isEmpty()) {
-            episodes
-        } else {
-            val post = PeliCineHDMarkup.seasonsPostId(document) ?: 0
-            pendingSeasons.flatMap { number ->
-                try {
-                    seasonEpisodes(post, number, pageUrl)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    emptyList()
-                }
-            }
-        }
-        val allEpisodes = (episodes + filled).distinctBy { it.url }
-            .sortedWith(compareBy({ it.season }, { it.number }))
+        val seasons = PeliCineHDMarkup.seasons(document)
         val renderedSeason = PeliCineHDMarkup.parseEpisodeNumber(
             document.selectFirst("div.choose-season dt.n_s")?.text()
         )?.second ?: seasons.firstOrNull()?.number ?: 1
