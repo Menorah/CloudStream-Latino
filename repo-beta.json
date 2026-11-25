@@ -1,6 +1,6 @@
 {
   "name": "CloudStream Latino (beta)",
-  "description": "Canal beta de las extensiones CloudStream Latino, incluido RePelis24.shop",
+  "description": "Canal beta de las extensiones CloudStream Latino, incluido PeliCineHD",
   "manifestVersion": 1,
   "pluginLists": [
     "https://github.com/Menorah/CloudStream-Latino/releases/download/beta/plugins.json"
