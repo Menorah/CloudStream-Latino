@@ -12,33 +12,33 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4
+      - run: python3 -m pip install beautifulsoup4 curl_cffi
       - run: python3 scripts/pelicinehd_probe.py home
   catalog:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4
+      - run: python3 -m pip install beautifulsoup4 curl_cffi
       - run: python3 scripts/pelicinehd_probe.py catalog
   movies:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4
+      - run: python3 -m pip install beautifulsoup4 curl_cffi
       - run: python3 scripts/pelicinehd_probe.py movies
   series:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4
+      - run: python3 -m pip install beautifulsoup4 curl_cffi
       - run: python3 scripts/pelicinehd_probe.py series
   players:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m pip install beautifulsoup4
+      - run: python3 -m pip install beautifulsoup4 curl_cffi
       - run: python3 scripts/pelicinehd_probe.py players
