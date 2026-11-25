@@ -1,0 +1,69 @@
+name: PelicineHD dump (temporal)
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/workflows/pelicinehd-dump.yml'
+permissions:
+  contents: write
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Descargar el zip del sitio
+        shell: bash
+        run: |
+          set -x
+          mkdir -p /tmp/dump
+          for url in \
+            "https://tmpfiles.org/dl/wyAFaaTTlcbA/paginaweb.zip" \
+            "https://tmpfiles.org/dl/1795611062.e3750b7cfe9db9d1/wyAFaaTTlcbA/paginaweb.zip" \
+            "https://tmpfiles.org/wyAFaaTTlcbA/paginaweb.zip"; do
+            echo "== $url"
+            curl -sSL --retry 3 --retry-delay 3 -m 180 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" -H "Accept: */*" -H "Referer: https://tmpfiles.org/" -o /tmp/dump/paginaweb.zip "$url" && ls -la /tmp/dump/paginaweb.zip && head -c 4 /tmp/dump/paginaweb.zip | xxd && break
+          done
+          python3 - <<'PY'
+          import zipfile, pathlib
+          z = zipfile.ZipFile('/tmp/dump/paginaweb.zip')
+          print("entries:", len(z.namelist()))
+          for n in z.namelist()[:50]:
+              print(" ", n, z.getinfo(n).file_size)
+          z.extractall('/tmp/dump/site')
+          PY
+      - name: Publicar árbol y ficheros de texto en la rama
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, shutil
+          root = pathlib.Path('/tmp/dump/site')
+          out = pathlib.Path('_site_dump')
+          if out.exists(): shutil.rmtree(out)
+          tree = []
+          total = 0
+          exts = {'.html', '.htm', '.css', '.js', '.json', '.txt', '.xml', '.php'}
+          for p in sorted(root.rglob('*')):
+              if p.is_file():
+                  rel = p.relative_to(root)
+                  tree.append(f"{p.stat().st_size}\t{rel}")
+                  if p.suffix.lower() in exts:
+                      dst = out / rel
+                      dst.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(p, dst)
+                      total += p.stat().st_size
+          out.mkdir(parents=True, exist_ok=True)
+          (out / '_tree.txt').write_text("\n".join(tree))
+          print("text bytes:", total, "files:", len(tree))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f _site_dump
+          git commit -m "dump: paginaweb" || echo "sin cambios"
+          git push origin HEAD:${{ github.ref_name }}
+      - name: Resumen
+        shell: bash
+        run: wc -l _site_dump/_tree.txt && du -sh _site_dump
