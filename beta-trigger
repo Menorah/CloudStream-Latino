@@ -1,1 +1,1 @@
-Publicación beta 9 complementos (2026-11-25, arreglo Cloudflare): AnimeOnlineNinja, VerAni, Repelis24CZ, RePelis24Shop, CinecalidadAM, CinecalidadMY, RePelisHD, PoseidonHD2, PeliCineHD v2.
+PeliCineHD v4: usa el UA de la WebView con cf_clearance y detecta el reto con HTTP 200
