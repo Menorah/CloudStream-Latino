@@ -71,6 +71,11 @@ Las temporadas se descubren en `div.choose-season a[data-post][data-season]`. El
 
 Los reproductores están en `aside#aa-options`, una opción por `div#options-<n>`, con un `iframe` que apunta a un envoltorio del propio sitio (`/?trembed=<n>&trid=<id>&trtype=1`). El complemento pide cada envoltorio para obtener el hoster final (Voe, Minochinos, etc.) y entrega el enlace al extractor correspondiente de CloudStream, etiquetado con el idioma que indica el panel (`Latino`, `Castellano`, `Subtitulado`). Si un envoltorio falla, se conserva la opción tal cual en lugar de perder el servidor. La reproducción depende de los extractores instalados y de la red del dispositivo, como en el resto de complementos.
 
+**Versión 5: películas que se creían series y temporadas desordenadas.** Con las páginas reales guardadas por el usuario se midieron dos errores:
+
+- **Toda película se clasificaba como serie.** La ficha de una película (La Odisea, por ejemplo) también trae `<section class="section episodes">`, vacía, y esa marca bastaba para tratarla como serie: el complemento buscaba episodios, no había, y la pantalla mostraba «PeliCineHD devolvió la ficha pero ningún episodio». Ahora una página es serie solo si `article.post.single` tiene la clase `series`, si hay selector de temporada (`div.choose-season`) o si hay tarjetas de episodio reales (`article.post.episodes`, `#episode_by_temp`). Además, una ficha sin título informa un error propio en lugar de quedar vacía.
+- **Faltaba la tercera temporada.** El sitio imprime las temporadas desordenadas (`Season 2`, `Season 1`, `Season 3` en Los Anillos del Poder) y el número se deducía de la posición, quedándose en 2. Ahora se lee siempre de `data-season` y se ordena por número; `dt.n_s` (que en esa página vale 2, la temporal visible) solo se usa como respaldo y nunca para numerar el resto. La temporada que la página no dibuja se pide por AJAX, como antes.
+
 **Versión 4: ficha, temporadas, reproductores y portada.**
 
 - **«Error loading» al abrir una ficha.** Cuando la ficha llegaba pero la lista de episodios salía vacía, el complemento devolvía `null` y CloudStream mostraba el genérico «Error loading, try again later». Ahora la causa se informa como error propio. En paralelo se corrigió la lectura de temporadas.
