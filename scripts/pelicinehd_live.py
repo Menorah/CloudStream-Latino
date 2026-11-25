@@ -55,7 +55,17 @@ def fetch(url, referer=BASE + "/", data=None):
 
 
 def is_challenge(html):
-    return "Just a moment" in html or "cf-chl" in html or "challenge-platform" in html
+    """Same markers as the plugin: an ordinary page also loads challenge-platform scripts."""
+    lowered = html.lower()
+    return ("just a moment" in lowered or 'id="challenge-form"' in lowered
+            or 'id="cf-challenge-running"' in lowered or "window._cf_chl_opt" in lowered)
+
+
+def webview_answer():
+    """The plugin falls back to the device WebView, which runs the challenge JavaScript.
+    A runner has no WebView, so this records why the live check cannot go further."""
+    return ("sin WebView en el runner: el complemento reintenta con el navegador del "
+            "dispositivo cuando el cliente HTTP recibe el desafío")
 
 
 # ---------------------------------------------------------------- markup helpers
@@ -134,7 +144,8 @@ def step_catalog():
     found = cards(html)
     notice("catalog", {"status": status, "challenge": is_challenge(html), "cards": len(found),
                        "first": found[:2],
-                       "has_next": "/peliculas/page/2/" in html})
+                       "has_next": "/peliculas/page/2/" in html,
+                       "fallback": webview_answer() if is_challenge(html) else None})
 
     url2, status2, html2 = fetch(BASE + "/peliculas/page/2/")
     second = {card["url"] for card in cards(html2)}
