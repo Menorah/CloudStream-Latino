@@ -19,19 +19,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/** One attempt per page: retrying inside a section multiplies the time the screen waits. */
-private const val ATTEMPTS = 2
-private const val ATTEMPTS_AFTER_SOLVE = 1
+private const val ATTEMPTS = 3
 private const val ALL_SECTIONS_FAILED = 8
 
 /** How long a failure keeps counting towards the "site refuses this network" decision. */
 private const val FAILURE_WINDOW_MS = 10_000L
-
-/**
- * Ceiling for one home section. Sixteen sections are asked at once, several of them through the
- * browser, so each one gets a slice instead of the whole screen waiting for the slowest.
- */
-private const val SECTION_MILLIS = 30_000L
 private const val REQUEST_TIMEOUT = 25L
 
 /**
@@ -73,8 +65,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     override val usesWebView = true
     private val site = SiteClient.create(context)
 
-    // Every section asks its own page, so the home screen is intentionally not one long wait.
-    override val getMainPageTimeoutMs: Long? = 150_000L
+    // Every section asks its own page, and the browser fallback is slower than plain HTTP.
+    override val getMainPageTimeoutMs: Long? = 180_000L
     override val searchTimeoutMs: Long? = 60_000L
     override val loadTimeoutMs: Long? = 90_000L
     override val loadLinksTimeoutMs: Long? = 240_000L
@@ -100,20 +92,11 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
 
     // ------------------------------------------------------------------ http
 
-    /**
-     * @param quick how the home screen asks: fewer attempts, because sixteen sections share one
-     * deadline and a retried section is time the others lose.
-     */
-    private suspend fun fetch(
-        input: String,
-        referer: String = "$mainUrl/",
-        quick: Boolean = false
-    ): Document {
+    private suspend fun fetch(input: String, referer: String = "$mainUrl/"): Document {
         val url = URI("$mainUrl/").resolve(input).toString()
         require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD" }
-        val attempts = if (quick) ATTEMPTS_AFTER_SOLVE else ATTEMPTS
         var lastError: Exception? = null
-        for (attempt in 1..attempts) {
+        for (attempt in 1..ATTEMPTS) {
             if (attempt > 1) delay(500L * attempt)
             try {
                 return fetchOnce(url, referer)
@@ -149,7 +132,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     }
 
     /** CloudStream loads every catalog at once; a small gate keeps the site responsive. */
-    private val catalogGate = Semaphore(3)
+    private val catalogGate = Semaphore(4)
 
     private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->
         val poster = card.poster
@@ -168,25 +151,9 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
 
     // -------------------------------------------------------------- main page
 
-    /**
-     * The screen asks sixteen sections at once. If Cloudflare wants a challenge, each of them
-     * would start (and cancel) it; one warm-up here resolves the session first, so the sections
-     * are plain HTTP requests.
-     */
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (!warmedUp.get() && warmedUp.compareAndSet(false, true)) {
-            site.warmUp()
-        }
         val document = try {
-            // A section that cannot answer in time is dropped instead of holding the screen.
-            withTimeoutOrNull(SECTION_MILLIS) {
-                catalogGate.withPermit {
-                    fetch(PeliCineHDMarkup.catalogUrl(request.data, page), quick = true)
-                }
-            } ?: run {
-                failures.incrementAndGet()
-                return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
-            }
+            catalogGate.withPermit { fetch(PeliCineHDMarkup.catalogUrl(request.data, page)) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -217,7 +184,6 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
      */
     private val failures = AtomicInteger(0)
     private val lastFailureAt = AtomicLong(0)
-    private val warmedUp = AtomicBoolean(false)
 
 
     // ----------------------------------------------------------------- search
