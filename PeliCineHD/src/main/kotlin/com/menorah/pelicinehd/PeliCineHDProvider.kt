@@ -464,7 +464,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
      * Emits a manifest found by the wrapper. The referer is the player page, which is what these
      * signed HLS URLs check; the name states the hoster so the list stays readable.
      */
-    private fun emitMedia(into: MutableList<ExtractorLink>, url: String, referer: String) {
+    private suspend fun emitMedia(into: MutableList<ExtractorLink>, url: String, referer: String) {
         val name = runCatching { java.net.URI(url).host?.substringAfter(".") }.getOrNull() ?: "Player"
         into.add(
             newExtractorLink(
@@ -480,7 +480,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
         )
     }
 
-    private fun label(link: ExtractorLink, language: String, hoster: String?): ExtractorLink? {
+    private suspend fun label(link: ExtractorLink, language: String, hoster: String?): ExtractorLink? {
         val source = hoster?.let { host -> host.substringBefore('.').replaceFirstChar { it.uppercase() } }
             ?.takeIf { it.isNotBlank() && !link.name.contains(it, true) && link.name != "PeliCineHD" }
         val name = buildString {
