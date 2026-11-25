@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import re
 import traceback
 import requests
 from bs4 import BeautifulSoup
@@ -16,33 +17,34 @@ def emit(tag, obj):
 
 
 try:
+    # 1. Extract all <script> blocks (except JSON-LD and huge CSS) from home, movie, series, ep
     for name, url in [
         ("home", "https://cinecalidad.org/"),
         ("movie", "https://cinecalidad.org/peliculas/perfectos-mentirosos-2026/"),
-        ("series", "https://cinecalidad.org/series/f-b-i-2018/"),
         ("ep", "https://cinecalidad.org/episodio/f-b-i-temporada-1-episodio-1/"),
     ]:
-        r = s.get(url, timeout=20)
-        html = r.text
-        emit(f"1_{name}_meta", {"st": r.status_code, "len": len(html), "has_perfectos": "perfectos" in html.lower(), "has_vimeos": "vimeos" in html.lower(), "has_fbi": "f-b-i" in html.lower()})
-        # Print body portion
-        b_idx = html.find("<body")
-        body = html[b_idx:] if b_idx != -1 else html
-        emit(f"2_{name}_body_a", body[:3200])
-        if name in ("movie", "ep", "series"):
-            emit(f"3_{name}_body_b", body[3200:6400])
+        html = s.get(url, timeout=20).text
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = []
+        for idx, sc in enumerate(soup.select("script")):
+            txt = sc.get_text().strip()
+            if txt and "ld+json" not in (sc.get("type") or "") and "speculationrules" not in (sc.get("type") or ""):
+                scripts.append(f"[{idx}] {txt}")
+        joined = "\n===SCRIPT===\n".join(scripts)
+        emit(f"1_{name}_scripts", {"count": len(scripts), "len": len(joined), "head": joined[:3400]})
+        if len(joined) > 3400:
+            emit(f"1_{name}_scripts_b", joined[3400:6800])
 
-    # Inspect WP REST routes and app.js
-    for api in ["https://cinecalidad.org/wp-json/wpf/v1", "https://cinecalidad.org/wp-api/v1", "https://cinecalidad.org/wp-json/"]:
-        rr = s.get(api, timeout=20)
-        emit(f"4_api_{api.split('/')[-1] or api.split('/')[-2]}", {"st": rr.status_code, "body": rr.text[:2500]})
+    # 2. Check wp-json / wp-api / app.js endpoints
+    api_summary = {}
+    for u in ["https://cinecalidad.org/wp-json/wpf/v1", "https://cinecalidad.org/wp-api/v1"]:
+        r = s.get(u, timeout=15)
+        api_summary[u] = {"st": r.status_code, "text": r.text[:1400]}
+    emit("2_apis", api_summary)
 
-    jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20)
-    emit("5_appjs_meta", {"st": jr.status_code, "len": len(jr.text)})
-    # Extract API endpoints / player / route hints from app.js
-    import re
-    routes = sorted(set(re.findall(r'["\'](/[a-zA-Z0-9_/-]*(?:wp-api|wp-json|player|stream|vimeos|pelicula|serie|anime|novela|search|episod|season|genero)[a-zA-Z0-9_/?=&-]*)["\']', jr.text)))
-    emit("5_appjs_routes", routes[:60])
+    jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20).text
+    hits = sorted(set(re.findall(r'["\']([^"\']*(?:wp-api|wp-json|player|vimeos|goodstream|voe|lamovie|embed|search|page/|single|episod|season|pelicula|serie)[^"\']*)["\']', jr)))
+    emit("3_appjs_hits", {"len": len(jr), "hits": [h for h in hits if len(h) < 120][:80]})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
