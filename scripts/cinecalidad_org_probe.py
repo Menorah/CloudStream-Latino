@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import subprocess
 import traceback
 import requests
 
@@ -16,68 +17,101 @@ def emit(tag, obj):
 
 
 try:
-    jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20).text
-
-    # 1. Find ALL apiPath literals in app.js (the entire set!)
-    all_api_paths = sorted(set(re.findall(r'apiPath:\s*(`[^`]+`|["\'][^"\']+["\'])', jr)))
-    emit("1_all_apipaths", all_api_paths)
-
-    # Also print context around /listing/tax and single detail loader
-    tax_idx = jr.find("/listing/tax")
-    single_hits = [jr[max(0, m.start()-40):min(len(jr), m.end()+220)] for m in re.finditer(r'apiPath:\s*(?:`[^`]*single|["\']/single|[^,}]+slug|[^,}]+postType)', jr)]
-    emit("2_single_and_tax", {
-        "tax": jr[max(0, tax_idx-100):tax_idx+400] if tax_idx != -1 else None,
-        "single": single_hits[:10],
+    # 1. Check /single/{type} and /listing/tax/{tax}/{slug}
+    s_movie = s.get("https://cinecalidad.org/wp-api/v1/single/movies?slug=perfectos-mentirosos-2026&postType=movies", timeout=20).json()
+    s_tv = s.get("https://cinecalidad.org/wp-api/v1/single/tvshows?slug=csi-miami-2002&postType=tvshows", timeout=20).json()
+    s_anime = s.get("https://cinecalidad.org/wp-api/v1/single/animes?slug=dragon-ball-super-beerus-2026&postType=animes", timeout=20).json()
+    s_novel = s.get("https://cinecalidad.org/wp-api/v1/single/novels?slug=eres-mi-sangre-2025&postType=novels", timeout=20).json()
+    s_ep = s.get("https://cinecalidad.org/wp-api/v1/single/episodes?slug=f-b-i-temporada-1-episodio-1&postType=episodes", timeout=20).json()
+    emit("1_singles", {
+        "movie_keys": sorted((s_movie.get("data") or {}).keys()) if isinstance(s_movie.get("data"), dict) else s_movie,
+        "tv_seasons": (s_tv.get("data") or {}).get("seasons"),
+        "tv_keys": sorted((s_tv.get("data") or {}).keys()) if isinstance(s_tv.get("data"), dict) else s_tv,
+        "anime_seasons": (s_anime.get("data") or {}).get("seasons"),
+        "novel_seasons": (s_novel.get("data") or {}).get("seasons"),
+        "ep_sample": {k: (s_ep.get("data") or {}).get(k) for k in ["_id", "title", "slug", "type", "season_number", "episode_number", "parent", "serie", "tvshow", "post_parent", "still_path", "runtime"] if isinstance(s_ep.get("data"), dict)},
+        "ep_keys": sorted((s_ep.get("data") or {}).keys()) if isinstance(s_ep.get("data"), dict) else s_ep,
     })
 
-    # 2. Check all postTypes in /listing/latest and /listing/<type> and /listing/tax
-    listing_check = {}
+    # 2. Check /listing/tax/genres/accion, /listing/tax/years/2026, /listing/tax/lang/castellano, /listing/tax/lang/subtitulado, /listing/latest
+    tax_check = {}
     for label, u in [
-        ("movies_p1", "https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=latest&order=desc&postType=movies&postsPerPage=24"),
-        ("movies_p2", "https://cinecalidad.org/wp-api/v1/listing/movies?page=2&orderBy=latest&order=desc&postType=movies&postsPerPage=24"),
-        ("animes", "https://cinecalidad.org/wp-api/v1/listing/animes?page=1&orderBy=latest&order=desc&postType=animes&postsPerPage=5"),
-        ("novels", "https://cinecalidad.org/wp-api/v1/listing/novels?page=1&orderBy=latest&order=desc&postType=novels&postsPerPage=5"),
-        ("wwe", "https://cinecalidad.org/wp-api/v1/listing/wwe?page=1&orderBy=latest&order=desc&postType=wwe&postsPerPage=5"),
-        ("tax_genres_drama", 'https://cinecalidad.org/wp-api/v1/listing/tax/genres?filter=["drama"]&page=1&orderBy=latest&order=desc&postsPerPage=5'),
-        ("tax_years_2026", 'https://cinecalidad.org/wp-api/v1/listing/tax/years?filter=["2026"]&page=1&orderBy=latest&order=desc&postsPerPage=5'),
-        ("search_p2", "https://cinecalidad.org/wp-api/v1/search?postType=any&q=batman&page=2&postsPerPage=5"),
+        ("genres_accion", "https://cinecalidad.org/wp-api/v1/listing/tax/genres/accion?page=1&orderBy=latest&order=desc&postsPerPage=5"),
+        ("years_2026", "https://cinecalidad.org/wp-api/v1/listing/tax/years/2026?page=1&orderBy=latest&order=desc&postsPerPage=5"),
+        ("lang_castellano", "https://cinecalidad.org/wp-api/v1/listing/tax/lang/castellano?page=1&orderBy=latest&order=desc&postsPerPage=5"),
+        ("lang_sub", "https://cinecalidad.org/wp-api/v1/listing/tax/lang/subtitulado?page=1&orderBy=latest&order=desc&postsPerPage=5"),
+        ("latest_all", "https://cinecalidad.org/wp-api/v1/listing/latest?postTypes=movies,tvshows,animes&postsPerPage=10"),
+        ("tvshows_order_popular", "https://cinecalidad.org/wp-api/v1/listing/tvshows?page=1&orderBy=popular&order=desc&postType=tvshows&postsPerPage=5"),
     ]:
         r = s.get(u, timeout=20)
         d = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-        data = d.get("data", {}) if isinstance(d, dict) else {}
-        posts = data.get("posts", []) if isinstance(data, dict) else []
-        listing_check[label] = {
+        posts = (d.get("data") or {}).get("posts", []) if isinstance(d, dict) and isinstance(d.get("data"), dict) else []
+        tax_check[label] = {
             "st": r.status_code,
             "cnt": len(posts),
-            "pag": data.get("pagination") if isinstance(data, dict) else None,
-            "first": posts[0].get("slug") if posts else r.text[:200],
+            "pag": (d.get("data") or {}).get("pagination") if isinstance(d.get("data"), dict) else None,
+            "types": list({p.get("type") for p in posts}),
+            "first": posts[0].get("slug") if posts else r.text[:180],
         }
-    emit("3_listing_matrix", listing_check)
+    emit("2_tax_and_latest", tax_check)
 
-    # 3. Inspect full keys of a movie item, a tvshow item (CSI Miami 74410!), an anime item, and search result!
-    mv = s.get("https://cinecalidad.org/wp-api/v1/search?postType=any&q=Perfectos%20mentirosos&postsPerPage=5", timeout=20).json()
-    m_posts = mv.get("data", {}).get("posts", [])
-    pm = m_posts[0] if m_posts else {}
-    pm_id = pm.get("_id")
-    pm_player = s.get(f"https://cinecalidad.org/wp-api/v1/player?postId={pm_id}&demo=0", timeout=20).json() if pm_id else None
-    pm_cast = s.get(f"https://cinecalidad.org/wp-api/v1/cast/movies/{pm_id}", timeout=20).json() if pm_id else None
+    # 3. Sample player embeds across movies, tv episode, anime episode, novel episode, wwe!
+    servers_seen = {}
+    samples_embeds = {}
+    items_to_check = [
+        ("movie_2026", 74657, None),
+        ("movie_1995", 74676, None),
+        ("ep_fbi", (s_ep.get("data") or {}).get("_id"), "tvshows"),
+    ]
+    # Also fetch episode 1 of Dragon Ball Super Beerus & Eres Mi Sangre & first WWE
+    if isinstance(s_anime.get("data"), dict):
+        aid = s_anime["data"].get("_id")
+        ae = s.get(f"https://cinecalidad.org/wp-api/v1/single/episodes/list?_id={aid}&season=1&page=1&postsPerPage=5", timeout=20).json()
+        aps = (ae.get("data") or {}).get("posts", [])
+        if aps:
+            items_to_check.append(("ep_anime", aps[0]["_id"], "animes"))
+    if isinstance(s_novel.get("data"), dict):
+        nid = s_novel["data"].get("_id")
+        ne = s.get(f"https://cinecalidad.org/wp-api/v1/single/episodes/list?_id={nid}&season=1&page=1&postsPerPage=5", timeout=20).json()
+        nps = (ne.get("data") or {}).get("posts", [])
+        if nps:
+            items_to_check.append(("ep_novel", nps[0]["_id"], "novels"))
+    wwe_list = s.get("https://cinecalidad.org/wp-api/v1/listing/wwe?page=1&orderBy=latest&order=desc&postType=wwe&postsPerPage=3", timeout=20).json()
+    wposts = (wwe_list.get("data") or {}).get("posts", [])
+    if wposts:
+        items_to_check.append(("wwe", wposts[0]["_id"], None))
+    # Also check a few random movies from page 1 & page 3 to see all server types & langs!
+    m1 = s.get("https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=latest&order=desc&postType=movies&postsPerPage=10", timeout=20).json()
+    for p in (m1.get("data") or {}).get("posts", [])[:5]:
+        items_to_check.append((f"m_{p['slug'][:20]}", p["_id"], None))
 
-    tv = s.get("https://cinecalidad.org/wp-api/v1/listing/tvshows?page=1&orderBy=latest&order=desc&postType=tvshows&postsPerPage=2", timeout=20).json()
-    t_item = tv.get("data", {}).get("posts", [{}])[0]
-    emit("4_full_schemas", {
-        "movie_keys": sorted(pm.keys()) if isinstance(pm, dict) else None,
-        "movie_sample": pm,
-        "movie_player": pm_player,
-        "movie_cast_sample": pm_cast.get("data", [])[:3] if isinstance(pm_cast, dict) else pm_cast,
-        "tv_keys": sorted(t_item.keys()) if isinstance(t_item, dict) else None,
-        "tv_seasons_field": t_item.get("seasons"),
-        "tv_sample_trimmed": {k: t_item[k] for k in ["_id", "title", "slug", "type", "seasons", "genres", "years", "lang", "rating", "runtime", "trailer", "images"] if k in t_item},
-    })
+    test_embed_urls = []
+    for label, pid, pt in items_to_check:
+        if not pid:
+            continue
+        q = f"https://cinecalidad.org/wp-api/v1/player?postId={pid}&demo=0" + (f"&parentType={pt}" if pt else "")
+        pr = s.get(q, timeout=20).json()
+        embeds = (pr.get("data") or {}).get("embeds", []) if isinstance(pr.get("data"), dict) else []
+        samples_embeds[label] = [{"server": e.get("server"), "lang": e.get("lang"), "q": e.get("quality"), "url": e.get("url")} for e in embeds]
+        for e in embeds:
+            srv = e.get("server") or "?"
+            servers_seen[srv] = servers_seen.get(srv, 0) + 1
+            if len(test_embed_urls) < 6 and e.get("url"):
+                test_embed_urls.append((label, e["url"]))
+    emit("3_embeds", {"servers_seen": servers_seen, "samples": samples_embeds})
 
-    # 4. Also check how a URL like /peliculas/perfectos-mentirosos-2026/ or /series/csi-miami-2002/ resolves to full post data via API!
-    # Look for route loaders in app.js!
-    loader_ctx = [jr[max(0, m.start()-40):min(len(jr), m.end()+260)] for m in re.finditer(r'path:\s*["\']/(?:peliculas|series|animes|novelas|wwe|episodio)[^"\']*["\']', jr)]
-    emit("5_route_loaders", loader_ctx[:10])
+    # 4. Inspect real embed responses (vimeos.net, videoapp.zip, voe.sx, goodstream...) and extract m3u8!
+    embed_check = []
+    for label, eu in test_embed_urls:
+        try:
+            r = s.get(eu, headers={"Referer": "https://cinecalidad.org/"}, timeout=15)
+            # Find m3u8 / mp4 / redirect / iframe inside embed HTML
+            media = re.findall(r'https?://[^"\'\s<>]+\.(?:m3u8|mp4)[^"\'\s<>]*', r.text)
+            ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', r.text, re.I)
+            embed_check.append({"label": label, "url": eu, "st": r.status_code, "final": r.url, "media": media[:3], "iframes": ifr[:2], "len": len(r.text)})
+        except Exception as ex:
+            embed_check.append({"label": label, "url": eu, "err": str(ex)})
+    emit("4_embed_resolve", embed_check)
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
