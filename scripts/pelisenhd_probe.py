@@ -2,6 +2,7 @@
 import http.cookiejar
 import json
 import re
+import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -45,6 +46,10 @@ def req_url(url, data=None, referer=None, raw_body=None):
 
 
 try:
+    _, _, _, js_start = req_url("https://fotise.com/wp-content/plugins/ls_adsclick_plugin/assets/js/js_start.min.js?x77541", referer="https://fotise.com/")
+    emit("1_js_start", js_start[:3500])
+
+    # Also check what else is in ls_adsclick_plugin (maybe js_post.min.js or js_redirect.min.js on the article page!)
     movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
     _, _, _, m_html = req_url(movie_url)
     ft_el = BeautifulSoup(m_html, "html.parser").select_one("a[href*='financialtrust']")
@@ -53,27 +58,28 @@ try:
     form = BeautifulSoup(body, "html.parser").select_one("form")
     inputs = {inp.get("name"): inp.get("value", "") for inp in form.select("input[name]") if inp.get("name")}
     st, cur2, _, body2 = req_url(urllib.parse.urljoin(cur, form["action"]), data=inputs, referer=cur)
-
     api_key = re.search(r'apiKey:\s*"([^"]+)"', body2).group(1)
     link_out = re.search(r'linkOut:\s*"([^"]+)"', body2).group(1)
-    sa, _, _, ba = req_url("https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/")
 
+    sa, _, _, ba = req_url("https://financialtrust.info/check.php", raw_body="a", referer="https://financialtrust.info/")
     fst, fcur, _, fbody = req_url(
         "https://fotise.com",
         data={"openAds": api_key, "formAd": "hs8mOLoaWTlzHDdm", "el_link": link_out},
         referer="https://financialtrust.info/",
     )
-    fs = BeautifulSoup(fbody, "html.parser")
-    scripts = [s.get("src") or s.get_text() for s in fs.select("script")]
-    emit("1_fotise_scripts", {"len": len(fbody), "script_srcs": [s for s in scripts if len(s) < 200], "cookies": [c.name + "=" + c.value for c in cj]})
-    inline = "\n---\n".join(s for s in scripts if len(s) >= 200 or ("postMessage" in s or "ajax" in s or "check" in s or "hs8m" in s))
-    for i in range(0, min(len(inline), 14000), 3500):
-        emit(f"2_fjs_{i//3500}", inline[i:i+3500])
-    # Also fetch any custom local JS referenced by fotise
-    for src in [s for s in scripts if isinstance(s, str) and len(s) < 200 and not any(x in s for x in ["jquery", "wp-", "google", "cloudflare"])]:
-        u = urllib.parse.urljoin(fcur, src)
-        _, _, _, sb = req_url(u, referer=fcur)
-        emit("3_ext_js", {"url": u, "body": sb[:3500]})
+    # Inspect the target post on fotise.com as if coming from Google search!
+    pst, pcur, _, pbody = req_url("https://fotise.com/como-se-usan-las-criptomonedas/", referer="https://www.google.com/")
+    ps = BeautifulSoup(pbody, "html.parser")
+    pscripts = [s.get("src") or "" for s in ps.select("script[src]") if "ls_adsclick" in (s.get("src") or "")]
+    emit("2_fotise_post", {"st": pst, "scripts": pscripts, "cookies": [c.name + "=" + c.value for c in cj]})
+    for sc_url in pscripts:
+        _, _, _, sc_txt = req_url(urllib.parse.urljoin(pcur, sc_url), referer=pcur)
+        emit("3_post_js", {"url": sc_url, "len": len(sc_txt), "body": sc_txt[:3400]})
+
+    # Also test ccounter + wait? Let's test ccounter -> check.php("c")
+    aj_st, _, _, aj_b = req_url("https://fotise.com/wp-admin/admin-ajax.php", raw_body="cc=1&action=ccounter", referer="https://financialtrust.info/")
+    sc, _, _, bc = req_url("https://financialtrust.info/check.php", raw_body="c", referer="https://financialtrust.info/")
+    emit("4_cc_and_c", {"ajax": (aj_st, aj_b[:300]), "c_now": (sc, bc[:200])})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
