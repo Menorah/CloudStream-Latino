@@ -14,14 +14,4 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install beautifulsoup4
-      - run: python3 scripts/inspect_user_html.py 1
-  inspect_series_and_embeds:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install beautifulsoup4
-      - run: python3 scripts/inspect_user_html.py 2
+      - run: python3 scripts/inspect_user_html.py
