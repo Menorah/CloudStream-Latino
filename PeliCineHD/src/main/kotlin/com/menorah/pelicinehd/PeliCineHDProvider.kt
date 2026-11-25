@@ -17,9 +17,13 @@ import java.net.URI
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 private const val ATTEMPTS = 3
 private const val ALL_SECTIONS_FAILED = 8
+
+/** How long a failure keeps counting towards the "site refuses this network" decision. */
+private const val FAILURE_WINDOW_MS = 10_000L
 private const val REQUEST_TIMEOUT = 25L
 
 /**
@@ -161,6 +165,10 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
             }
             // One failing section must not empty the whole screen, but when the site rejects
             // every request the user has to read why instead of seeing an empty catalogue.
+            // Failures are counted inside one batch: a retry seconds later starts from zero.
+            val now = System.currentTimeMillis()
+            if (now - lastFailureAt.get() > FAILURE_WINDOW_MS) failures.set(0)
+            lastFailureAt.set(now)
             if (failures.incrementAndGet() >= ALL_SECTIONS_FAILED) {
                 throw ErrorLoadingException(
                     (e as? ErrorLoadingException)?.message
@@ -170,7 +178,6 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
             }
             return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         }
-        failures.set(0)
         // The home page carries the hero carousel before its rows; both are the same cards.
         val cards = if (request.data == "inicio") {
             (PeliCineHDMarkup.heroCards(document) + PeliCineHDMarkup.cards(document)).distinctBy { it.url }
@@ -188,6 +195,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
      * success in between, the site is refusing this network, not missing one category.
      */
     private val failures = AtomicInteger(0)
+    private val lastFailureAt = AtomicLong(0)
+
 
     // ----------------------------------------------------------------- search
 
