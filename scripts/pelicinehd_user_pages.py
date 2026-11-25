@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Downloads the ZIP the user shared (their own browser session) and keeps its HTML pages.
+"""Keeps the user's own saved pages as test fixtures, not as a blob in the repository.
 
-The sandbox this repository is edited from cannot reach tmpfiles.org and the site challenges
-datacenter IPs, so the files come in through a workflow run and are committed for analysis.
+The pages are archived to an HTML file where relative `./Something_files/...` references are
+rewritten to the site's absolute URLs, so the parser sees what the browser saw.
 """
 import io
 import os
@@ -12,49 +12,57 @@ import urllib.request
 import zipfile
 
 SOURCE = "https://tmpfiles.org/dl/1795575558.344cdfd5014f3e44/wyAFaaTTlcbA/paginaweb.zip"
-OUT = "user-pages"
-MAX_BYTES = 400_000
+KEEP = {
+    "PELICINEHD-": "home-user-real.html",
+    "TODAS-LAS-PEL": "catalog-user-real.html",
+    "SERIES-ARCHIVO": "series-catalog-user-real.html",
+    "VER-LA-ODISEA": "movie-user-real.html",
+    "VER-EL-SE": "series-user-real.html",
+    "SAVED_RESOURCE.HTML": "embed-wrapper-user-real.html",
+}
 
 
 def slug(name):
     name = name.split("/")[-1]
-    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
-    return name[:80] or "page.html"
+    return re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").upper()
+
+
+def normalize(text):
+    # Saved pages point at ./Title_files/<asset>; the site serves the same asset over https.
+    text = re.sub(r'\./[^"\'<>]*?_files/', "https://pelicinehd.com/wp-content/uploads/", text)
+    text = re.sub(r'src="\./([^"]*\.(?:webp|png|jpg))"', r'src="https://pelicinehd.com/\1"', text)
+    return text
 
 
 def main():
-    os.makedirs(OUT, exist_ok=True)
+    out = "PeliCineHD/src/test/resources"
+    os.makedirs(out, exist_ok=True)
     request = urllib.request.Request(SOURCE, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=180) as response:
         payload = response.read()
-    print("downloaded", len(payload), "bytes", flush=True)
+    print("downloaded", len(payload), flush=True)
     archive = zipfile.ZipFile(io.BytesIO(payload))
-    names = archive.namelist()
-    print("entries", len(names), flush=True)
-    html = [n for n in names if n.lower().endswith((".html", ".htm"))]
-    print("html", len(html), flush=True)
-    written = []
-    for name in html:
-        data = archive.read(name)
-        if len(data) > MAX_BYTES:
-            print("skip large", name, len(data), flush=True)
+    saved = 0
+    for name in archive.namelist():
+        if not name.lower().endswith(".html"):
             continue
-        target = os.path.join(OUT, slug(name))
-        if target.endswith("-"):
-            target += ".html"
-        with open(target, "wb") as handle:
-            handle.write(data)
-        written.append((target, len(data)))
+        key = slug(name)
+        target = None
+        for marker, filename in KEEP.items():
+            if key.startswith(marker):
+                target = filename
+                break
+        if target is None:
+            continue
+        data = archive.read(name).decode("utf-8", "replace")
+        if "Just a moment" in data:
+            print("challenge page, skipped", name, flush=True)
+            continue
+        with open(os.path.join(out, target), "w", encoding="utf-8") as handle:
+            handle.write(normalize(data))
+        saved += 1
         print("saved", target, len(data), flush=True)
-    # A short index makes the next step obvious without opening every file.
-    with open(os.path.join(OUT, "INDEX.txt"), "w", encoding="utf-8") as handle:
-        handle.write("source " + SOURCE + "\n")
-        for name in names:
-            handle.write(name + "\n")
-        handle.write("\n--- saved ---\n")
-        for target, size in written:
-            handle.write(f"{target} {size}\n")
-    print("files", len(written), flush=True)
+    print("files", saved, flush=True)
 
 
 if __name__ == "__main__":

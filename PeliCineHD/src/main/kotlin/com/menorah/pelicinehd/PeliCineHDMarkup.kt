@@ -247,10 +247,19 @@ internal object PeliCineHDMarkup {
         return null
     }
 
-    fun isSeries(document: Document): Boolean =
-        document.selectFirst("article.post.single")?.hasClass("series") == true ||
-            document.selectFirst("section.episodes, div.choose-season") != null ||
-            document.selectFirst("meta[property=og:type]")?.attr("content")?.contains("video.episode") == true
+    /**
+     * A movie page also carries `<section class="section episodes">` (The Odyssey does), so that
+     * section proves nothing on its own: only `article.post.single.series`, the season chooser
+     * (a movie never has one) or real episode cards make a page a series.
+     */
+    fun isSeries(document: Document): Boolean {
+        if (document.selectFirst("article.post.single")?.hasClass("series") == true) return true
+        if (document.selectFirst("div.choose-season") != null) return true
+        if (document.selectFirst("article.post.episodes") != null) return true
+        if (document.selectFirst("section.episodes ul#episode_by_temp") != null) return true
+        return document.selectFirst("meta[property=og:type]")?.attr("content")
+            ?.contains("video.episode") == true
+    }
 
     fun recommendations(document: Document): List<Card> =
         document.select("section.section-related article.post, div.related article.post")
@@ -337,6 +346,8 @@ internal object PeliCineHDMarkup {
                 val season = option.attr("value").trim().toIntOrNull() ?: return@mapNotNull null
                 SeasonRef(post ?: 0, season)
             }
+        // The site prints the seasons out of order (2, 1, 3 for The Rings of Power), so they are
+        // read by number and sorted, never by position.
         return (fromLinks + fromSelect).distinctBy { it.number }.sortedBy { it.number }
     }
 
