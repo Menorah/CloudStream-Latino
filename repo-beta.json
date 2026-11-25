@@ -1,6 +1,6 @@
 {
   "name": "CloudStream Latino (beta)",
-  "description": "Canal beta de las extensiones CloudStream Latino, incluido Cinecalidad.org",
+  "description": "Canal beta de las extensiones CloudStream Latino, incluido animeonline2",
   "manifestVersion": 1,
   "pluginLists": [
     "https://github.com/Menorah/CloudStream-Latino/releases/download/beta/plugins.json"
