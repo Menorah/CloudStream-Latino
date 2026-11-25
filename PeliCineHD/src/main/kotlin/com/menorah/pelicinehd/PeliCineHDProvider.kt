@@ -208,7 +208,6 @@ class PeliCineHDProvider : MainAPI() {
                 season = item.season
                 episode = item.episode
                 posterUrl = item.poster ?: details.poster
-                posterHeaders = clearanceHeaders()
             }
         }
         return newTvSeriesLoadResponse(details.title, canonical, TvType.TvSeries, episodes) {
