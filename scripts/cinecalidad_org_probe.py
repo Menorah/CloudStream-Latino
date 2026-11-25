@@ -3,7 +3,6 @@ import json
 import re
 import traceback
 import requests
-from bs4 import BeautifulSoup
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 s = requests.Session()
@@ -17,39 +16,41 @@ def emit(tag, obj):
 
 
 try:
+    # 1. Where does "vimeos" / player / post JSON live inside movie & ep HTML?
     for name, url in [
-        ("home", "https://cinecalidad.org/"),
         ("movie", "https://cinecalidad.org/peliculas/perfectos-mentirosos-2026/"),
-        ("series", "https://cinecalidad.org/series/f-b-i-2018/"),
         ("ep", "https://cinecalidad.org/episodio/f-b-i-temporada-1-episodio-1/"),
+        ("home", "https://cinecalidad.org/"),
     ]:
         html = s.get(url, timeout=20).text
-        soup = BeautifulSoup(html, "html.parser")
-        blocks = []
-        for idx, sc in enumerate(soup.select("script")):
-            txt = sc.get_text().strip()
-            if not txt or "ld+json" in (sc.get("type") or "") or "speculationrules" in (sc.get("type") or ""):
-                continue
-            if idx == 0 or ("siteConfig.homeGrid" in txt and len(txt) < 1000):
-                continue
-            # Strip static siteConfig object cleanly up to `window.siteConfig.homeGrid` or `};`
-            if "window.siteConfig =" in txt:
-                tail_pos = txt.find("window.siteConfig.homeGrid")
-                blocks.append(f"[{idx}] TAIL={txt[tail_pos:]}" if tail_pos != -1 else f"[{idx}] LAST2000={txt[-2000:]}")
-            else:
-                blocks.append(f"[{idx}] FULL({len(txt)})={txt}")
-        out = "\n===BLK===\n".join(blocks)
-        emit(f"1_{name}", out[:3500])
-        if len(out) > 3500:
-            emit(f"1_{name}_b", out[3500:7000])
+        # Find ALL occurrences of vimeos or __staticRouter or hydration or siteConfig.post
+        hits = []
+        for m in re.finditer(r'(?:vimeos|__staticRouter|players|embeds|postData|hydration|f-b-i-temporada|perfectos)', html, re.I):
+            hits.append(html[max(0, m.start()-120):min(len(html), m.end()+220)])
+            if len(hits) >= 8:
+                break
+        emit(f"1_{name}_hits", {"len": len(html), "hits": hits})
 
-    # Also check app.js for `fastApi` / `apiUrl` / `window.` data globals
+    # 2. Extract exact API endpoints and fetch logic from app.js!
     jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20).text
-    globals_used = sorted(set(re.findall(r'window\.[A-Za-z0-9_$]+', jr)))
-    api_calls = []
-    for m in re.finditer(r'(?:fastApi|apiUrl)\b[^;]{0,120}', jr):
-        api_calls.append(m.group(0))
-    emit("2_appjs_meta", {"globals": globals_used[:40], "api_calls": api_calls[:25]})
+    # Find function that builds requests with fastApi / apiUrl, and all endpoint strings!
+    ep_matches = sorted(set(re.findall(r'["\'](/[a-z0-9_/-]{2,60})["\']', jr)))
+    api_fn_idx = jr.find("fastApi")
+    # Also find all occurrences of `.get(` or `endpoint` or `url:` near `wpf/v1` / `single/` / `player` / `listing` / `archive`
+    snippets = []
+    for kw in ['"/single/', '"/listing', '"/home', '"/search', '"/player', '"/episodes', '"/archive', '"/menu', 'fastApi', 'vimeos']:
+        pos = 0
+        count = 0
+        while count < 3:
+            idx = jr.find(kw, pos)
+            if idx == -1:
+                break
+            snippets.append(f"[{kw}@{idx}] " + jr[max(0, idx-80):min(len(jr), idx+200)])
+            pos = idx + len(kw)
+            count += 1
+    emit("2_appjs_paths", [p for p in ep_matches if not p.startswith("/wp-content")][:120])
+    emit("3_appjs_snippets_a", snippets[:8])
+    emit("4_appjs_snippets_b", snippets[8:16])
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
