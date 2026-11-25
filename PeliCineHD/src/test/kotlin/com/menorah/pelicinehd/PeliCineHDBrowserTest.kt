@@ -1,6 +1,7 @@
 package com.menorah.pelicinehd
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -48,8 +49,22 @@ class PeliCineHDBrowserTest {
         val script = browser.script(null)
         assertTrue(script.contains("document.documentElement.outerHTML"))
         assertTrue(script.contains("location.href"))
-        // La petición centinela es la que cierra la WebView.
+        // La imagen centinela es la que cierra la WebView.
         assertTrue(script.contains("__pelicinehd_ready__"))
+    }
+
+    @Test
+    fun `el latido no arranca antes de tiempo`() {
+        val script = browser.script(null)
+        // El latido va dentro de `setInterval`, después de definir `go`; nunca suelto al inicio,
+        // que era lo que cerraba la WebView con la página todavía en blanco.
+        val interval = script.indexOf("setInterval")
+        val go = script.indexOf("setTimeout(go, 300)")
+        assertTrue("El latido debe definirse junto al arranque", interval > 0)
+        assertTrue("El latido debe ir antes del setTimeout de go", interval < go)
+        // Antes del latido no puede haber ninguna petición de imagen: solo definiciones.
+        val beforeBeat = script.substring(0, interval)
+        assertFalse(beforeBeat.contains("(new Image()).src"))
     }
 
     @Test

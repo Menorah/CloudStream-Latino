@@ -53,8 +53,8 @@ class PeliCineHDProvider : MainAPI() {
     override val vpnStatus = VPNStatus.MightBeNeeded
 
     /**
-     * El sitio solo contesta al navegador, así que el complemento necesita WebView: con esto la
-     * app lo desactiva donde no la haya en lugar de fallar.
+     * La WebView es solo un respaldo (para el reto o el bloqueo), pero abrirla es parte del
+     * funcionamiento: sin ella el complemento se queda sin su segunda vía.
      */
     override val usesWebView = true
 
@@ -91,8 +91,12 @@ class PeliCineHDProvider : MainAPI() {
         "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
     )
 
-    /** Navegador del dispositivo: única vía por la que el sitio contesta (ver [PeliCineHDBrowser]). */
+    /** Respaldo con el navegador del dispositivo cuando el sitio rechaza al cliente HTTP. */
     private val browser = PeliCineHDBrowser()
+
+    private companion object {
+        const val HTTP_TIMEOUT_S = 25L
+    }
 
     /**
      * Últimas páginas pedidas al navegador. Abrir la WebView cuesta segundos y CloudStream pide la
@@ -103,10 +107,7 @@ class PeliCineHDProvider : MainAPI() {
             size > 8
     }
 
-    /**
-     * Las portadas las descarga el cargador de imágenes de la app, que tampoco usa la WebView: se le
-     * pasan la cookie del sitio y el UA del navegador, que es lo único que puede ayudarle.
-     */
+    /** Las portadas las descarga el cargador de imágenes de la app: se le pasa cookie y UA. */
     private fun imageHeaders(): Map<String, String> = runCatching {
         val raw = android.webkit.CookieManager.getInstance().getCookie(mainUrl).orEmpty()
         val cookies = raw.split(';').map { it.trim() }.filter { it.contains('=') }.joinToString("; ")
@@ -119,29 +120,51 @@ class PeliCineHDProvider : MainAPI() {
     }.getOrDefault(mapOf("Referer" to "$mainUrl/"))
 
     /**
-     * Pide [url] al navegador del dispositivo y devuelve el documento. El sitio bloquea a los
-     * clientes HTTP por su huella (403 o conexión cerrada), no por cookies, así que no sirve
-     * mandar `cf_clearance` ni resolver el reto: hay que dejar que la WebView haga la petición.
+     * Pide [url] y devuelve el documento.
+     *
+     * Primero se intenta como un cliente HTTP normal, que es lo que hace la app *skystream* con
+     * este mismo complemento y lo que evita abrir una WebView por página. Solo si la respuesta es
+     * el reto o un rechazo se recurre al navegador del dispositivo ([PeliCineHDBrowser]).
      */
     private suspend fun fetch(input: String, referer: String? = null, cached: Boolean = true): Document {
         val url = absolute(input)
         require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD: $url" }
         if (cached) synchronized(pages) { pages[url] }?.let { return it }
 
-        val page = browser.get(url, referer ?: "$mainUrl/")
-        if (page == null) {
-            throw ErrorLoadingException(
-                "PeliCineHD no cargó en el navegador interno. Abre pelicinehd.com en el navegador " +
-                    "del dispositivo para pasar la verificación y vuelve a intentarlo."
-            )
+        var status = -1
+        var body: String? = null
+        var finalUrl = url
+
+        runCatching {
+            val response = app.get(url, headers = withReferer(referer), timeout = HTTP_TIMEOUT_S)
+            status = response.code
+            finalUrl = response.url
+            if (response.isSuccessful && !PeliCineHDMarkup.isChallenge(response.code, response.text)) {
+                body = response.text
+            }
         }
-        if (!page.code.toString().startsWith("2") || PeliCineHDMarkup.isChallenge(page.code, page.body)) {
-            throw ErrorLoadingException(
-                "PeliCineHD devolvió HTTP ${page.code} al cargar la página. Abre pelicinehd.com en " +
-                    "el navegador del dispositivo y vuelve a intentarlo."
-            )
+
+        if (body == null) {
+            // Bloqueo del sitio: se pide el HTML al navegador, que sí entra.
+            val page = browser.get(url, referer ?: "$mainUrl/")
+            if (page != null && page.code in 200..299 && !PeliCineHDMarkup.isChallenge(page.code, page.body)) {
+                status = page.code
+                finalUrl = page.url
+                body = page.body
+            }
         }
-        val doc = Jsoup.parse(page.body, page.url)
+
+        val html = body ?: throw ErrorLoadingException(
+            if (status > 0) {
+                "PeliCineHD respondió HTTP $status y el navegador interno tampoco pudo cargar la página. " +
+                    "Abre pelicinehd.com en el navegador del dispositivo y vuelve a intentarlo."
+            } else {
+                "PeliCineHD no cargó: ni la petición directa ni el navegador interno recibieron la página. " +
+                    "Comprueba la conexión o usa una VPN y vuelve a intentarlo."
+            }
+        )
+
+        val doc = Jsoup.parse(html, finalUrl)
         if (cached) synchronized(pages) { pages[url] = doc }
         return doc
     }
@@ -279,17 +302,33 @@ class PeliCineHDProvider : MainAPI() {
                 async {
                     permits.withPermit {
                         runCatching<List<EpisodeItem>> {
-                            val page = browser.post(
-                                pageUrl,
-                                PeliCineHDMarkup.AJAX,
-                                mapOf(
-                                    "action" to "action_select_season",
-                                    "season" to season.toString(),
-                                    "post" to post,
-                                ),
-                            ) ?: return@runCatching emptyList()
-                            if (!page.code.toString().startsWith("2")) return@runCatching emptyList()
-                            PeliCineHDMarkup.episodes(Jsoup.parse(page.body)).filter { it.season == season }
+                            // AJAX normal; si el sitio lo bloquea, se repite desde la propia ficha
+                            // dentro del navegador, que es el camino que también usa skystream.
+                            val form = mapOf(
+                                "action" to "action_select_season",
+                                "season" to season.toString(),
+                                "post" to post,
+                            )
+                            val direct = runCatching {
+                                val response = app.post(
+                                    PeliCineHDMarkup.AJAX,
+                                    data = form,
+                                    headers = withReferer(pageUrl) + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                                    timeout = HTTP_TIMEOUT_S,
+                                )
+                                if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.code, response.text)) {
+                                    null
+                                } else {
+                                    PeliCineHDMarkup.episodes(Jsoup.parse(response.text))
+                                }
+                            }.getOrNull()
+                            val items = direct ?: run {
+                                val page = browser.post(pageUrl, PeliCineHDMarkup.AJAX, form)
+                                    ?: return@runCatching emptyList()
+                                if (page.code !in 200..299) return@runCatching emptyList()
+                                PeliCineHDMarkup.episodes(Jsoup.parse(page.body))
+                            }
+                            items.filter { it.season == season }
                         }.getOrDefault(emptyList())
                     }
                 }
@@ -338,15 +377,18 @@ class PeliCineHDProvider : MainAPI() {
             val label = listOf(language, option.server.ifBlank { "Opción ${option.option + 1}" })
                 .filterNotNull().distinct().joinToString(" · ")
 
-            // 1) El wrapper `?trembed=…` revela el host real. Vive en el dominio protegido, así que
-            //    se prueba primero el cliente normal (barato) y luego el navegador.
+            // 1) El wrapper `?trembed=…` revela el host real. Vive en el dominio protegido: primero
+            //    el cliente normal (barato) y, si no contesta, el navegador.
             val host = runCatching<String?> {
                 val response = app.get(option.url, headers = withReferer(pageUrl), timeout = 10L)
-                if (!response.isSuccessful) null
-                else PeliCineHDMarkup.wrappedUrl(response.text, response.url)
+                if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.code, response.text)) {
+                    null
+                } else {
+                    PeliCineHDMarkup.wrappedUrl(response.text, response.url)
+                }
             }.getOrNull() ?: runCatching<String?> {
                 val wrapped = browser.get(option.url, pageUrl) ?: return@runCatching null
-                if (!wrapped.code.toString().startsWith("2")) null
+                if (wrapped.code !in 200..299) null
                 else PeliCineHDMarkup.wrappedUrl(wrapped.body, wrapped.url)
             }.getOrNull()
 
