@@ -23,14 +23,14 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compilar y probar los nueve complementos
+      - name: Compilar y probar los ocho complementos
         shell: bash
         run: |
           set +e
           ./gradlew \
             :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest \
             :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest \
-            :PoseidonHD2:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :PeliCineHD:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+            :PoseidonHD2:testDebugUnitTest :RePelis24Shop:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
           tail -40 build-log.txt
           python3 - <<'PY'
@@ -53,7 +53,6 @@ jobs:
           cp RePelisHD/build/RePelisHD.cs3 output/
           cp PoseidonHD2/build/PoseidonHD2.cs3 output/
           cp RePelis24Shop/build/RePelis24Shop.cs3 output/
-          cp PeliCineHD/build/PeliCineHD.cs3 output/
           python3 - <<'PY'
           import json, pathlib
           plugins = json.loads(pathlib.Path('build/plugins.json').read_text())
@@ -68,7 +67,7 @@ jobs:
           names = {pathlib.Path(p['url']).name for p in plugins}
           expected = {
               'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
-              'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3', 'PeliCineHD.cs3',
+              'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3',
           }
           assert names == expected, (sorted(names), sorted(expected))
           for name in expected:
@@ -98,6 +97,16 @@ jobs:
                 failed=1
               fi
             done
+          done
+          # Complementos retirados del repositorio: sus archivos se borran del canal beta.
+          for asset in $(gh release view beta --json assets --jq '.assets[].name'); do
+            case "$asset" in
+              *.json) continue ;;
+            esac
+            if [ ! -f "output/$asset" ]; then
+              echo "retirando $asset de beta"
+              gh release delete-asset beta "$asset" --yes || failed=1
+            fi
           done
           gh release view beta --json assets --jq '.assets[] | "\(.name) \(.size)"'
           exit $failed
