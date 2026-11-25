@@ -78,10 +78,8 @@ class PeliCineHDPlayerTest {
               <div class="Video"><iframe src="https://morencius.com/v/ei06pqvqtfey"></iframe></div>
             </body></html>
         """.trimIndent()
-        assertEquals(
-            "https://morencius.com/v/ei06pqvqtfey",
-            PeliCineHDMarkup.embed(Jsoup.parse(html, "https://pelicinehd.com/?trembed=0&trid=1")).url
-        )
+        val embed = PeliCineHDMarkup.embed(Jsoup.parse(html, "https://pelicinehd.com/?trembed=0&trid=1"))
+        assertEquals("https://morencius.com/v/ei06pqvqtfey", embed?.url)
     }
 
     @Test
