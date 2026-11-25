@@ -80,7 +80,6 @@ class AnimeOnline2Provider : MainAPI() {
     }
 
     private fun AnimeCatalogCard.toSearchResponse(): SearchResponse {
-        val isMovie = tvType == TvType.AnimeMovie
         return if (isMovie) {
             newAnimeSearchResponse(title, url, TvType.AnimeMovie) {
                 this.posterUrl = this@toSearchResponse.posterUrl
@@ -182,7 +181,12 @@ class AnimeOnline2Provider : MainAPI() {
 
         val detail = AnimeOnline2Parser.parseDetailPage(targetUrl, html)
         val recs = detail.related.map { it.toSearchResponse() }
-        val actorData = AnimeOnline2Parser.toActorData(detail.cast)
+        val actorData = detail.cast.map {
+            ActorData(
+                actor = Actor(it.name, it.imageUrl),
+                roleString = it.role,
+            )
+        }
 
         if (detail.isMovie) {
             return newMovieLoadResponse(detail.title, detail.url, TvType.AnimeMovie, detail.url) {

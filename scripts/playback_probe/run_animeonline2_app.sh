@@ -16,7 +16,16 @@ s = open(p).read().replace(
 )
 open(p, 'w').write(s)
 PY
-./gradlew :animeonline2:make --stacktrace
+set +e
+./gradlew :animeonline2:make --stacktrace > probe-build.log 2>&1
+bstatus=$?
+cat probe-build.log
+if [ "$bstatus" -ne 0 ]; then
+  errs=$(grep -E '^e: |What went wrong:|FAILURE:' probe-build.log | tail -10 | tr '\n' '|' | sed 's/%/%25/g')
+  echo "::error::Gradle make failed: $errs"
+  exit "$bstatus"
+fi
+set -e
 curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cloudstream.apk
 adb install -r /tmp/cloudstream.apk
 package=com.lagradost.cloudstream3.prerelease

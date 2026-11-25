@@ -1,6 +1,5 @@
 package com.menorah.animeonline2
 
-import com.lagradost.cloudstream3.TvType
 import org.junit.Assert.*
 import org.junit.Test
 import java.nio.charset.StandardCharsets
@@ -98,7 +97,7 @@ class AnimeOnline2ParserTest {
         assertEquals("Kizu darake Seijo - Temporada 2", home.seasons[0].title)
 
         assertEquals(1, home.latestMovies.size)
-        assertEquals(TvType.AnimeMovie, home.latestMovies[0].tvType)
+        assertTrue(home.latestMovies[0].isMovie)
         assertEquals(2026, home.latestMovies[0].year)
 
         val archive = AnimeOnline2Parser.parseArchivePage(html, 1)

@@ -1,9 +1,6 @@
 package com.menorah.animeonline2
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.lagradost.cloudstream3.Actor
-import com.lagradost.cloudstream3.ActorData
-import com.lagradost.cloudstream3.TvType
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -18,7 +15,7 @@ data class AnimeCatalogCard(
     val title: String,
     val url: String,
     val posterUrl: String?,
-    val tvType: TvType,
+    val isMovie: Boolean,
     val year: Int? = null,
     val rating: String? = null,
     val episodeNumber: Int? = null,
@@ -228,7 +225,7 @@ object AnimeOnline2Parser {
                     title = baseTitle,
                     url = url,
                     posterUrl = posterUrl,
-                    tvType = TvType.Anime,
+                    isMovie = false,
                     year = null,
                     rating = rating,
                     episodeNumber = epNum,
@@ -250,7 +247,7 @@ object AnimeOnline2Parser {
                     title = title,
                     url = url,
                     posterUrl = posterUrl,
-                    tvType = TvType.Anime,
+                    isMovie = false,
                     year = year,
                     rating = rating,
                 )
@@ -267,7 +264,7 @@ object AnimeOnline2Parser {
                     title = title,
                     url = url,
                     posterUrl = posterUrl,
-                    tvType = TvType.AnimeMovie,
+                    isMovie = true,
                     year = year,
                     rating = rating,
                 )
@@ -284,7 +281,7 @@ object AnimeOnline2Parser {
                     title = title,
                     url = url,
                     posterUrl = posterUrl,
-                    tvType = TvType.Anime,
+                    isMovie = false,
                     year = year,
                     rating = rating,
                 )
@@ -360,7 +357,7 @@ object AnimeOnline2Parser {
                 title = title,
                 url = url,
                 posterUrl = posterUrl,
-                tvType = if (isMovie) TvType.AnimeMovie else TvType.Anime,
+                isMovie = isMovie,
                 year = year,
                 rating = rating,
             )
@@ -545,7 +542,7 @@ object AnimeOnline2Parser {
                 title = relTitle,
                 url = relUrl,
                 posterUrl = extractImgUrl(img),
-                tvType = if (relUrl.contains("/pelicula/")) TvType.AnimeMovie else TvType.Anime,
+                isMovie = relUrl.contains("/pelicula/"),
             )
         }.distinctBy { it.url }
 
@@ -568,15 +565,6 @@ object AnimeOnline2Parser {
             related = related,
             hasDirectPlayer = hasDirectPlayer,
         )
-    }
-
-    fun toActorData(cast: List<AnimeCastMember>): List<ActorData> {
-        return cast.map {
-            ActorData(
-                actor = Actor(it.name, it.imageUrl),
-                roleString = it.role,
-            )
-        }
     }
 
     fun parsePlayerOptions(html: String): List<AnimePlayerOption> {
