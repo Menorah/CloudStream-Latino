@@ -33,16 +33,23 @@ class PeliCineHDWebViewTest {
     }
 
     @Test
-    fun browserTransportLoadsCatalogAndWaitsPastSpanishChallengeWithoutRedundantFetch() = runBlocking {
+    fun browserTransportLoadsCatalogAndWaitsPastSpanishChallenge() = runBlocking {
         val hits = AtomicInteger(0)
         val browser = BrowserSiteTransport(context) { request ->
             if (request.url.path == "/movies/") {
-                hits.incrementAndGet()
-                fake(
-                    200,
-                    "text/html",
-                    """<html><head><title>Un momento…</title></head><body><script>setTimeout(function(){document.title='Movies';document.body.innerHTML='<main><ul class="post-lst"><li><article class="post movies"><h2 class="entry-title">Pacífico</h2><a href="/movies/pacifico/" class="lnk-blk"></a></article></li></ul></main>';},200);</script></body></html>"""
-                )
+                if (hits.incrementAndGet() == 1) {
+                    fake(
+                        200,
+                        "text/html",
+                        """<html><head><title>Un momento…</title></head><body><script>setTimeout(function(){document.title='Movies';document.body.innerHTML='<main><ul class="post-lst"><li><article class="post movies"><h2 class="entry-title">Pacífico</h2><a href="/movies/pacifico/" class="lnk-blk"></a></article></li></ul></main>';},200);</script></body></html>"""
+                    )
+                } else {
+                    fake(
+                        200,
+                        "text/html",
+                        """<html><head><title>Movies</title></head><body><main><ul class="post-lst"><li><article class="post movies"><h2 class="entry-title">Pacífico</h2><a href="/movies/pacifico/" class="lnk-blk"></a></article></li></ul></main></body></html>"""
+                    )
+                }
             } else {
                 null
             }
@@ -50,7 +57,34 @@ class PeliCineHDWebViewTest {
 
         val response = browser.get("$root/movies/", emptyMap())
         assertEquals(200, response.code)
-        assertEquals(1, hits.get())
+        val cards = PeliCineHDMarkup.cards(Jsoup.parse(response.text, response.url))
+        assertEquals(listOf("Pacífico"), cards.map { it.title })
+    }
+
+    @Test
+    fun browserTransportKeepsNavigatedCatalogWhenCorsFetchIsRefused() = runBlocking {
+        val hits = AtomicInteger(0)
+        val browser = BrowserSiteTransport(
+            context,
+            SiteClient.cleanBrowserUserAgent(WebSettings.getDefaultUserAgent(context))
+        ) { request ->
+            if (request.url.path == "/movies/") {
+                if (hits.incrementAndGet() == 1) {
+                    fake(
+                        200,
+                        "text/html",
+                        """<html><head><title>Movies</title></head><body><main><ul class="post-lst"><li><article class="post movies"><h2 class="entry-title">Pacífico</h2><a href="/movies/pacifico/" class="lnk-blk"></a></article></li></ul></main></body></html>"""
+                    )
+                } else {
+                    fake(403, "text/html", "<html><body>Forbidden</body></html>")
+                }
+            } else {
+                null
+            }
+        }
+
+        val response = browser.get("$root/movies/", emptyMap())
+        assertEquals(200, response.code)
         val cards = PeliCineHDMarkup.cards(Jsoup.parse(response.text, response.url))
         assertEquals(listOf("Pacífico"), cards.map { it.title })
     }

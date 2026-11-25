@@ -60,6 +60,8 @@ internal class BrowserSiteTransport(
         var fetchStarted = false
         var sawChallenge = false
         var generation = 0
+        var navigatedPageUrl: String? = null
+        var navigatedPageText: String? = null
         val isAjaxOrPost = form != null || URI(target).path.orEmpty().contains("/wp-admin/admin-ajax.php")
         val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value
         val base = referer?.takeIf { PeliCineHDMarkup.siteUrl(it) && URI(it).host.equals(URI(target).host, true) }
@@ -103,6 +105,16 @@ internal class BrowserSiteTransport(
             if (SiteClient.looksLikeChallenge(text)) {
                 sawChallenge = true
                 finish(Result.success(SiteResponse(if (code in 200..299) 403 else code, resultUrl, text)))
+                return
+            }
+            // If full browser navigation already rendered genuine PeliCineHD content while same-origin
+            // fetch() (Sec-Fetch-Mode: cors) was challenged/refused, keep the navigated DOM.
+            val navText = navigatedPageText
+            val navUrl = navigatedPageUrl
+            if (!isAjaxOrPost && form == null && code !in 200..299 &&
+                navText != null && navUrl != null && looksLikeSiteContent(navText)
+            ) {
+                finish(Result.success(SiteResponse(200, navUrl, navText)))
                 return
             }
             finish(Result.success(SiteResponse(code, resultUrl, text)))
@@ -172,6 +184,8 @@ internal class BrowserSiteTransport(
                     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                         status = 200
                         fetchStarted = false
+                        navigatedPageUrl = null
+                        navigatedPageText = null
                         generation++
                     }
 
@@ -216,17 +230,9 @@ internal class BrowserSiteTransport(
                                 finish(Result.failure(IllegalStateException("PeliCineHD redirigió fuera del sitio.")))
                                 return@evaluateJavascript
                             }
-                            if (!isAjaxOrPost && form == null) {
-                                if (readyState != "complete") {
-                                    handler.postDelayed({ checkReady(view, url, currentGeneration) }, 200L)
-                                    return@evaluateJavascript
-                                }
-                                // Normal GET navigations already have Sec-Fetch-Mode: navigate headers and the
-                                // full DOM; avoid re-requesting via CORS fetch() unless a challenge cleared in place.
-                                if (!(sawChallenge && status !in 200..299)) {
-                                    finish(Result.success(SiteResponse(status, pageUrl, pageText)))
-                                    return@evaluateJavascript
-                                }
+                            if (!isAjaxOrPost && form == null && readyState != "complete") {
+                                handler.postDelayed({ checkReady(view, url, currentGeneration) }, 200L)
+                                return@evaluateJavascript
                             }
                             if (!fetchStarted) {
                                 val sameOrigin = URI(pageUrl).host.equals(URI(target).host, true)
@@ -234,6 +240,13 @@ internal class BrowserSiteTransport(
                                     finish(Result.failure(IllegalStateException("El navegador fue redirigido fuera del catálogo.")))
                                     return@evaluateJavascript
                                 }
+                                if (!isAjaxOrPost && form == null && !SiteClient.looksLikeChallenge(pageText)) {
+                                    navigatedPageUrl = pageUrl
+                                    navigatedPageText = pageText
+                                }
+                                // A WebView's page callbacks do not always expose HTTP error codes (e.g. 403).
+                                // Verify the status via same-origin fetch() while preserving validated navigated HTML
+                                // if only CORS fetch() was refused.
                                 fetchStarted = true
                                 val fetchTarget = if (sameOrigin || isAjaxOrPost) target else pageUrl
                                 val quotedTarget = JSONObject.quote(fetchTarget)
@@ -274,5 +287,15 @@ internal class BrowserSiteTransport(
 
         internal fun isAllowedChallengeHost(host: String): Boolean =
             CHALLENGE_HOSTS.any { host == it || host.endsWith(".$it") }
+
+        internal fun looksLikeSiteContent(text: String): Boolean =
+            !SiteClient.looksLikeChallenge(text) && (
+                text.contains("torofilm", true) ||
+                    text.contains("post-lst", true) ||
+                    text.contains("entry-title", true) ||
+                    text.contains("aa-tbs-video", true) ||
+                    text.contains("choose-season", true) ||
+                    text.contains("<iframe", true)
+                )
     }
 }
