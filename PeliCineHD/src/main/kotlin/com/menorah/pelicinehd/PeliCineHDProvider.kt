@@ -1,5 +1,6 @@
 package com.menorah.pelicinehd
 
+import android.content.Context
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.CancellationException
@@ -15,9 +16,18 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val ATTEMPTS = 3
-private const val REQUEST_TIMEOUT = 30L
+private const val ALL_SECTIONS_FAILED = 8
+private const val REQUEST_TIMEOUT = 25L
+
+/** Request headers the site (and its Cloudflare setup) expect from a browser. */
+private val PAGE_HEADERS = mapOf(
+    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
+    "Referer" to "https://pelicinehd.com/"
+)
 
 /**
  * Provider for pelicinehd.com.
@@ -30,13 +40,27 @@ private const val REQUEST_TIMEOUT = 30L
  * requested through the theme's `admin-ajax.php` action, and each episode is its own page with the
  * same player markup as a movie.
  */
-class PeliCineHDProvider : MainAPI() {
+class PeliCineHDProvider(context: Context) : MainAPI() {
     override var mainUrl = PeliCineHDMarkup.BASE
     override var name = "PeliCineHD"
     override var lang = "es"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    /**
+     * The site protects itself with Cloudflare. The plain HTTP client gets the challenge on some
+     * networks, so the off-screen WebView is used as a second transport: it runs the JavaScript
+     * challenge, then the page is fetched from inside it.
+     */
+    override val usesWebView = true
+    private val site = SiteClient.create(context)
+
+    // Every section asks its own page, and the browser fallback is slower than plain HTTP.
+    override val getMainPageTimeoutMs: Long? = 180_000L
+    override val searchTimeoutMs: Long? = 60_000L
+    override val loadTimeoutMs: Long? = 90_000L
+    override val loadLinksTimeoutMs: Long? = 240_000L
 
     override val mainPage = mainPageOf(
         "peliculas" to "Películas",
@@ -77,7 +101,7 @@ class PeliCineHDProvider : MainAPI() {
     }
 
     private suspend fun fetchOnce(url: String, referer: String): Document {
-        val response = app.get(url, referer = referer, timeout = REQUEST_TIMEOUT)
+        val response = site.getHtml(url, PAGE_HEADERS + ("Referer" to referer))
         if (!response.isSuccessful) {
             throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${response.code}).")
         }
@@ -117,14 +141,30 @@ class PeliCineHDProvider : MainAPI() {
             catalogGate.withPermit { fetch(PeliCineHDMarkup.catalogUrl(request.data, page)) }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // One failing section must not empty the whole screen, but when the site rejects
+            // every request the user has to read why instead of seeing an empty catalogue.
+            if (failures.incrementAndGet() >= ALL_SECTIONS_FAILED) {
+                throw ErrorLoadingException(
+                    (e as? ErrorLoadingException)?.message
+                        ?: "No se pudo abrir PeliCineHD (${e.message ?: "sin respuesta"}). " +
+                        "Comprueba que el sitio abra en el navegador del dispositivo."
+                )
+            }
             return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         }
+        failures.set(0)
         return newHomePageResponse(
             HomePageList(request.name, responses(PeliCineHDMarkup.cards(document))),
             hasNext = PeliCineHDMarkup.hasNext(document, page)
         )
     }
+
+    /**
+     * The home screen asks every section at once. If eight of them fail in a row without a single
+     * success in between, the site is refusing this network, not missing one category.
+     */
+    private val failures = AtomicInteger(0)
 
     // ----------------------------------------------------------------- search
 
@@ -252,10 +292,11 @@ class PeliCineHDProvider : MainAPI() {
                 "season" to season.toString(),
                 "post" to post.toString()
             ),
+            headers = PAGE_HEADERS,
             referer = pageUrl,
             timeout = REQUEST_TIMEOUT
         )
-        if (!response.isSuccessful) return emptyList()
+        if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.text)) return emptyList()
         return PeliCineHDMarkup.parseSeasonHtml(response.text, pageUrl, season)
     }
 

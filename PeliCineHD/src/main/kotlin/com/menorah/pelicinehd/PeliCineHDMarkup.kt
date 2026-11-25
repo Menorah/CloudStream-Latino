@@ -89,11 +89,19 @@ internal object PeliCineHDMarkup {
         return if (page <= 1) "$BASE/?s=$encoded" else "$BASE/page/$page/?s=$encoded"
     }
 
-    /** True when a page is the Cloudflare challenge instead of the site. */
+    /**
+     * True when a page is the Cloudflare challenge instead of the site.
+     *
+     * Only the interstitial's own markers count. Cloudflare also injects
+     * `/cdn-cgi/challenge-platform/...` into ordinary pages that use bot detection, so that string
+     * on its own must never be treated as a challenge or every real page would be rejected.
+     */
     fun isChallenge(html: String?): Boolean {
         if (html.isNullOrBlank()) return false
-        return html.contains("Just a moment") || html.contains("cf-chl") ||
-            html.contains("challenge-platform")
+        return html.contains("Just a moment", true) ||
+            html.contains("id=\"challenge-form\"", true) ||
+            html.contains("id=\"cf-challenge-running\"", true) ||
+            html.contains("window._cf_chl_opt", true)
     }
 
     // --------------------------------------------------------------- cards

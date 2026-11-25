@@ -19,6 +19,19 @@ class PeliCineHDRealMarkupTest {
     }
 
     @Test
+    fun realPagesAreNotMistakenForAChallenge() {
+        listOf("catalog-real.html", "detail-real.html", "series-real.html").forEach { name ->
+            val raw = javaClass.classLoader!!.getResourceAsStream(name)!!.bufferedReader().readText()
+            assertFalse(name, PeliCineHDMarkup.isChallenge(raw))
+        }
+        // Cloudflare injects this script into ordinary pages; it is not a challenge by itself.
+        assertFalse(PeliCineHDMarkup.isChallenge("<script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1\"></script>"))
+        assertTrue(PeliCineHDMarkup.isChallenge("<html><head><title>Just a moment...</title></head></html>"))
+        assertTrue(PeliCineHDMarkup.isChallenge("<div id=\"cf-challenge-running\">"))
+        assertTrue(PeliCineHDMarkup.isChallenge("<script>window._cf_chl_opt = {}</script>"))
+    }
+
+    @Test
     fun realCatalogCardsAreParsed() {
         val page = resource("catalog-real.html", "https://pelicinehd.com/peliculas/")
         val cards = PeliCineHDMarkup.cards(page)
