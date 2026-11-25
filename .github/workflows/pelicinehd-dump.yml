@@ -18,52 +18,67 @@ jobs:
       - name: Descargar el zip del sitio
         shell: bash
         run: |
-          set -x
-          mkdir -p /tmp/dump
-          for url in \
-            "https://tmpfiles.org/dl/wyAFaaTTlcbA/paginaweb.zip" \
-            "https://tmpfiles.org/dl/1795611062.e3750b7cfe9db9d1/wyAFaaTTlcbA/paginaweb.zip" \
-            "https://tmpfiles.org/wyAFaaTTlcbA/paginaweb.zip"; do
-            echo "== $url"
-            curl -sSL --retry 3 --retry-delay 3 -m 180 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" -H "Accept: */*" -H "Referer: https://tmpfiles.org/" -o /tmp/dump/paginaweb.zip "$url" && ls -la /tmp/dump/paginaweb.zip && head -c 4 /tmp/dump/paginaweb.zip | xxd && break
-          done
+          mkdir -p _site_dump
+          {
+          echo "== python urllib"
           python3 - <<'PY'
-          import zipfile, pathlib
-          z = zipfile.ZipFile('/tmp/dump/paginaweb.zip')
-          print("entries:", len(z.namelist()))
-          for n in z.namelist()[:50]:
-              print(" ", n, z.getinfo(n).file_size)
-          z.extractall('/tmp/dump/site')
+          import urllib.request, shutil
+          urls = [
+            "https://tmpfiles.org/dl/wyAFaaTTlcbA/paginaweb.zip",
+            "https://tmpfiles.org/dl/1795611062.e3750b7cfe9db9d1/wyAFaaTTlcbA/paginaweb.zip",
+            "https://tmpfiles.org/wyAFaaTTlcbA/paginaweb.zip",
+          ]
+          for u in urls:
+              try:
+                  req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Referer": "https://tmpfiles.org/"})
+                  with urllib.request.urlopen(req, timeout=120) as r, open("/tmp/paginaweb.zip", "wb") as f:
+                      shutil.copyfileobj(r, f)
+                  print("OK", u, r.status)
+                  break
+              except Exception as e:
+                  print("FAIL", u, repr(e)[:300])
           PY
-      - name: Publicar árbol y ficheros de texto en la rama
+          echo "== curl verbose"
+          curl -sSL -m 120 -A "Mozilla/5.0" -o /tmp/alt.zip --write-out "curl_code=%{http_code} size=%{size_download}\n" "https://tmpfiles.org/dl/1795611062.e3750b7cfe9db9d1/wyAFaaTTlcbA/paginaweb.zip" || true
+          ls -la /tmp/*.zip 2>&1
+          python3 -c "print(open('/tmp/paginaweb.zip','rb').read(8))" 2>&1 || true
+          } > _site_dump_dl.log 2>&1
+          cat _site_dump_dl.log
+          python3 - <<'PY' > _site_dump_tree.txt 2>&1 || true
+          import zipfile
+          z = zipfile.ZipFile('/tmp/paginaweb.zip')
+          for n in z.namelist():
+              print(z.getinfo(n).file_size, n)
+          z.extractall('/tmp/site')
+          PY
+          head -100 _site_dump_tree.txt || true
+          mkdir -p _site_dump
+          mv _site_dump_dl.log _site_dump/_download.log || true
+          mv _site_dump_tree.txt _site_dump/_tree.txt || true
+          if [ -d /tmp/site ]; then
+            python3 - <<'PY'
+          import pathlib, shutil
+          root = pathlib.Path('/tmp/site')
+          out = pathlib.Path('_site_dump')
+          exts = {'.html', '.htm', '.css', '.js', '.json', '.txt', '.xml', '.php'}
+          n = 0
+          for p in sorted(root.rglob('*')):
+              if p.is_file() and p.suffix.lower() in exts:
+                  rel = p.relative_to(root)
+                  dst = out / rel
+                  dst.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(p, dst)
+                  n += 1
+          print("copied", n)
+          PY
+          fi
+          du -sh _site_dump || true
+      - name: Publicar
+        if: always()
         shell: bash
         run: |
-          python3 - <<'PY'
-          import pathlib, shutil
-          root = pathlib.Path('/tmp/dump/site')
-          out = pathlib.Path('_site_dump')
-          if out.exists(): shutil.rmtree(out)
-          tree = []
-          total = 0
-          exts = {'.html', '.htm', '.css', '.js', '.json', '.txt', '.xml', '.php'}
-          for p in sorted(root.rglob('*')):
-              if p.is_file():
-                  rel = p.relative_to(root)
-                  tree.append(f"{p.stat().st_size}\t{rel}")
-                  if p.suffix.lower() in exts:
-                      dst = out / rel
-                      dst.parent.mkdir(parents=True, exist_ok=True)
-                      shutil.copy2(p, dst)
-                      total += p.stat().st_size
-          out.mkdir(parents=True, exist_ok=True)
-          (out / '_tree.txt').write_text("\n".join(tree))
-          print("text bytes:", total, "files:", len(tree))
-          PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f _site_dump
           git commit -m "dump: paginaweb" || echo "sin cambios"
           git push origin HEAD:${{ github.ref_name }}
-      - name: Resumen
-        shell: bash
-        run: wc -l _site_dump/_tree.txt && du -sh _site_dump
