@@ -1,6 +1,6 @@
 # Análisis de los sitios solicitados
 
-Actualizado: 24 de noviembre de 2026. Este documento combina el diagnóstico reproducible
+Actualizado: 25 de noviembre de 2026. Este documento combina el diagnóstico reproducible
 (sondas en `.github/workflows/` y `scripts/`) con la evidencia de reproducción real.
 Los resultados dependen de la red y de la fecha. No se enviaron formularios, no se
 crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni tokens al usuario.
@@ -23,6 +23,8 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | cuevana3me.info | **Sin complemento viable** | Ídem; la ruta `/ver.html` de episodios devuelve HTTP 500. |
 | 123pelispop.pro | **Sin complemento viable** | La ficha no expone ninguna fuente de vídeo (`data-url="#"`); solo registro y publicidad. |
 | pelisjuanita.com | **Sin complemento viable** | Muro de CAPTCHA interactivo de imagen (abajo). |
+| pelisenhd.org | **Sin complemento viable (abortado)** | Solo enlaces DDL `.rar`/`.zip` tras temporizador en `financialtrust.info` y Cloudflare Turnstile en `hdpastes.com`, sin vídeo embebido directo. |
+| Cinecalidad.org | **Verificado con Media3** | API JSON pública (`/wp-api/v1/`): películas, series, animes, novelas y WWE; película, película subtitulada, episodio de serie (10 temporadas / 232 episodios en `csi-miami-2002`) y anime reproducidos con CloudStream + Media3 (`Vimeos` y `Voe`). |
 
 ## Familia trampa: pelissmart, pelisplus.fit, pelisplus-to, cuevana3me, 123pelispop
 
@@ -127,6 +129,15 @@ ocultarlos; la disponibilidad de hosts varía como en cualquier complemento.
   `/explorar` con filtros (`t=tv&page=2`); `/series?page=2` pierde la página.
 - **123pelispop**: `scriptmin.js` hace XHR a `cuevana3.fish`; las fichas no exponen jugadores.
 - **cuevana3me**: `/ver.html` de episodios devuelve HTTP 500 (24-nov).
+- **pelisenhd.org** (25-nov): sitio exclusivamente de descargas directas (`revomovies`, archivos `.rar`/`.zip`) sin reproductores embebidos (`iframes: []`); los enlaces `#GoP22` pasan por `financialtrust.info` (temporizador de 45 s en `check.php`) hacia `hdpastes.com`, protegido con Cloudflare Turnstile (`0x4AAAAAAAP9MGErdVlFTX7P`) y `nonce` de sesión. Descartado conforme a la política de no automatizar CAPTCHAs y a las capacidades de extractores/contenedores de CloudStream.
+
+## Cinecalidad.org — reproducción verificada (25-nov, run 45696590155)
+
+SPA WordPress + React cuya portada SSR expone `window.siteConfig` (`imageUrl` y diccionarios de `genres`, `langs` y `years`) y cuyos datos se obtienen de `/wp-api/v1/` sin desafíos de Cloudflare:
+- Portada completa (42 secciones en paralelo en ~2,9 s, 0 vacías): novedades, tops semanales, películas, series, animes, novelas, WWE, idiomas, géneros y últimos 8 años.
+- Búsqueda por texto y archivo por año (`1995`, etc.).
+- Carga completa de fichas (portada, fondo, logotipo, reparto, relacionadas, tráiler y temporadas ordenadas numéricamente con 232 episodios / 10 temporadas en `csi-miami-2002`).
+- Reproducción real verificada con CloudStream pre-release + Media3 ExoPlayer (frames decodificados): película (`Perfectos mentirosos` vía Voe), película (`Bulldozer` vía Vimeos), episodio de serie (`CSI: Miami` 1x1 vía Vimeos) y episodio de anime (`Dragon Ball Super: Beerus` 1x1 vía Vimeos).
 
 ## Prácticas fijadas
 
