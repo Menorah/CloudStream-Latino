@@ -335,6 +335,20 @@ class PeliCineHDMarkupTest {
     }
 
     @Test
+    fun `series pages survive the catalogue filter`() {
+        // `/series/` is both a listing and the prefix of every series page.
+        val html = """
+            <html><body><article class="post dfx fcl series">
+            <h2 class="entry-title">Adiós, Tierra</h2>
+            <a href="https://pelicinehd.com/series/adios-tierra/" class="lnk-blk"></a>
+            </article></body></html>
+        """.trimIndent()
+        val cards = PeliCineHDMarkup.cards(org.jsoup.Jsoup.parse(html, "https://pelicinehd.com/series/"))
+        assertEquals(1, cards.size)
+        assertFalse(cards[0].movie)
+    }
+
+    @Test
     fun `a card that only links to a category is dropped`() {
         val html = """
             <html><body><article class="post dfx fcl movies">

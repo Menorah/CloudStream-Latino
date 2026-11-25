@@ -135,13 +135,22 @@ internal object PeliCineHDMarkup {
         return Card(title, url, poster, movie, year(article))
     }
 
-    /** Site pages that are lists, not titles: a card must link to its own detail page. */
+    /**
+     * Site pages that are lists, not titles. `/series/` is both the series catalogue and the
+     * prefix of every series page, so the whole path is compared, never a prefix.
+     */
     private fun looksLikeCategory(url: String): Boolean {
-        val path = runCatching { URI(url).path.orEmpty() }.getOrDefault("")
-        return path.isEmpty() || path == "/" ||
-            listOf("/peliculas/", "/series/", "/category/", "/page/", "/tag/", "/?s=")
-                .any { path.startsWith(it) }
+        val uri = runCatching { URI(url) }.getOrNull() ?: return true
+        val path = uri.path.orEmpty().trimEnd('/')
+        if (path.isEmpty()) return true
+        if (path in setOf("/peliculas", "/series", "/category", "/tag", "/page")) return true
+        if (uri.rawQuery?.contains("s=") == true) return true
+        return CATALOG_PATH.matches(path) || CATALOG_ROOT.matches(path)
     }
+
+    /** `/page/3`, `/peliculas/page/3`, `/category/terror/page/2`. */
+    private val CATALOG_PATH = Regex("""(/[a-z-]+)?/page/\d{1,3}""")
+    private val CATALOG_ROOT = Regex("""/(category|tag|genero)(/[a-z0-9-]+)?/?""")
 
     /** Images use `src`, but some templates only ship `data-src` (lazy loading). */
     private fun image(element: Element): String? =
