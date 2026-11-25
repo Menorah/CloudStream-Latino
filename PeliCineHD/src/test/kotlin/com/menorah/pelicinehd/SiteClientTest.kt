@@ -180,7 +180,7 @@ class SiteClientTest {
             SiteTransport { requested, headers ->
                 if (headers["Cookie"] == null) response(403, challenge) else response(200, page, requested)
             },
-            SiteTransport { call -> browserCalls++; response(200, page, call) },
+            SiteTransport { call, _ -> browserCalls++; response(200, page, call) },
             cookieSource = object : CookieSource {
                 override suspend fun cookiesFor(url: String): Map<String, String> =
                     mapOf("cf_clearance" to "abc")
@@ -201,7 +201,7 @@ class SiteClientTest {
                 httpCalls++
                 if (headers["Cookie"] == null) response(403, challenge) else response(200, page, requested)
             },
-            SiteTransport { response(200, challenge, home) },
+            SiteTransport { _, _ -> response(200, challenge, home) },
             cookieSource = object : CookieSource {
                 override suspend fun cookiesFor(url: String): Map<String, String> =
                     mapOf("cf_clearance" to "abc")
