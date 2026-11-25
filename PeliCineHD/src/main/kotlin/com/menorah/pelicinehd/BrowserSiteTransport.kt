@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -24,13 +25,14 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Off-screen WebView transport using a clean mobile Chrome User-Agent (without `; wv`) so
- * Cloudflare does not reject the embedded WebView before/during challenges. Supports both GET
- * and same-origin form POST (for WordPress `admin-ajax.php`).
+ * Off-screen WebView transport. Leaves the WebView User-Agent untouched when [userAgent] is null
+ * so `Sec-CH-UA` and `navigator.userAgentData` stay consistent during Cloudflare Turnstile checks,
+ * or applies an explicit [userAgent] when testing stripped `; wv` mode. Supports GET navigations and
+ * same-origin form POSTs (for WordPress `admin-ajax.php`).
  */
 internal class BrowserSiteTransport(
     private val context: Context,
-    private val userAgent: String = SiteClient.FALLBACK_CHROME_UA,
+    private val userAgent: String? = null,
     private val testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
 ) : SiteTransport {
     private val slots = Semaphore(3)
@@ -56,6 +58,7 @@ internal class BrowserSiteTransport(
         var webView: WebView? = null
         var status = 200
         var fetchStarted = false
+        var sawChallenge = false
         var generation = 0
         val isAjaxOrPost = form != null || URI(target).path.orEmpty().contains("/wp-admin/admin-ajax.php")
         val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value
@@ -85,19 +88,23 @@ internal class BrowserSiteTransport(
             null
         }
 
-        fun complete(data: JSONObject, defaultStatus: Int) {
+        fun completeFetch(data: JSONObject, defaultStatus: Int) {
             val resultUrl = data.optString("url")
             if (!PeliCineHDMarkup.siteUrl(resultUrl)) {
                 finish(Result.failure(IllegalStateException("PeliCineHD redirigió fuera del sitio.")))
                 return
             }
             val text = data.optString("text")
-            val code = data.optInt("status", defaultStatus)
+            val code = data.optInt("status", defaultStatus).let { if (it > 0) it else defaultStatus }
             if (text.length > MAX_BODY_CHARS) {
                 finish(Result.failure(IllegalStateException("La respuesta de PeliCineHD es demasiado grande.")))
                 return
             }
-            if (SiteClient.looksLikeChallenge(text)) return
+            if (SiteClient.looksLikeChallenge(text)) {
+                sawChallenge = true
+                finish(Result.success(SiteResponse(if (code in 200..299) 403 else code, resultUrl, text)))
+                return
+            }
             finish(Result.success(SiteResponse(code, resultUrl, text)))
         }
 
@@ -108,11 +115,16 @@ internal class BrowserSiteTransport(
             view.evaluateJavascript("window.__pelicineResult || null") { raw ->
                 if (finished.get()) return@evaluateJavascript
                 val result = parseValue(raw)
-                if (result != null) complete(result, 0) else handler.postDelayed(poll, 250L)
+                if (result != null) completeFetch(result, 0) else handler.postDelayed(poll, 250L)
             }
         }
         val timeout = Runnable {
-            finish(Result.failure(IllegalStateException("El navegador integrado no pudo abrir PeliCineHD a tiempo.")))
+            val message = if (sawChallenge) {
+                "PeliCineHD solicitó verificación anti-bots y el navegador integrado agotó el tiempo."
+            } else {
+                "El navegador integrado no pudo abrir PeliCineHD a tiempo."
+            }
+            finish(Result.failure(IllegalStateException(message)))
         }
         continuation.invokeOnCancellation { finish(null) }
 
@@ -128,20 +140,31 @@ internal class BrowserSiteTransport(
                 }
                 view.settings.javaScriptEnabled = true
                 view.settings.domStorageEnabled = true
-                view.settings.blockNetworkImage = true
                 view.settings.allowFileAccess = false
                 view.settings.allowContentAccess = false
                 view.settings.javaScriptCanOpenWindowsAutomatically = false
-                view.settings.userAgentString = userAgent
+                if (!userAgent.isNullOrBlank()) {
+                    view.settings.userAgentString = userAgent
+                }
+                // Give Cloudflare/Turnstile a non-zero mobile viewport instead of a 0x0 detached WebView.
+                view.measure(
+                    View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY),
+                )
+                view.layout(0, 0, 1080, 1920)
                 view.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                         !PeliCineHDMarkup.siteUrl(request.url.toString())
 
                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                         val uri = request.url
+                        val scheme = uri.scheme?.lowercase().orEmpty()
                         val host = uri.host.orEmpty().lowercase()
+                        if (scheme in listOf("blob", "data", "about")) {
+                            return testResponse?.invoke(request)
+                        }
                         val allowed = PeliCineHDMarkup.siteUrl(uri.toString()) ||
-                            (uri.scheme == "https" && (host == "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com")))
+                            (scheme == "https" && isAllowedChallengeHost(host))
                         return if (allowed) testResponse?.invoke(request)
                         else WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                     }
@@ -166,24 +189,53 @@ internal class BrowserSiteTransport(
 
                     private fun checkReady(view: WebView, url: String, currentGeneration: Int) {
                         if (finished.get() || generation != currentGeneration || !PeliCineHDMarkup.siteUrl(url)) return
-                        val inspect = "JSON.stringify({url:location.href,text:document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1})})"
+                        val inspect = "JSON.stringify({url:location.href,ready:document.readyState,text:document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1})})"
                         view.evaluateJavascript(inspect) { raw ->
                             if (finished.get() || generation != currentGeneration) return@evaluateJavascript
-                            val page = parseValue(raw) ?: return@evaluateJavascript
-                            if (SiteClient.looksLikeChallenge(page.optString("text"))) {
+                            val page = parseValue(raw) ?: run {
+                                handler.postDelayed({ checkReady(view, url, currentGeneration) }, 200L)
+                                return@evaluateJavascript
+                            }
+                            val pageUrl = page.optString("url").ifBlank { url }
+                            val pageText = page.optString("text")
+                            val readyState = page.optString("ready")
+                            if (SiteClient.looksLikeChallenge(pageText)) {
+                                sawChallenge = true
                                 handler.postDelayed({ checkReady(view, url, currentGeneration) }, 300L)
+                                return@evaluateJavascript
+                            }
+                            if (pageText.length > MAX_BODY_CHARS) {
+                                finish(Result.failure(IllegalStateException("La respuesta de PeliCineHD es demasiado grande.")))
                                 return@evaluateJavascript
                             }
                             if (status == 0) {
                                 finish(Result.failure(IllegalStateException("El navegador no pudo cargar PeliCineHD.")))
-                            } else if (!fetchStarted) {
-                                val sameOrigin = URI(url).host.equals(URI(target).host, true)
+                                return@evaluateJavascript
+                            }
+                            if (!PeliCineHDMarkup.siteUrl(pageUrl)) {
+                                finish(Result.failure(IllegalStateException("PeliCineHD redirigió fuera del sitio.")))
+                                return@evaluateJavascript
+                            }
+                            if (!isAjaxOrPost && form == null) {
+                                if (readyState != "complete") {
+                                    handler.postDelayed({ checkReady(view, url, currentGeneration) }, 200L)
+                                    return@evaluateJavascript
+                                }
+                                // Normal GET navigations already have Sec-Fetch-Mode: navigate headers and the
+                                // full DOM; avoid re-requesting via CORS fetch() unless a challenge cleared in place.
+                                if (!(sawChallenge && status !in 200..299)) {
+                                    finish(Result.success(SiteResponse(status, pageUrl, pageText)))
+                                    return@evaluateJavascript
+                                }
+                            }
+                            if (!fetchStarted) {
+                                val sameOrigin = URI(pageUrl).host.equals(URI(target).host, true)
                                 if (isAjaxOrPost && !sameOrigin) {
                                     finish(Result.failure(IllegalStateException("El navegador fue redirigido fuera del catálogo.")))
                                     return@evaluateJavascript
                                 }
                                 fetchStarted = true
-                                val fetchTarget = if (sameOrigin || isAjaxOrPost) target else url
+                                val fetchTarget = if (sameOrigin || isAjaxOrPost) target else pageUrl
                                 val quotedTarget = JSONObject.quote(fetchTarget)
                                 val fetchScript = if (form != null) {
                                     val encodedBody = form.entries.joinToString("&") { (k, v) ->
@@ -209,7 +261,18 @@ internal class BrowserSiteTransport(
     }
 
     companion object {
-        private const val WEBVIEW_MILLIS = 25_000L
+        private const val WEBVIEW_MILLIS = 30_000L
         private const val MAX_BODY_CHARS = 2_000_000
+
+        private val CHALLENGE_HOSTS = listOf(
+            "challenges.cloudflare.com",
+            "cloudflare.com",
+            "cloudflareinsights.com",
+            "cdnjs.cloudflare.com",
+            "hcaptcha.com",
+        )
+
+        internal fun isAllowedChallengeHost(host: String): Boolean =
+            CHALLENGE_HOSTS.any { host == it || host.endsWith(".$it") }
     }
 }

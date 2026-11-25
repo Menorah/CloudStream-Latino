@@ -30,38 +30,53 @@ internal class SiteClient(
     private val browser: SiteTransport,
     private val cookies: CookieStore = EmptyCookieStore,
     val userAgent: String = FALLBACK_CHROME_UA,
+    private val alternateBrowser: SiteTransport? = null,
+    private val alternateUserAgent: String = userAgent,
 ) {
     private val cfMutex = Mutex()
     private val cfGeneration = AtomicInteger(0)
     private val browserPreferred = ConcurrentHashMap.newKeySet<String>()
 
+    @Volatile
+    private var activeBrowser: SiteTransport = browser
+
+    @Volatile
+    private var activeUserAgent: String = userAgent
+
     suspend fun get(url: String, headers: Map<String, String> = emptyMap()): SiteResponse =
-        execute(url, headers, { h -> http.get(url, h) }, { h -> browser.get(url, h) })
+        execute(
+            url,
+            headers,
+            { h -> http.get(url, h) },
+            { t, h -> t.get(url, h) },
+        )
 
     suspend fun post(
         url: String,
         form: Map<String, String>,
         headers: Map<String, String> = emptyMap(),
-    ): SiteResponse = execute(url, headers, { h -> http.post(url, form, h) }, { h -> browser.post(url, form, h) })
+    ): SiteResponse = execute(
+        url,
+        headers,
+        { h -> http.post(url, form, h) },
+        { t, h -> t.post(url, form, h) },
+    )
 
     private suspend fun execute(
         url: String,
         headers: Map<String, String>,
         httpCall: suspend (Map<String, String>) -> SiteResponse,
-        browserCall: suspend (Map<String, String>) -> SiteResponse,
+        browserCall: suspend (SiteTransport, Map<String, String>) -> SiteResponse,
     ): SiteResponse {
         if (!PeliCineHDMarkup.siteUrl(url)) return httpCall(headers)
         val host = URI(url).host.lowercase()
 
         if (host in browserPreferred) {
-            val fromBrowser = attempt { browserCall(withBrowserHeaders(headers)) }
-            if (fromBrowser != null && !isChallengeResponse(fromBrowser)) {
-                if (fromBrowser.isSuccessful) {
-                    runCatching { cookies.flush() }
-                } else {
-                    browserPreferred.remove(host)
-                }
-                return fromBrowser
+            val attempt = tryBrowserModes(headers, browserCall)
+            val response = attempt.response
+            if (response != null && response.isSuccessful && !isChallengeResponse(response)) {
+                runCatching { cookies.flush() }
+                return response
             }
             browserPreferred.remove(host)
         }
@@ -69,23 +84,26 @@ internal class SiteClient(
         val genBefore = cfGeneration.get()
         val cookieHeaderBefore = runCatching { cookies.getCookie(url) }.getOrNull().orEmpty()
         val hadClearanceBefore = cookieHeaderBefore.contains("cf_clearance")
-        val initialHttp = attempt { httpCall(withHttpHeaders(headers, cookieHeaderBefore)) }
-        if (initialHttp != null && !needsBrowserFallback(initialHttp)) {
-            return initialHttp
+        val initialHttp = attemptResult { httpCall(withHttpHeaders(headers, cookieHeaderBefore, activeUserAgent)) }
+        val initialResponse = initialHttp.getOrNull()
+        if (initialResponse != null && !needsBrowserFallback(initialResponse)) {
+            return initialResponse
         }
 
         return cfMutex.withLock {
             if (host in browserPreferred) {
-                val fromBrowser = attempt { browserCall(withBrowserHeaders(headers)) }
-                if (fromBrowser?.isSuccessful == true && !isChallengeResponse(fromBrowser)) {
+                val attempt = tryBrowserModes(headers, browserCall)
+                val response = attempt.response
+                if (response != null && response.isSuccessful && !isChallengeResponse(response)) {
                     runCatching { cookies.flush() }
-                    return@withLock fromBrowser
+                    return@withLock response
                 }
+                browserPreferred.remove(host)
             }
 
             if (cfGeneration.get() != genBefore && host !in browserPreferred) {
                 val freshCookie = runCatching { cookies.getCookie(url) }.getOrNull().orEmpty()
-                val retriedHttp = attempt { httpCall(withHttpHeaders(headers, freshCookie)) }
+                val retriedHttp = attemptResult { httpCall(withHttpHeaders(headers, freshCookie, activeUserAgent)) }.getOrNull()
                 if (retriedHttp != null && !needsBrowserFallback(retriedHttp)) {
                     return@withLock retriedHttp
                 }
@@ -94,8 +112,9 @@ internal class SiteClient(
                 }
             }
 
-            val fromBrowser = attempt { browserCall(withBrowserHeaders(headers)) }
-            if (fromBrowser != null && !isChallengeResponse(fromBrowser)) {
+            val browserOutcome = tryBrowserModes(headers, browserCall)
+            val fromBrowser = browserOutcome.response
+            if (fromBrowser != null && !needsBrowserFallback(fromBrowser)) {
                 runCatching { cookies.flush() }
                 cfGeneration.incrementAndGet()
                 val freshCookie = runCatching { cookies.getCookie(url) }.getOrNull().orEmpty()
@@ -106,16 +125,63 @@ internal class SiteClient(
                 return@withLock fromBrowser
             }
 
-            initialHttp ?: fromBrowser ?: throw IllegalStateException("No se pudo conectar con PeliCineHD desde la aplicación.")
+            if (fromBrowser != null) {
+                return@withLock fromBrowser
+            }
+            val browserError = browserOutcome.error
+            if (browserError != null && (initialResponse == null || needsBrowserFallback(initialResponse))) {
+                throw browserError
+            }
+            initialResponse
+                ?: initialHttp.exceptionOrNull()?.let { throw it }
+                ?: throw IllegalStateException("No se pudo conectar con PeliCineHD desde la aplicación.")
         }
     }
 
-    private fun withBrowserHeaders(headers: Map<String, String>): Map<String, String> =
-        mapOf("User-Agent" to userAgent) + headers
+    private data class BrowserAttempt(val response: SiteResponse?, val error: Throwable?)
 
-    private fun withHttpHeaders(headers: Map<String, String>, cachedCookie: String): Map<String, String> {
+    private suspend fun tryBrowserModes(
+        headers: Map<String, String>,
+        browserCall: suspend (SiteTransport, Map<String, String>) -> SiteResponse,
+    ): BrowserAttempt {
+        val primary = activeBrowser
+        val primaryUa = activeUserAgent
+        val primaryResult = attemptResult { browserCall(primary, withBrowserHeaders(headers, primaryUa)) }
+        val primaryRes = primaryResult.getOrNull()
+        if (primaryRes != null && !needsBrowserFallback(primaryRes)) {
+            return BrowserAttempt(primaryRes, null)
+        }
+
+        val secondary = alternateBrowser?.takeIf { it !== primary }
+        if (secondary != null) {
+            val secondaryUa = if (secondary === browser) userAgent else alternateUserAgent
+            val secondaryResult = attemptResult { browserCall(secondary, withBrowserHeaders(headers, secondaryUa)) }
+            val secondaryRes = secondaryResult.getOrNull()
+            if (secondaryRes != null && !needsBrowserFallback(secondaryRes)) {
+                activeBrowser = secondary
+                activeUserAgent = secondaryUa
+                return BrowserAttempt(secondaryRes, null)
+            }
+            return BrowserAttempt(
+                secondaryRes ?: primaryRes,
+                secondaryResult.exceptionOrNull() ?: primaryResult.exceptionOrNull(),
+            )
+        }
+
+        return BrowserAttempt(primaryRes, primaryResult.exceptionOrNull())
+    }
+
+    private fun withBrowserHeaders(headers: Map<String, String>, ua: String): Map<String, String> =
+        mapOf("User-Agent" to ua) + headers
+
+    private fun withHttpHeaders(
+        headers: Map<String, String>,
+        cachedCookie: String,
+        ua: String,
+    ): Map<String, String> {
         val base = linkedMapOf(
-            "User-Agent" to userAgent,
+            "User-Agent" to ua,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "es-ES,es;q=0.9,en;q=0.8",
         )
         if (cachedCookie.isNotBlank() && headers.keys.none { it.equals("Cookie", true) }) {
@@ -125,12 +191,12 @@ internal class SiteClient(
         return base
     }
 
-    private suspend fun <T> attempt(block: suspend () -> T): T? = try {
-        block()
+    private suspend fun <T> attemptResult(block: suspend () -> T): Result<T> = try {
+        Result.success(block())
     } catch (e: CancellationException) {
         throw e
-    } catch (_: Exception) {
-        null
+    } catch (e: Throwable) {
+        Result.failure(e)
     }
 
     private object EmptyCookieStore : CookieStore {
@@ -156,20 +222,30 @@ internal class SiteClient(
             text.contains("id=\"challenge-form\"", true) ||
                 text.contains("id=\"cf-challenge-running\"", true) ||
                 text.contains("window._cf_chl_opt", true) ||
+                text.contains("challenges.cloudflare.com/turnstile", true) ||
+                text.contains("/cdn-cgi/challenge-platform/", true) ||
+                text.contains("cf-turnstile", true) ||
                 text.contains("<title>Just a moment", true) ||
                 text.contains("<title>Un momento", true) ||
-                text.contains("challenges.cloudflare.com/turnstile", true)
+                text.contains("<title>Attention Required", true) ||
+                text.contains("id=\"cf-error-details\"", true) ||
+                text.contains("Enable JavaScript and cookies to continue", true) ||
+                text.contains("Checking your browser", true) ||
+                text.contains("Comprobando tu navegador", true)
 
         private fun isChallengeResponse(response: SiteResponse): Boolean =
-            response.code in listOf(403, 429, 503) && looksLikeChallenge(response.text) ||
-                (response.isSuccessful && looksLikeChallenge(response.text))
+            (response.code in listOf(403, 429, 503) || response.isSuccessful) &&
+                looksLikeChallenge(response.text)
 
         private fun needsBrowserFallback(response: SiteResponse): Boolean =
             response.code in listOf(403, 429, 503) || looksLikeChallenge(response.text)
 
         fun create(context: Context): SiteClient {
             val appCtx = context.applicationContext
-            val rawUa = runCatching { WebSettings.getDefaultUserAgent(appCtx) }.getOrNull()
+            val rawUa = runCatching { WebSettings.getDefaultUserAgent(appCtx) }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+            val defaultUa = rawUa ?: FALLBACK_CHROME_UA
             val cleanUa = cleanBrowserUserAgent(rawUa)
             val cookieStore = object : CookieStore {
                 override fun getCookie(url: String): String? =
@@ -190,8 +266,11 @@ internal class SiteClient(
                     return SiteResponse(r.code, r.url, r.text)
                 }
             }
-            val browser = BrowserSiteTransport(appCtx, cleanUa)
-            return SiteClient(http, browser, cookieStore, cleanUa)
+            // Start with native WebView UA (consistent with Sec-CH-UA / navigator.userAgentData);
+            // keep stripped `; wv` mode as fallback if a WAF rule rejects `; wv` explicitly.
+            val primaryBrowser = BrowserSiteTransport(appCtx, userAgent = null)
+            val backupBrowser = if (cleanUa != defaultUa) BrowserSiteTransport(appCtx, userAgent = cleanUa) else null
+            return SiteClient(http, primaryBrowser, cookieStore, defaultUa, backupBrowser, cleanUa)
         }
     }
 }

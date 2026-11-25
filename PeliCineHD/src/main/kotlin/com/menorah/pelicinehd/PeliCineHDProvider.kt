@@ -27,10 +27,10 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    override val getMainPageTimeoutMs: Long? = 120_000L
-    override val searchTimeoutMs: Long? = 45_000L
-    override val quickSearchTimeoutMs: Long? = 45_000L
-    override val loadTimeoutMs: Long? = 60_000L
+    override val getMainPageTimeoutMs: Long? = 300_000L
+    override val searchTimeoutMs: Long? = 60_000L
+    override val quickSearchTimeoutMs: Long? = 60_000L
+    override val loadTimeoutMs: Long? = 90_000L
     override val loadLinksTimeoutMs: Long? = 60_000L
 
     override val mainPage = mainPageOf(
@@ -62,16 +62,16 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     )
 
     private val site = SiteClient.create(context)
-    private val catalogGate = Semaphore(6)
+    private val catalogGate = Semaphore(4)
 
     private suspend fun fetch(input: String, headers: Map<String, String> = emptyMap()): Document {
         val target = URI("$mainUrl/").resolve(input).toString()
         require(PeliCineHDMarkup.siteUrl(target)) { "Dirección fuera de PeliCineHD" }
         val response = site.get(target, headers)
-        if (!response.isSuccessful) throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${response.code}).")
         if (SiteClient.looksLikeChallenge(response.text)) {
-            throw ErrorLoadingException("PeliCineHD solicitó verificación anti-bots.")
+            throw ErrorLoadingException("PeliCineHD solicitó verificación anti-bots (HTTP ${response.code}).")
         }
+        if (!response.isSuccessful) throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${response.code}).")
         return Jsoup.parse(response.text, response.url)
     }
 
@@ -82,6 +82,9 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
             "X-Requested-With" to "XMLHttpRequest",
         )
         val response = site.post(target, form, headers)
+        if (SiteClient.looksLikeChallenge(response.text)) {
+            throw ErrorLoadingException("PeliCineHD solicitó verificación anti-bots en temporadas (HTTP ${response.code}).")
+        }
         if (!response.isSuccessful) throw IllegalStateException("Error AJAX de PeliCineHD (HTTP ${response.code}).")
         return Jsoup.parse(response.text, referer)
     }

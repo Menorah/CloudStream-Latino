@@ -466,4 +466,70 @@ class PeliCineHDMarkupTest {
         assertFalse(PeliCineHDMarkup.siteUrl("https://user@pelicinehd.com/movies/x/"))
         assertFalse(PeliCineHDMarkup.siteUrl("https://pelicinehd.com:8443/movies/x/"))
     }
+
+    @Test
+    fun siteClientFallsBackToAlternateBrowserUaAndSurfacesBrowserErrors() = runBlocking {
+        var cookie = ""
+        val seenHttpUa = mutableListOf<String>()
+        val cookies = object : CookieStore {
+            override fun getCookie(url: String): String = cookie
+            override fun flush() = Unit
+        }
+        val http = object : SiteTransport {
+            override suspend fun get(url: String, headers: Map<String, String>): SiteResponse {
+                seenHttpUa += headers["User-Agent"].orEmpty()
+                return if (headers["Cookie"]?.contains("cf_clearance=clean") == true && headers["User-Agent"] == "CleanUA") {
+                    SiteResponse(200, url, "<html>ok</html>")
+                } else {
+                    SiteResponse(403, url, "<html><title>Attention Required! | Cloudflare</title></html>")
+                }
+            }
+            override suspend fun post(url: String, form: Map<String, String>, headers: Map<String, String>) =
+                SiteResponse(403, url, "Forbidden")
+        }
+        val primaryBrowser = object : SiteTransport {
+            override suspend fun get(url: String, headers: Map<String, String>) =
+                SiteResponse(403, url, "<div class=\"cf-turnstile\"></div>")
+            override suspend fun post(url: String, form: Map<String, String>, headers: Map<String, String>) =
+                SiteResponse(403, url, "Forbidden")
+        }
+        val backupBrowser = object : SiteTransport {
+            override suspend fun get(url: String, headers: Map<String, String>): SiteResponse {
+                cookie = "cf_clearance=clean"
+                return SiteResponse(200, url, "<html>backup-ok</html>")
+            }
+            override suspend fun post(url: String, form: Map<String, String>, headers: Map<String, String>) =
+                SiteResponse(200, url, "ok")
+        }
+
+        val client = SiteClient(http, primaryBrowser, cookies, "DefaultUA", backupBrowser, "CleanUA")
+        assertEquals("<html>backup-ok</html>", client.get(site("/movies/")).text)
+        assertEquals("<html>ok</html>", client.get(site("/series/")).text)
+        assertEquals(listOf("DefaultUA", "CleanUA"), seenHttpUa)
+
+        // When browser fails with a timeout after HTTP 403 refusal, throw the browser timeout rather than masking it as 403.
+        val failingClient = SiteClient(
+            object : SiteTransport {
+                override suspend fun get(url: String, headers: Map<String, String>) = SiteResponse(403, url, "Forbidden")
+                override suspend fun post(url: String, form: Map<String, String>, headers: Map<String, String>) = SiteResponse(403, url, "Forbidden")
+            },
+            object : SiteTransport {
+                override suspend fun get(url: String, headers: Map<String, String>): SiteResponse =
+                    throw IllegalStateException("El navegador integrado agotó el tiempo.")
+                override suspend fun post(url: String, form: Map<String, String>, headers: Map<String, String>): SiteResponse =
+                    throw IllegalStateException("El navegador integrado agotó el tiempo.")
+            }
+        )
+        try {
+            failingClient.get(site("/movies/"))
+            fail("expected browser error instead of stale HTTP 403")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message.orEmpty().contains("agotó el tiempo"))
+        }
+
+        assertTrue(SiteClient.looksLikeChallenge("""<script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script>"""))
+        assertTrue(SiteClient.looksLikeChallenge("""<div class="cf-turnstile"></div>"""))
+        assertTrue(SiteClient.looksLikeChallenge("""<title>Attention Required! | Cloudflare</title>"""))
+        assertFalse(SiteClient.looksLikeChallenge("""<ul class="post-lst"><li><article class="post movies">Pacífico</article></li></ul>"""))
+    }
 }
