@@ -94,7 +94,7 @@ object AnimeOnline2Parser {
         }.getOrNull()
     }
 
-    private val siteHostRegex = Regex("""^https?://(?:www\d*|ww\d*|ver\d*\.)?animeonline\.ninja(?=/|$)""", RegexOption.IGNORE_CASE)
+    private val siteHostRegex = Regex("""^https?://(?:(?:www\d*|ww\d*|ver\d*)\.)?animeonline\.ninja(?=/|$)""", RegexOption.IGNORE_CASE)
     private val anySubdomainAnimeOnlineRegex = Regex("""^https?://[a-z0-9.-]*animeonline\.ninja(?=/|$)""", RegexOption.IGNORE_CASE)
     private val yearRegex = Regex("""\b((?:19|20)\d{2})\b""")
     private val durationRegex = Regex("""(\d+)\s*min""", RegexOption.IGNORE_CASE)

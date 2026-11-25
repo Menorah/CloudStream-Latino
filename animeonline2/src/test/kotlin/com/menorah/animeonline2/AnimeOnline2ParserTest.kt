@@ -41,6 +41,10 @@ class AnimeOnline2ParserTest {
             AnimeOnline2Parser.normalizeImageUrl("http://ww3.animeonline.ninja/wp-content/uploads/2026/01/my poster.jpg"),
         )
         assertEquals(
+            "https://cdn.animeonline.ninja/wp-content/uploads/cover.jpg",
+            AnimeOnline2Parser.normalizeImageUrl("http://cdn.animeonline.ninja/wp-content/uploads/cover.jpg"),
+        )
+        assertEquals(
             "https://image.tmdb.org/t/p/w500/abc.jpg",
             AnimeOnline2Parser.normalizeImageUrl("http://image.tmdb.org/t/p/w500/abc.jpg"),
         )
