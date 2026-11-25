@@ -1,5 +1,6 @@
 package com.menorah.animeonline2
 
+import android.content.Context
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.network.CloudflareKiller
@@ -15,7 +16,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
-class AnimeOnline2Provider : MainAPI() {
+class AnimeOnline2Provider(pluginContext: Context? = null) : MainAPI() {
     override var mainUrl = AnimeOnline2Parser.BASE
     override var name = "AnimeOnline2"
     override var lang = "es"
@@ -47,8 +48,21 @@ class AnimeOnline2Provider : MainAPI() {
         "archive:/genero/proximamente/" to "Próximamente",
     )
 
-    private val cfKiller by lazy { CloudflareKiller() }
+    private val cfKillerActivated = AtomicBoolean(false)
+    private val cfKiller by lazy {
+        cfKillerActivated.set(true)
+        CloudflareKiller()
+    }
+    private val posterHelper = AnimeOnline2PosterHelper(
+        context = pluginContext,
+        cfKillerProvider = { cfKiller },
+        cfKillerActivated = cfKillerActivated,
+    )
     private val linkGate = Semaphore(6)
+
+    internal suspend fun testCachePosterViaWebView(url: String): String? {
+        return posterHelper.testDownloadViaWebView(listOf(url))[url]
+    }
 
     private val baseHeaders = mapOf(
         "User-Agent" to AnimeOnline2Parser.USER_AGENT,
@@ -58,10 +72,17 @@ class AnimeOnline2Provider : MainAPI() {
     private suspend fun getPageHtml(url: String, referer: String? = "$mainUrl/inicio/", allow404: Boolean = false): String? {
         val norm = AnimeOnline2Parser.normalizeSiteUrl(url)
         val hdrs = if (referer.isNullOrBlank()) baseHeaders else baseHeaders + ("Referer" to referer)
-        var resp = app.get(norm, headers = hdrs, timeout = 25)
+        var resp = if (cfKillerActivated.get()) {
+            app.get(norm, headers = hdrs, interceptor = cfKiller, timeout = 30)
+        } else {
+            app.get(norm, headers = hdrs, timeout = 25)
+        }
+        posterHelper.recordSetCookies(resp.headers.values("Set-Cookie"))
         if (allow404 && resp.code == 404) return null
         if (!resp.isSuccessful || AnimeOnline2Parser.isCloudflareChallenge(resp.code, resp.text)) {
             resp = app.get(norm, headers = hdrs, interceptor = cfKiller, timeout = 30)
+            posterHelper.recordSetCookies(resp.headers.values("Set-Cookie"))
+            posterHelper.refreshRuntimeInfo()
             if (allow404 && resp.code == 404) return null
         }
         if (!resp.isSuccessful) {
@@ -79,16 +100,17 @@ class AnimeOnline2Provider : MainAPI() {
         return resp.text
     }
 
-    private fun AnimeCatalogCard.toSearchResponse(): SearchResponse {
+    private fun AnimeCatalogCard.toSearchResponse(resolvedPosters: Map<String, ResolvedPoster>): SearchResponse {
+        val resolved = posterUrl?.let { resolvedPosters[it] ?: ResolvedPoster(it, posterHelper.buildSiteHeaders()) }
         return if (isMovie) {
             newAnimeSearchResponse(title, url, TvType.AnimeMovie) {
-                this.posterUrl = this@toSearchResponse.posterUrl
+                addPoster(resolved?.url ?: this@toSearchResponse.posterUrl, resolved?.headers)
                 this.year = this@toSearchResponse.year
                 this.score = Score.from10(this@toSearchResponse.rating)
             }
         } else {
             newAnimeSearchResponse(title, url, TvType.Anime) {
-                this.posterUrl = this@toSearchResponse.posterUrl
+                addPoster(resolved?.url ?: this@toSearchResponse.posterUrl, resolved?.headers)
                 this.year = this@toSearchResponse.year
                 this.score = Score.from10(this@toSearchResponse.rating)
                 this@toSearchResponse.episodeNumber?.let { ep ->
@@ -137,9 +159,10 @@ class AnimeOnline2Provider : MainAPI() {
             else -> AnimeCatalogPage(emptyList(), false)
         }
 
+        val resolvedPosters = posterHelper.preparePosters(catalogPage.items.map { it.posterUrl })
         val list = HomePageList(
             name = request.name,
-            list = catalogPage.items.map { it.toSearchResponse() },
+            list = catalogPage.items.map { it.toSearchResponse(resolvedPosters) },
             isHorizontalImages = request.horizontalImages,
         )
         return newHomePageResponse(list = list, hasNext = catalogPage.hasNext)
@@ -155,8 +178,9 @@ class AnimeOnline2Provider : MainAPI() {
         val url = AnimeOnline2Parser.buildSearchUrl(trimmed, page)
         val html = getPageHtml(url, allow404 = true) ?: return newSearchResponseList(emptyList(), hasNext = false)
         val parsed = AnimeOnline2Parser.parseSearchPage(html, page)
+        val resolvedPosters = posterHelper.preparePosters(parsed.items.map { it.posterUrl })
         return newSearchResponseList(
-            list = parsed.items.map { it.toSearchResponse() },
+            list = parsed.items.map { it.toSearchResponse(resolvedPosters) },
             hasNext = parsed.hasNext,
         )
     }
@@ -180,18 +204,38 @@ class AnimeOnline2Provider : MainAPI() {
         }
 
         val detail = AnimeOnline2Parser.parseDetailPage(targetUrl, html)
-        val recs = detail.related.map { it.toSearchResponse() }
+        val resolvedMainPosters = posterHelper.preparePosters(
+            listOf(detail.posterUrl, detail.backdropUrl) +
+                detail.related.map { it.posterUrl } +
+                detail.cast.map { it.imageUrl },
+        )
+        val initialPoster = detail.posterUrl?.let { resolvedMainPosters[it] ?: ResolvedPoster(it, posterHelper.buildSiteHeaders()) }
+        val resolvedBackdrop = detail.backdropUrl?.let { resolvedMainPosters[it] }
+        val finalPoster = posterHelper.ensureCookieIsolatedPoster(initialPoster, resolvedBackdrop?.url)
+
+        val resolvedEpisodePosters = if (detail.episodes.isNotEmpty()) {
+            posterHelper.preparePosters(
+                detail.episodes.map { it.posterUrl },
+                forEpisodesWithoutHeaders = true,
+                maxBatchCache = 24,
+            )
+        } else {
+            emptyMap()
+        }
+
+        val recs = detail.related.map { it.toSearchResponse(resolvedMainPosters) }
         val actorData = detail.cast.map {
+            val actorImg = it.imageUrl?.let { img -> resolvedMainPosters[img]?.url ?: img }
             ActorData(
-                actor = Actor(it.name, it.imageUrl),
+                actor = Actor(it.name, actorImg),
                 roleString = it.role,
             )
         }
 
         if (detail.isMovie) {
             return newMovieLoadResponse(detail.title, detail.url, TvType.AnimeMovie, detail.url) {
-                this.posterUrl = detail.posterUrl
-                this.backgroundPosterUrl = detail.backdropUrl ?: detail.posterUrl
+                addPoster(finalPoster?.url ?: detail.posterUrl, finalPoster?.headers)
+                this.backgroundPosterUrl = resolvedBackdrop?.url ?: finalPoster?.url ?: detail.backdropUrl ?: detail.posterUrl
                 this.plot = detail.plot
                 this.year = detail.year
                 this.duration = detail.durationMinutes
@@ -203,13 +247,15 @@ class AnimeOnline2Provider : MainAPI() {
             }
         }
 
+        val fallbackEpPoster = finalPoster?.url?.takeIf { it.startsWith("file://") } ?: detail.posterUrl
         val episodeObjects = if (detail.episodes.isNotEmpty()) {
             detail.episodes.map { ep ->
+                val epResolved = ep.posterUrl?.let { resolvedEpisodePosters[it]?.url ?: it }
                 newEpisode(ep.url) {
                     this.name = ep.name
                     this.season = ep.season
                     this.episode = ep.episode
-                    this.posterUrl = ep.posterUrl ?: detail.posterUrl
+                    this.posterUrl = epResolved ?: fallbackEpPoster
                     addDate(ep.date)
                 }
             }
@@ -219,7 +265,7 @@ class AnimeOnline2Provider : MainAPI() {
                     this.name = detail.title
                     this.season = 1
                     this.episode = 1
-                    this.posterUrl = detail.posterUrl
+                    this.posterUrl = fallbackEpPoster
                 }
             )
         } else {
@@ -227,8 +273,8 @@ class AnimeOnline2Provider : MainAPI() {
         }
 
         return newAnimeLoadResponse(detail.title, detail.url, TvType.Anime) {
-            this.posterUrl = detail.posterUrl
-            this.backgroundPosterUrl = detail.backdropUrl ?: detail.posterUrl
+            addPoster(finalPoster?.url ?: detail.posterUrl, finalPoster?.headers)
+            this.backgroundPosterUrl = resolvedBackdrop?.url ?: finalPoster?.url ?: detail.backdropUrl ?: detail.posterUrl
             this.plot = detail.plot
             this.year = detail.year
             this.duration = detail.durationMinutes
@@ -243,41 +289,67 @@ class AnimeOnline2Provider : MainAPI() {
 
     private suspend fun fetchPlayerEmbedUrl(pageUrl: String, option: AnimePlayerOption): String? {
         val wpJsonUrl = "$mainUrl/wp-json/dooplayer/v1/post/${option.postId}?type=${option.type}&source=${option.nume}"
-        val jsonResp = try {
-            app.get(
-                wpJsonUrl,
-                headers = baseHeaders + mapOf(
-                    "Accept" to "application/json, */*",
-                    "Referer" to pageUrl,
-                ),
-                timeout = 20,
-            )
+        val jsonHeaders = baseHeaders + mapOf(
+            "Accept" to "application/json, */*",
+            "Referer" to pageUrl,
+        )
+        var jsonResp = try {
+            if (cfKillerActivated.get()) {
+                app.get(wpJsonUrl, headers = jsonHeaders, interceptor = cfKiller, timeout = 20)
+            } else {
+                app.get(wpJsonUrl, headers = jsonHeaders, timeout = 20)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             null
         }
+        if (jsonResp != null && (!jsonResp.isSuccessful || AnimeOnline2Parser.isCloudflareChallenge(jsonResp.code, jsonResp.text))) {
+            jsonResp = try {
+                app.get(wpJsonUrl, headers = jsonHeaders, interceptor = cfKiller, timeout = 25)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                jsonResp
+            }
+        }
         if (jsonResp != null && jsonResp.isSuccessful) {
             AnimeOnline2Parser.parseDooplayerEmbedUrl(jsonResp.text)?.let { return it }
         }
 
+        val ajaxHeaders = baseHeaders + mapOf(
+            "Accept" to "application/json, */*",
+            "Referer" to pageUrl,
+            "Origin" to mainUrl,
+            "X-Requested-With" to "XMLHttpRequest",
+        )
         val ajaxResp = try {
-            app.post(
-                "$mainUrl/wp-admin/admin-ajax.php",
-                data = mapOf(
-                    "action" to "doo_player_ajax",
-                    "post" to option.postId,
-                    "nume" to option.nume,
-                    "type" to option.type,
-                ),
-                headers = baseHeaders + mapOf(
-                    "Accept" to "application/json, */*",
-                    "Referer" to pageUrl,
-                    "Origin" to mainUrl,
-                    "X-Requested-With" to "XMLHttpRequest",
-                ),
-                timeout = 20,
-            )
+            if (cfKillerActivated.get()) {
+                app.post(
+                    "$mainUrl/wp-admin/admin-ajax.php",
+                    data = mapOf(
+                        "action" to "doo_player_ajax",
+                        "post" to option.postId,
+                        "nume" to option.nume,
+                        "type" to option.type,
+                    ),
+                    headers = ajaxHeaders,
+                    interceptor = cfKiller,
+                    timeout = 20,
+                )
+            } else {
+                app.post(
+                    "$mainUrl/wp-admin/admin-ajax.php",
+                    data = mapOf(
+                        "action" to "doo_player_ajax",
+                        "post" to option.postId,
+                        "nume" to option.nume,
+                        "type" to option.type,
+                    ),
+                    headers = ajaxHeaders,
+                    timeout = 20,
+                )
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {

@@ -1,5 +1,6 @@
 package com.menorah.animeonline2
 
+import android.graphics.BitmapFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -53,12 +54,17 @@ class AnimeOnline2LiveTest {
         c.readTimeout = 15_000
         c.setRequestProperty("User-Agent", AnimeOnline2Parser.USER_AGENT)
         c.setRequestProperty("Referer", "${AnimeOnline2Parser.BASE}/inicio/")
+        c.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
         try {
             assertEquals("Image HTTP $url", 200, c.responseCode)
             val ct = c.contentType.orEmpty().lowercase()
             assertTrue("Unexpected content-type $ct for $url", ct.startsWith("image/"))
             val bytes = c.inputStream.use { it.readBytes() }
             assertTrue("Empty image $url", bytes.size > 500)
+            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            assertNotNull("Failed to decode bitmap for $url", bmp)
+            assertTrue("Decoded image too small for $url: ${bmp!!.width}x${bmp.height}", bmp.width >= 50 && bmp.height >= 50)
+            bmp.recycle()
         } finally {
             c.disconnect()
         }
@@ -91,9 +97,18 @@ class AnimeOnline2LiveTest {
         val sr2 = AnimeOnline2Parser.parseSearchPage(getText(AnimeOnline2Parser.buildSearchUrl("a", 2)), 2)
         assertTrue("Search 'a' page 2 empty", sr2.items.isNotEmpty())
 
-        val wpImg = home.latestAnime.firstNotNullOfOrNull { it.posterUrl }
-        assertNotNull("Expected anime poster URL", wpImg)
-        checkImageReachable(wpImg!!)
+        val samplePosters = listOfNotNull(
+            home.latestEpisodes.firstNotNullOfOrNull { it.posterUrl },
+            home.featuredOnAir.firstNotNullOfOrNull { it.posterUrl },
+            home.latestAnime.firstNotNullOfOrNull { it.posterUrl },
+            home.latestMovies.firstNotNullOfOrNull { it.posterUrl },
+            home.seasons.firstNotNullOfOrNull { it.posterUrl },
+            sr1.items.firstNotNullOfOrNull { it.posterUrl },
+        )
+        assertEquals("Expected sample posters across all sections", 6, samplePosters.size)
+        for (imgUrl in samplePosters) {
+            checkImageReachable(imgUrl)
+        }
     }
 
     @Test

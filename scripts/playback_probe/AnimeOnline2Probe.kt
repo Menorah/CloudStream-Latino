@@ -9,13 +9,22 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import coil3.SingletonImageLoader
+import coil3.network.NetworkHeaders
+import coil3.network.httpHeaders
+import coil3.request.ErrorResult
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
 import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.MovieLoadResponse
+import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import kotlinx.coroutines.*
+import java.io.File
+import java.net.URI
 
 // Added to a temporary build only; never part of the published plugin.
 object PlaybackProbe {
@@ -24,9 +33,9 @@ object PlaybackProbe {
             try {
                 delay(4000)
                 withTimeout(600_000) {
-                    val provider = AnimeOnline2Provider()
+                    val provider = AnimeOnline2Provider(context)
                     val started = android.os.SystemClock.elapsedRealtime()
-                    val sections = withContext(Dispatchers.IO) {
+                    val homePages = withContext(Dispatchers.IO) {
                         coroutineScope {
                             provider.mainPage.map { section ->
                                 async {
@@ -34,14 +43,14 @@ object PlaybackProbe {
                                         1,
                                         MainPageRequest(section.name, section.data, section.horizontalImages),
                                     )
-                                    section.name to page.items.flatMap { it.list }.size
+                                    section.name to page.items.flatMap { it.list }
                                 }
                             }.awaitAll()
                         }
                     }
                     val elapsed = android.os.SystemClock.elapsedRealtime() - started
-                    val emptySections = sections.filter { it.second == 0 }.map { it.first }
-                    Log.i("CSPlaybackProbe", "home sections=${sections.size} empty=$emptySections elapsedMs=$elapsed")
+                    val emptySections = homePages.filter { it.second.isEmpty() }.map { it.first }
+                    Log.i("CSPlaybackProbe", "home sections=${homePages.size} empty=$emptySections elapsedMs=$elapsed")
                     check(emptySections.isEmpty()) { "empty home sections: $emptySections" }
                     check(elapsed < 45_000) { "home too slow: $elapsed ms" }
 
@@ -50,8 +59,11 @@ object PlaybackProbe {
                     val searchP2 = provider.search("a", 2) ?: error("null search a page 2")
                     check(searchP2.items.isNotEmpty()) { "empty search a page 2" }
 
-                    val latestEpListing = provider.getMainPage(1, MainPageRequest("Últimos Episodios", "archive:/episodio/", false))
-                    val firstEpCardUrl = latestEpListing.items.first().list.first().url
+                    val latestEpCards = homePages.first { it.first == "Últimos Episodios" }.second
+                    val animeCards = homePages.first { it.first == "Animes" }.second
+                    val movieCards = homePages.first { it.first == "Películas" }.second
+
+                    val firstEpCardUrl = latestEpCards.first().url
                     val epParentLoad = provider.load(firstEpCardUrl) as? AnimeLoadResponse
                         ?: error("latest episode load failed for $firstEpCardUrl")
                     val epList1 = epParentLoad.episodes[DubStatus.Subbed].orEmpty()
@@ -73,6 +85,45 @@ object PlaybackProbe {
                         ?: error("dragon ball daima load failed")
                     val dbdEp1 = dbdLoad.episodes[DubStatus.Subbed].orEmpty().firstOrNull()
                         ?: error("dragon ball daima episodes empty")
+
+                    // Verify real Coil image loading using the exact SearchResponse / LoadResponse posterHeaders
+                    val posterChecks = mutableListOf<Triple<String, String?, Map<String, String>?>>()
+                    latestEpCards.take(3).forEachIndexed { i, c ->
+                        posterChecks.add(Triple("home-ep-$i", c.posterUrl, c.posterHeaders))
+                    }
+                    animeCards.take(3).forEachIndexed { i, c ->
+                        posterChecks.add(Triple("home-anime-$i", c.posterUrl, c.posterHeaders))
+                    }
+                    movieCards.take(3).forEachIndexed { i, c ->
+                        posterChecks.add(Triple("home-movie-$i", c.posterUrl, c.posterHeaders))
+                    }
+                    searchNaruto.items.take(3).forEachIndexed { i, c ->
+                        posterChecks.add(Triple("search-naruto-$i", c.posterUrl, c.posterHeaders))
+                    }
+                    posterChecks.add(Triple("load-epParent-poster", epParentLoad.posterUrl, epParentLoad.posterHeaders))
+                    posterChecks.add(Triple("load-epParent-bg", epParentLoad.backgroundPosterUrl, epParentLoad.posterHeaders))
+                    posterChecks.add(Triple("load-epParent-ep0", epList1.firstOrNull()?.posterUrl, null))
+                    posterChecks.add(Triple("load-movie-poster", movieLoad.posterUrl, movieLoad.posterHeaders))
+                    posterChecks.add(Triple("load-dbd-poster", dbdLoad.posterUrl, dbdLoad.posterHeaders))
+
+                    for ((label, pUrl, pHeaders) in posterChecks) {
+                        verifyCoilImage(context, label, pUrl, pHeaders)
+                    }
+
+                    // Also exercise the hidden WebView poster cache fallback end-to-end and verify Coil loads file://
+                    val siteImg = animeCards.firstNotNullOfOrNull { c ->
+                        c.posterUrl?.takeIf { it.startsWith("http") && AnimeOnline2Parser.isSiteUrl(it) }
+                    }
+                    if (siteImg != null) {
+                        val cachedFileUri = provider.testCachePosterViaWebView(siteImg)
+                            ?: error("WebView poster cache returned null for $siteImg")
+                        check(cachedFileUri.startsWith("file:")) { "Expected file:// URI, got $cachedFileUri" }
+                        val f = File(URI(cachedFileUri))
+                        check(f.exists() && f.length() > 500) { "Cached WebView poster file invalid: $cachedFileUri" }
+                        verifyCoilImage(context, "webview-fallback-file", cachedFileUri, null)
+                        Log.i("CSPlaybackProbe", "PASS webview poster fallback (${f.length()} bytes)")
+                    }
+                    Log.i("CSPlaybackProbe", "PASS coil posters=${posterChecks.size}")
 
                     val targets = listOf(
                         "latest ep (${firstEpCardUrl.substringAfter("/episodio/").trimEnd('/')})" to epList1.last().data,
@@ -161,6 +212,38 @@ object PlaybackProbe {
             player.release()
             surface.release()
             texture.release()
+        }
+    }
+
+    private suspend fun verifyCoilImage(
+        context: Context,
+        label: String,
+        url: String?,
+        headers: Map<String, String>?,
+    ) {
+        check(!url.isNullOrBlank()) { "Poster URL missing for $label" }
+        val builder = ImageRequest.Builder(context)
+            .data(url)
+            .memoryCachePolicy(coil3.request.CachePolicy.DISABLED)
+            .diskCachePolicy(coil3.request.CachePolicy.DISABLED)
+        if (url.startsWith("http", ignoreCase = true)) {
+            builder.httpHeaders(
+                NetworkHeaders.Builder().also { hb ->
+                    hb["User-Agent"] = USER_AGENT
+                    headers?.forEach { (k, v) -> hb[k] = v }
+                }.build()
+            )
+        }
+        val result = SingletonImageLoader.get(context).execute(builder.build())
+        when (result) {
+            is SuccessResult -> {
+                check(result.image.width >= 50 && result.image.height >= 50) {
+                    "Coil image too small for $label ($url): ${result.image.width}x${result.image.height}"
+                }
+            }
+            is ErrorResult -> {
+                error("Coil failed for $label ($url): ${result.throwable.javaClass.simpleName}: ${result.throwable.message}")
+            }
         }
     }
 }

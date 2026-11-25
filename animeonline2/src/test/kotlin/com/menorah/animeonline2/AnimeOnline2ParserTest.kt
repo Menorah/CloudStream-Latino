@@ -36,6 +36,23 @@ class AnimeOnline2ParserTest {
             "https://ww4.animeonline.ninja/search/page/2/?s=naruto",
             AnimeOnline2Parser.buildSearchUrl("naruto", 2),
         )
+        assertEquals(
+            "https://ww4.animeonline.ninja/wp-content/uploads/2026/01/my%20poster.jpg",
+            AnimeOnline2Parser.normalizeImageUrl("http://ww3.animeonline.ninja/wp-content/uploads/2026/01/my poster.jpg"),
+        )
+        assertEquals(
+            "https://image.tmdb.org/t/p/w500/abc.jpg",
+            AnimeOnline2Parser.normalizeImageUrl("http://image.tmdb.org/t/p/w500/abc.jpg"),
+        )
+        assertNull(AnimeOnline2Parser.normalizeImageUrl("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"))
+
+        val srcsetHtml = org.jsoup.Jsoup.parse(
+            """<img src="data:image/svg+xml,foo" data-srcset="//www1.animeonline.ninja/wp-content/uploads/a.webp 185w, https://ww4.animeonline.ninja/wp-content/uploads/b.webp 300w" />""",
+        ).selectFirst("img")
+        assertEquals(
+            "https://ww4.animeonline.ninja/wp-content/uploads/a.webp",
+            AnimeOnline2Parser.extractImgUrl(srcsetHtml),
+        )
     }
 
     @Test

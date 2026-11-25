@@ -161,23 +161,48 @@ object AnimeOnline2Parser {
             (html.contains("<title>Just a moment", ignoreCase = true) && html.contains("cloudflare", ignoreCase = true))
     }
 
+    fun normalizeImageUrl(rawUrl: String?): String? {
+        var clean = rawUrl?.trim().orEmpty()
+        if (clean.isEmpty() || clean.startsWith("data:", ignoreCase = true)) return null
+        if (clean.contains(" ")) {
+            clean = clean.replace(" ", "%20")
+        }
+        val abs = when {
+            clean.startsWith("//") -> "https:$clean"
+            clean.startsWith("/") -> "$BASE$clean"
+            clean.startsWith("http://") || clean.startsWith("https://") -> clean
+            else -> "$BASE/${clean.trimStart('/')}"
+        }
+        return when {
+            siteHostRegex.containsMatchIn(abs) || anySubdomainAnimeOnlineRegex.containsMatchIn(abs) ->
+                abs.replace(anySubdomainAnimeOnlineRegex, BASE)
+                    .replaceFirst("http://", "https://", ignoreCase = true)
+            abs.startsWith("http://", ignoreCase = true) &&
+                !abs.startsWith("http://127.0.0.1", ignoreCase = true) &&
+                !abs.startsWith("http://localhost", ignoreCase = true) ->
+                "https://" + abs.substring(7)
+            else -> abs
+        }
+    }
+
     fun extractImgUrl(img: Element?): String? {
         if (img == null) return null
+        val srcsetUrl = listOf(img.attr("data-srcset"), img.attr("srcset"))
+            .firstNotNullOfOrNull { set ->
+                set.split(",")
+                    .mapNotNull { entry -> entry.trim().split(Regex("\\s+")).firstOrNull()?.takeIf { it.isNotBlank() } }
+                    .firstOrNull { !it.startsWith("data:", ignoreCase = true) }
+            }
         val candidates = listOf(
             img.attr("data-src"),
             img.attr("data-lazy-src"),
             img.attr("data-original"),
             img.attr("src"),
+            srcsetUrl.orEmpty(),
         )
         for (raw in candidates) {
-            val clean = raw.trim()
-            if (clean.isNotEmpty() && !clean.startsWith("data:", ignoreCase = true)) {
-                return when {
-                    clean.startsWith("//") -> "https:$clean"
-                    clean.startsWith("/") -> "$BASE$clean"
-                    else -> clean
-                }
-            }
+            val normalized = normalizeImageUrl(raw)
+            if (normalized != null) return normalized
         }
         return null
     }
@@ -436,10 +461,9 @@ object AnimeOnline2Parser {
             ?: "Anime"
 
         val posterUrl = extractImgUrl(doc.selectFirst(".sheader .poster img"))
-            ?: doc.selectFirst("meta[property='og:image']")?.attr("content")?.trim()?.ifBlank { null }
+            ?: normalizeImageUrl(doc.selectFirst("meta[property='og:image']")?.attr("content"))
 
-        val backdropUrl = doc.selectFirst("#dt_galery a[href], .g-item a[href]")?.attr("href")
-            ?.trim()?.ifBlank { null }
+        val backdropUrl = normalizeImageUrl(doc.selectFirst("#dt_galery a[href], .g-item a[href]")?.attr("href"))
             ?: posterUrl
 
         val plotParagraphs = doc.select("#info .wp-content p")
