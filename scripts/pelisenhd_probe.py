@@ -2,6 +2,7 @@
 import http.cookiejar
 import json
 import re
+import subprocess
 import traceback
 import urllib.error
 import urllib.parse
@@ -50,12 +51,44 @@ try:
     action = urllib.parse.urljoin(cur, form["action"])
     st, cur2, hdrs2, body2 = req_url(action, data=inputs, referer=cur)
 
-    emit("1_ft_body_tail", {"len": len(body2), "p1": body2[1400:4600], "p2": body2[4600:7800]})
+    emit("1_body_tail", {"tail": body2[4800:]})
 
     _, _, _, js_body = req_url("https://financialtrust.info/static/js/app.packed.js?v=8.3", referer=cur2)
-    emit("2_app_js", {"len": len(js_body), "js": js_body[:3200]})
-    if len(js_body) > 3200:
-        emit("3_app_js2", {"js": js_body[3200:6400]})
+    # Decode safely in Node by capturing arguments passed to eBi(...) or Function(...)
+    harness = """
+const fs = require('fs');
+const code = fs.readFileSync('/tmp/app.packed.js', 'utf8');
+const origFunction = global.Function;
+let captured = [];
+const window = global;
+const document = { cookie: '', addEventListener() {}, getElementById() { return {}; }, querySelector() { return null; } };
+const navigator = { userAgent: 'Mozilla/5.0' };
+const location = { href: 'https://financialtrust.info', hostname: 'financialtrust.info' };
+String.prototype.constructor = function(...args) {
+  if (args.length === 1 && typeof args[0] === 'string' && args[0].includes('arguments')) {
+    const fn = origFunction(...args);
+    return function(...inner) {
+      const out = fn(...inner);
+      captured.push(out);
+      return out;
+    };
+  }
+  if (args.length === 1 && typeof args[0] === 'string' && args[0].length > 200) {
+    captured.push(args[0]);
+    return function() {};
+  }
+  return origFunction(...args);
+};
+try { eval(code); } catch (e) { console.error(e); }
+console.log(JSON.stringify(captured));
+"""
+    open("/tmp/app.packed.js", "w").write(js_body)
+    open("/tmp/decode.js", "w").write(harness)
+    dec = subprocess.check_output(["node", "/tmp/decode.js"], text=True)
+    arr = json.loads(dec)
+    full_decoded = "\n---\n".join(arr)
+    for idx in range(0, min(len(full_decoded), 15000), 3000):
+        emit(f"2_dec_{idx//3000}", {"len": len(full_decoded), "chunk": full_decoded[idx:idx+3000]})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
