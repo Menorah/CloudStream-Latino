@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
-import re
+import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 from bs4 import BeautifulSoup
@@ -23,61 +24,52 @@ def fetch(url, referer=None):
     if referer:
         headers["Referer"] = referer
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=25) as r:
-        return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
 
 
-# 1. Inspect homepage HTML classes, structure, scripts, nav, cards, banners
-st, final_u, hdrs, home_html = fetch("https://pelisenhd.org/")
-s = BeautifulSoup(home_html, "html.parser")
-scripts = [sc.get("src") for sc in s.select("script[src]")]
-nav_links = [[a.get_text(" ", strip=True), a.get("href")] for a in s.select("header a[href], nav a[href]")][:40]
-cards = s.select("article, .movie-card, .card, [class*='card'], [class*='item'], [class*='post']")
-card_samples = []
-for c in cards[:8]:
-    a = c.select_one("a[href]")
-    card_samples.append({
-        "tag": c.name,
-        "cls": c.get("class"),
-        "href": a.get("href") if a else None,
-        "html": str(c)[:380],
+try:
+    st, final_u, hdrs, home_html = fetch("https://pelisenhd.org/")
+    s = BeautifulSoup(home_html, "html.parser")
+    scripts = [sc.get("src") for sc in s.select("script[src]")]
+    nav_links = [[a.get_text(" ", strip=True), a.get("href")] for a in s.select("header a[href], nav a[href]")][:40]
+    cards = s.select("article, .movie-card, .card, [class*='card'], [class*='item'], [class*='post']")
+    card_samples = []
+    for c in cards[:6]:
+        a = c.select_one("a[href]")
+        card_samples.append({
+            "tag": c.name,
+            "cls": c.get("class"),
+            "href": a.get("href") if a else None,
+            "html": str(c)[:350],
+        })
+    emit("1_home", {
+        "status": st,
+        "final": final_u,
+        "title": s.title.get_text(" ", strip=True) if s.title else "",
+        "cf": "just a moment" in home_html.lower() or "cf-turnstile" in home_html.lower(),
+        "scripts": scripts[:15],
+        "nav": nav_links[:25],
+        "card_samples": card_samples,
     })
-emit("1_home", {"status": st, "final": final_u, "scripts": scripts[:20], "nav": nav_links, "card_samples": card_samples})
 
-# 2. Inspect movie HTML structure + download links + scripts
-movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
-_, _, _, m_html = fetch(movie_url)
-ms = BeautifulSoup(m_html, "html.parser")
-dl_anchors = [[a.get_text(" ", strip=True), a.get("href"), a.get("class"), str(a.parent)[:200]] for a in ms.select("a[href*='financialtrust'], a[href*='hdpastes'], a[href*='paste'], a[href*='mega'], a[href*='mediafire'], a[href*='1fichier'], a[href*='pixeldrain'], [class*='download'] a, [class*='enlace'] a")]
-emit("2_movie", {
-    "meta_og": [(m.get("property"), m.get("content")) for m in ms.select("meta[property^='og:']")],
-    "iframe": [i.get("src") or i.get("data-src") for i in ms.select("iframe")],
-    "dl_anchors": dl_anchors[:15],
-    "trailer_html": str(ms.select_one("[class*='trailer'], [id*='trailer'], [data-youtube], [data-trailer]"))[:400],
-})
+    movie_url = "https://pelisenhd.org/pelicula-240525/el-camino-del-pequeno-guerrero-web-dl-4k-uhd-hdr10-dv-2026/"
+    mst, _, _, m_html = fetch(movie_url)
+    ms = BeautifulSoup(m_html, "html.parser")
+    dl_anchors = [[a.get_text(" ", strip=True), a.get("href"), a.get("class")] for a in ms.select("a[href*='financialtrust'], a[href*='hdpastes'], a[href*='paste'], a[href*='mega'], a[href*='mediafire'], a[href*='1fichier'], a[href*='pixeldrain'], [class*='download'] a, [class*='enlace'] a")]
+    emit("2_movie", {
+        "status": mst,
+        "title": ms.title.get_text(" ", strip=True) if ms.title else "",
+        "dl_anchors": dl_anchors[:15],
+        "iframe": [i.get("src") or i.get("data-src") for i in ms.select("iframe")],
+    })
 
-# 3. Inspect series HTML structure + seasons/episodes DOM + AJAX/JS
-series_url = "https://pelisenhd.org/series-tv-121216/el-senor-de-los-anillos-los-anillos-de-poder/"
-_, _, _, s_html = fetch(series_url)
-ss = BeautifulSoup(s_html, "html.parser")
-season_tabs = [str(el)[:300] for el in ss.select("[data-season], [class*='season'], [class*='temporada'], .tab-content")][:6]
-ep_links = [[a.get_text(" ", strip=True), a.get("href"), a.get("data-season")] for a in ss.select("a[href*='episodio-']")]
-emit("3_series", {"season_tabs": season_tabs, "ep_links": ep_links})
-
-# 4. Inspect older / random movies + search API to see if any posts have streaming vs DDL
-for q in ["guerrero", "odisea", "matrix"]:
-    try:
-        _, _, _, sr = fetch(f"https://pelisenhd.org/wp-json/api_v1/buscar?s={urllib.parse.quote(q)}")
-        emit(f"4_api_{q}", {"raw": sr[:700]})
-        break
-    except Exception as e:
-        emit(f"4_api_err_{q}", {"err": str(e)})
-
-# 5. Test financialtrust.info link BOTH with urllib (Referer=movie_url) AND look at raw HTML/headers
-ft_links = [a[1] for a in dl_anchors if a[1] and "financialtrust" in a[1]]
-if ft_links:
-    ft_url = ft_links[0]
-    try:
+    ft_links = [a[1] for a in dl_anchors if a[1] and "financialtrust" in a[1]]
+    if ft_links:
+        ft_url = ft_links[0]
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
                 return None
@@ -88,15 +80,6 @@ if ft_links:
             emit("5_ft_raw", {"code": resp.status, "headers": dict(resp.headers), "body": resp.read().decode("utf-8", "replace")[:2000]})
         except urllib.error.HTTPError as he:
             emit("5_ft_redir", {"code": he.code, "headers": dict(he.headers), "body": he.read().decode("utf-8", "replace")[:2000]})
-    except Exception as e:
-        emit("5_ft_err", {"err": str(e)})
-
-# 6. Also fetch movie raw JS scripts (inline or revomovies js) to see how download/VIP/search work
-rev_js = [u for u in scripts if u and "revomovies" in u]
-if rev_js:
-    try:
-        _, _, _, js_txt = fetch(urllib.parse.urljoin("https://pelisenhd.org/", rev_js[0]), referer="https://pelisenhd.org/")
-        emit("6_theme_js", {"url": rev_js[0], "len": len(js_txt), "sample": js_txt[:2200]})
-    except Exception as e:
-        emit("6_theme_js_err", {"err": str(e)})
+except Exception as e:
+    emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
