@@ -109,7 +109,7 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     }
 
     private suspend fun fetchOnce(url: String, referer: String): Document {
-        val response = site.getHtml(url, PAGE_HEADERS + ("Referer" to referer))
+        val response = site.get(url, PAGE_HEADERS + ("Referer" to referer))
         if (!response.isSuccessful) {
             throw IllegalStateException(
                 "PeliCineHD no respondió correctamente (HTTP ${response.code}), ni con el cliente " +
