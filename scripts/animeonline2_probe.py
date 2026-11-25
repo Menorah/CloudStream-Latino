@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import base64
 import json
 import re
 import traceback
@@ -17,76 +16,65 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3850]}", flush=True)
 
 
-def unpack_packer(p, a, c, k):
-    def base_n(num, b):
-        chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        return ("" if num < b else base_n(num // b, b)) + chars[num % b]
-    d = {}
-    for i in range(c - 1, -1, -1):
-        key = base_n(i, a)
-        d[key] = k[i] if i < len(k) and k[i] else key
-    return re.sub(r"\b\w+\b", lambda m: d.get(m.group(0), m.group(0)), p)
-
-
 try:
-    # 1. Inspect article.item HTML in /temporada/ and /episodio/ and /online/ and /pelicula/
-    samples = {}
-    for path in ("/temporada/", "/episodio/", "/online/", "/pelicula/"):
-        r = s.get("https://ww4.animeonline.ninja" + path, timeout=20)
-        sp = BeautifulSoup(r.text, "html.parser")
-        art = sp.select_one("article.item")
-        samples[path] = str(art)[:900] if art else None
-    emit("1_article_items", samples)
+    # 1. Search .result-item HTML + Episode page parent series link & breadcrumb + .sheader on /episodio/
+    rs = s.get("https://ww4.animeonline.ninja/?s=naruto", timeout=20)
+    sps = BeautifulSoup(rs.text, "html.parser")
+    res_items = [str(el)[:700] for el in sps.select(".result-item article")[:3]]
 
-    # 2. Decode gupload.site scripts 4, 5, 8 (XOR key "G7#kP!2qZxV9mRwL")
-    rg = s.get("https://gupload.site/data/e/14506ff102c4", headers={"Referer": "https://saidochesto.top/"}, timeout=15)
-    spg = BeautifulSoup(rg.text, "html.parser")
-    decoded_g = []
-    xor_key = b"G7#kP!2qZxV9mRwL"
-    for sc in spg.select("script"):
-        st = sc.string or ""
-        if "~" in st and len(st) > 50:
-            # find strings containing ~
-            for m in re.findall(r'["\']([A-Za-z0-9+/=_-]+~[A-Za-z0-9+/=_-]+)["\']', st):
-                try:
-                    b = base64.b64decode(m.split("~", 1)[1])
-                    dec = bytes(b[i] ^ xor_key[i % len(xor_key)] for i in range(len(b))).decode("utf-8", errors="replace")
-                    decoded_g.append(dec[:600])
-                except Exception as ex:
-                    decoded_g.append("ERR:" + str(ex))
-            decoded_g.append("RAW_TAIL:" + st[-500:])
-    emit("2_gupload_decoded", decoded_g)
+    rep = s.get("https://ww4.animeonline.ninja/episodio/radiant-cap-1/", timeout=20)
+    spe = BeautifulSoup(rep.text, "html.parser")
+    ep_meta = {
+        "h1": (spe.select_one(".sheader .data h1") or spe.new_tag("x")).get_text(strip=True),
+        "info_h1": (spe.select_one("#info h1, #info h2, .epih1, .pag_episodes") or spe.new_tag("x")).get_text(" ", strip=True),
+        "pag_eps": [(a.get_text(" ", strip=True), a.get("href")) for a in spe.select(".pag_episodes a[href], .breadcrumb a[href], .dt_breadcrumb a[href], #single a[href*='/online/']")],
+        "poster": [dict(img.attrs) for img in spe.select("#single .poster img, .sheader .poster img, meta[property='og:image']")][:4],
+    }
+    emit("1_search_and_ep", {"res_items": res_items, "ep_meta": ep_meta})
 
-    # 3. peeplayer script 23 full content
+    # 2. Check n1mwq.org (ByseSX) JS bundle to see exact playback API endpoint!
+    rn1 = s.get("https://n1mwq.org/yw65/swxub14kn31t", headers={"Referer": "https://filemoon0.top/"}, timeout=15)
+    spn = BeautifulSoup(rn1.text, "html.parser")
+    n1_assets = [sc.get("src") for sc in spn.select("script[src]")]
+    byse_hints = []
+    for src in n1_assets:
+        u = src if src.startswith("http") else ("https://n1mwq.org" + ("" if src.startswith("/") else "/") + src)
+        rj = s.get(u, timeout=15)
+        for m in re.findall(r'[^\n;]{0,60}/api/videos/[^\n;]{0,120}', rj.text):
+            byse_hints.append(m[:180])
+        for m in re.findall(r'playback[^\n;]{0,120}', rj.text):
+            if "embed" in m or "api" in m or "fetch" in m:
+                byse_hints.append(m[:180])
+    emit("2_byse_js_api", {"assets": n1_assets, "hints": byse_hints[:12]})
+
+    # 3. Check peeplayer.com /e/ script[14]/[16] and /psz/ or /player/ URLs for stream URL
     rp = s.get("https://peeplayer.com/e/sbm3uJCJZByS", headers={"Referer": "https://peeplayer.com/v/sbm3uJCJZByS"}, timeout=15)
     spp = BeautifulSoup(rp.text, "html.parser")
-    s23 = ""
-    for sc in spp.select("script"):
-        st = sc.string or ""
-        if "fetch(" in st and "Math.random" in st:
-            s23 = st
-            break
-    emit("3_peeplayer_s23", {"len": len(s23), "p1": s23[:3000]})
-    if len(s23) > 3000:
-        emit("3_peeplayer_s23_p2", {"p2": s23[3000:6500], "p3": s23[6500:]})
+    pee_scripts = []
+    for idx, sc in enumerate(spp.select("script")):
+        st = (sc.string or "").strip()
+        if idx in (14, 16, 18, 20, 24) or ("videojs" in st.lower()) or ("m3u8" in st.lower()) or ("sources" in st.lower()) or ("player_1" in st):
+            pee_scripts.append({"i": idx, "len": len(st), "body": st[:800]})
+    emit("3_peeplayer_playerjs", {"scripts": pee_scripts[:6]})
 
-    # 4. uqload.vc /dl unpacked + n1mwq.org ByseSX embed frame & api test
-    ruq = s.post("https://uqload.vc/dl", data={"op": "embed", "file_code": "yuws7b11flrx", "auto": "1", "referer": "https://saidochesto.top/"}, headers={"Referer": "https://uqload.vc/e/yuws7b11flrx"}, timeout=15)
-    m_pack = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", ruq.text, re.S)
-    uq_unpacked = unpack_packer(m_pack.group(1), int(m_pack.group(2)), int(m_pack.group(3)), m_pack.group(4).split("|")) if m_pack else None
-
-    # ByseSX check: test GET /api/videos/.../embed/playback on BOTH filemoon0.top and n1mwq.org (POST vs GET) and inspect n1mwq frame HTML
-    rn1 = s.get("https://n1mwq.org/yw65/swxub14kn31t", headers={"Referer": "https://filemoon0.top/"}, timeout=15)
-    rfm_pb = s.get("https://filemoon0.top/api/videos/swxub14kn31t/embed/playback", headers={"Referer": "https://filemoon0.top/e/swxub14kn31t"}, timeout=15)
-    rn1_pb_get = s.get("https://n1mwq.org/api/videos/swxub14kn31t/embed/playback", headers={"Referer": "https://n1mwq.org/yw65/swxub14kn31t", "x-embed-parent": "https://filemoon0.top/e/swxub14kn31t"}, timeout=15)
-    rn1_pb_post = s.post("https://n1mwq.org/api/videos/swxub14kn31t/embed/playback", headers={"Referer": "https://n1mwq.org/yw65/swxub14kn31t", "x-embed-parent": "https://filemoon0.top/e/swxub14kn31t"}, timeout=15)
-    emit("4_uqload_and_byse", {
-        "uq_unpacked": uq_unpacked[:1200] if uq_unpacked else None,
-        "n1_html": rn1.text[:500],
-        "fm_pb_get": (rfm_pb.status_code, rfm_pb.text[:300]),
-        "n1_pb_get": (rn1_pb_get.status_code, rn1_pb_get.text[:300]),
-        "n1_pb_post": (rn1_pb_post.status_code, rn1_pb_post.text[:300]),
-    })
+    # 4. Also check luluvid.com or any other active host on another anime episode (e.g. Dragon Ball Daima 1 / Solo Leveling / Naruto)
+    r_saido_old = s.get("https://ww4.animeonline.ninja/episodio/dragon-ball-daima-cap-1/", timeout=20)
+    sp_dbd = BeautifulSoup(r_saido_old.text, "html.parser")
+    li = sp_dbd.select_one("#playeroptionsul li[data-post]:not(.dooplay_player_option_trailer)")
+    dbd_hosts = {}
+    if li:
+        rj = s.get(f"https://ww4.animeonline.ninja/wp-json/dooplayer/v1/post/{li.get('data-post')}?type={li.get('data-type')}&source={li.get('data-nume')}", timeout=15).json()
+        su = rj.get("embed_url")
+        if su:
+            rs_dbd = s.get(su, headers={"Referer": "https://ww4.animeonline.ninja/"}, timeout=15)
+            for opt in BeautifulSoup(rs_dbd.text, "html.parser").select(".OptionsLangDisp li[onclick]"):
+                m = re.search(r"go_to_player\('([^']+)'\)", opt.get("onclick", ""))
+                if m:
+                    pu = m.group(1)
+                    h = pu.split("/")[2]
+                    if h not in dbd_hosts:
+                        dbd_hosts[h] = pu
+    emit("4_dbd_ep1_hosts", dbd_hosts)
 
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:2000]})
