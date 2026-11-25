@@ -77,7 +77,7 @@ class PeliCineHDRealMarkupTest {
         assertEquals(9486, PeliCineHDMarkup.seasonsPostId(page))
 
         val episodes = PeliCineHDMarkup.episodes(page, 1)
-        assertEquals(11, episodes.size)
+        assertEquals(episodes.joinToString { "${it.season}x${it.number}" }, 11, episodes.size)
         assertEquals(1, episodes.first().number)
         assertEquals(11, episodes.last().number)
         assertTrue(episodes.all { it.season == 1 })

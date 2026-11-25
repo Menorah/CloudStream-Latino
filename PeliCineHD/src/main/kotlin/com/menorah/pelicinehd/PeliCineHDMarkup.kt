@@ -253,7 +253,7 @@ internal object PeliCineHDMarkup {
 
     /** Episodes rendered in the page (the season the site shows by default). */
     fun episodes(document: Document, seasonFallback: Int = 1): List<EpisodeItem> =
-        document.select("ul#episode_by_temp article.post.episodes, article.post.episodes")
+        document.select("article.post.episodes")
             .mapNotNull { article ->
                 val link = article.selectFirst("a.lnk-blk[href]") ?: return@mapNotNull null
                 val url = absolute(link.attr("href"), article.baseUri()) ?: return@mapNotNull null
