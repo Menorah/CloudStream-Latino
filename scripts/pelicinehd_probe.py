@@ -38,83 +38,41 @@ def http_get(url, headers, max_bytes=500000):
     req = urllib.request.Request(url, headers={"User-Agent": UA, **headers})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            body = r.read(max_bytes)
-            return r.status, r.geturl(), dict(r.headers), body
+            return r.status, r.geturl(), dict(r.headers), r.read(max_bytes)
     except urllib.error.HTTPError as e:
         return e.code, e.geturl(), dict(e.headers or {}), e.read(500)
     except Exception as e:
         return -1, url, {}, str(e).encode()
 
 
-def test_stream(label, cand, final_url):
-    origin = f"{urllib.parse.urlsplit(final_url).scheme}://{urllib.parse.urlsplit(final_url).netloc}"
-    hdrs = {"Referer": origin + "/", "Origin": origin}
-    code, m_url, hdr, body = http_get(cand, hdrs)
-    txt = body.decode("utf-8", "replace")
-    res = {"url_host": urllib.parse.urlsplit(cand).netloc, "path_prefix": urllib.parse.urlsplit(cand).path[:30], "code": code, "ct": hdr.get("Content-Type") or hdr.get("content-type"), "is_m3u": txt.lstrip().startswith("#EXTM3U"), "head": txt[:200]}
-    if res["is_m3u"]:
-        lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not ln.startswith("#")]
-        if lines:
-            child = urllib.parse.urljoin(m_url, lines[0])
-            ccode, curl2, chdr, cbody = http_get(child, hdrs)
-            ctxt = cbody.decode("utf-8", "replace")
-            res["child_code"] = ccode
-            res["child_m3u"] = ctxt.lstrip().startswith("#EXTM3U")
-            if res["child_m3u"]:
-                segs = [ln.strip() for ln in ctxt.splitlines() if ln.strip() and not ln.startswith("#")]
-                if segs:
-                    seg = urllib.parse.urljoin(curl2, segs[0])
-                    scode, _, _, sbody = http_get(seg, {**hdrs, "Range": "bytes=0-1023"})
-                    res["seg_code"] = scode
-                    res["seg_len"] = len(sbody)
-                    res["seg_sync"] = (len(sbody) > 0 and sbody[0] == 0x47)
-            elif "#EXT" not in ctxt and ccode == 200:
-                res["child_is_seg_len"] = len(cbody)
-    return res
-
-
 def probe():
-    from curl_cffi import requests as cffi_req
     out = {}
     for name, url in [
         ("morencius", "https://morencius.com/embed/15tgiexsgp7h"),
         ("minochinos", "https://minochinos.com/embed/td9hewhsozc5"),
-        ("minochinos_2", "https://minochinos.com/embed/8ky4mil4vy79"),
     ]:
-        p_code, p_url, p_hdr, p_body = http_get(url, {"Referer": BASE + "/"})
-        p_txt = p_body.decode("utf-8", "replace")
-        p_unp = unpack_packed(p_txt) if p_code == 200 else None
-        if not p_unp:
-            r = cffi_req.get(url, impersonate="chrome131", headers={"Referer": BASE + "/"}, timeout=20)
-            final = str(r.url)
-            unp = unpack_packed(r.text) or ""
-            via = "cffi"
-        else:
-            final = p_url
-            unp = p_unp
-            via = "urllib"
-        links_m = re.search(r"var\s+links\s*=\s*(\{[^}]+\})", unp)
-        links = json.loads(links_m.group(1)) if links_m else {}
-        tracks_m = re.search(r"tracks\s*:\s*(\[.*?\])", unp)
-        streams = {}
-        for k, v in links.items():
-            full = urllib.parse.urljoin(final, v)
-            streams[k] = test_stream(k, full, final)
-        # Also test no-referer on hls2 just to see
-        if "hls2" in links:
-            nc, _, _, nb = http_get(links["hls2"], {})
-            streams["hls2_noref"] = {"code": nc, "is_m3u": nb.decode("utf-8", "replace").lstrip().startswith("#EXTM3U")}
+        _, final, _, body = http_get(url, {"Referer": BASE + "/"})
+        unp = unpack_packed(body.decode("utf-8", "replace")) or ""
+        links = json.loads(re.search(r"var\s+links\s*=\s*(\{[^}]+\})", unp).group(1))
+        origin = f"{urllib.parse.urlsplit(final).scheme}://{urllib.parse.urlsplit(final).netloc}"
+        hdrs = {"Referer": origin + "/", "Origin": origin}
+        h4 = urllib.parse.urljoin(final, links["hls4"])
+        c1, u1, _, b1 = http_get(h4, hdrs)
+        t1 = b1.decode("utf-8", "replace")
+        child = urllib.parse.urljoin(u1, [l.strip() for l in t1.splitlines() if l.strip() and not l.startswith("#")][0])
+        c2, u2, _, b2 = http_get(child, hdrs)
+        t2 = b2.decode("utf-8", "replace")
+        seg = urllib.parse.urljoin(u2, [l.strip() for l in t2.splitlines() if l.strip() and not l.startswith("#")][0])
+        c3, _, sh, b3 = http_get(seg, {**hdrs, "Range": "bytes=0-127"}, max_bytes=128)
         out[name] = {
-            "urllib_code": p_code,
-            "urllib_final": p_url,
-            "urllib_server": p_hdr.get("Server") or p_hdr.get("server"),
-            "via": via,
-            "final": final,
-            "keys": list(links.keys()),
-            "tracks": tracks_m.group(1)[:400] if tracks_m else "",
-            "streams": streams,
+            "hls4_child_head": t2[:450],
+            "seg_url_sample": seg[:120],
+            "seg_code": c3,
+            "seg_ct": sh.get("Content-Type") or sh.get("content-type"),
+            "seg_hex": b3[:48].hex(),
+            "seg_ascii": repr(b3[:48]),
         }
-    emit("hosts_detail", out)
+    emit("hls4_seg", out)
 
 
 try:
