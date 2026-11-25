@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import json
-import os
+import re
 import traceback
 import urllib.parse
 from bs4 import BeautifulSoup
@@ -15,7 +15,35 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3900]}", flush=True)
 
 
-async def run_patchright():
+def probe_hosts():
+    from curl_cffi import requests as cffi_req
+    out = {}
+    for name, url in [
+        ("morencius", "https://morencius.com/embed/15tgiexsgp7h"),
+        ("minochinos", "https://minochinos.com/embed/td9hewhsozc5"),
+        ("minochinos2", "https://minochinos.com/embed/8ky4mil4vy79"),
+    ]:
+        try:
+            r = cffi_req.get(url, impersonate="chrome131", headers={"Referer": BASE + "/"}, timeout=20)
+            doc = BeautifulSoup(r.text, "html.parser")
+            packed = [s.get_text()[:300] for s in doc.select("script") if "eval(function(p,a,c,k,e," in s.get_text()]
+            scripts = [s.get("src") for s in doc.select("script[src]")]
+            out[name] = {
+                "code": r.status_code,
+                "final": str(r.url),
+                "server": r.headers.get("server"),
+                "title": doc.title.get_text(strip=True) if doc.title else None,
+                "len": len(r.text),
+                "packed_count": len(packed),
+                "scripts": scripts[:10],
+                "head": r.text[:900],
+            }
+        except Exception as e:
+            out[name] = {"error": str(e)}
+    emit("0_host_probe", out)
+
+
+async def try_solve_cf_and_probe():
     from patchright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -24,34 +52,47 @@ async def run_patchright():
             headless=False,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
-        context = await browser.new_context(locale="es-ES")
+        context = await browser.new_context(locale="es-ES", viewport={"width": 1280, "height": 800})
         page = await context.new_page()
-        resp = await page.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
-        status = resp.status if resp else None
-        for _ in range(12):
+        await page.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
+
+        clicked = []
+        for step in range(8):
+            await asyncio.sleep(2.5)
             title = await page.title()
             html = await page.content()
-            if "Just a moment" not in title and len(html) > 15000:
+            if "Un momento" not in title and "Just a moment" not in title and len(html) > 20000:
                 break
-            await asyncio.sleep(2)
+            frames = [{"url": f.url, "name": f.name} for f in page.frames]
+            for f in page.frames:
+                if "challenges.cloudflare.com" in (f.url or ""):
+                    try:
+                        el = await f.frame_element()
+                        box = await el.bounding_box()
+                        if box and box["width"] > 0:
+                            cx = box["x"] + 28
+                            cy = box["y"] + box["height"] / 2
+                            await page.mouse.move(cx, cy, steps=12)
+                            await asyncio.sleep(0.2)
+                            await page.mouse.click(cx, cy)
+                            clicked.append({"step": step, "box": box})
+                    except Exception as ce:
+                        clicked.append({"step": step, "err": str(ce)})
 
         title = await page.title()
         html = await page.content()
         cookies = await context.cookies()
-        ua = await page.evaluate("navigator.userAgent")
-        emit("1_cf_status", {
-            "status": status,
+        emit("1_patchright_cf", {
             "title": title,
             "len": len(html),
+            "clicked": clicked[:4],
             "cookies": [c["name"] for c in cookies],
             "has_cf": any(c["name"] == "cf_clearance" for c in cookies),
-            "ua": ua,
-            "url": page.url,
-            "html_head": html[:900] if len(html) < 15000 else "",
+            "frames": [f.url[:120] for f in page.frames],
         })
-        if "Just a moment" in title or len(html) < 15000:
+        if "Un momento" in title or "Just a moment" in title or len(html) < 20000:
             await browser.close()
-            return
+            return False
 
         async def get_doc(path_or_url):
             url = urllib.parse.urljoin(BASE + "/", path_or_url)
@@ -61,47 +102,31 @@ async def run_patchright():
             return page.url, h, BeautifulSoup(h, "html.parser")
 
         doc = BeautifulSoup(html, "html.parser")
-        nav_links = []
-        for el in doc.select("header a[href], nav a[href], .Menu a[href], .menu a[href], aside a[href]"):
-            href = el.get("href", "")
-            txt = el.get_text(" ", strip=True)
-            if href and txt and (txt, href) not in nav_links:
-                nav_links.append((txt, href))
+        nav_links = [(el.get_text(" ", strip=True), el.get("href", "")) for el in doc.select("header a[href], nav a[href], .Menu a[href]")]
         sections = []
         for sec in doc.select("section, .Wdgt, main > div, .Top"):
             h = sec.select_one("h1, h2, h3, .Title")
             items = sec.select("li, article")
             if h or len(items) >= 2:
-                sections.append({
-                    "id": sec.get("id"), "cls": sec.get("class"),
-                    "h": h.get_text(" ", strip=True) if h else None,
-                    "n": len(items),
-                    "sample": str(items[0])[:650] if items else "",
-                })
-        emit("2_home", {"body_cls": doc.body.get("class") if doc.body else None, "nav": nav_links[:60], "sections": sections[:6]})
+                sections.append({"id": sec.get("id"), "cls": sec.get("class"), "h": h.get_text(" ", strip=True) if h else None, "n": len(items), "sample": str(items[0])[:650]})
+        emit("2_home", {"body_cls": doc.body.get("class") if doc.body else None, "nav": nav_links[:50], "sections": sections[:6]})
 
         cats = []
         for path in ["/peliculas/", "/peliculas/page/2/", "/series/", "/category/accion/", "/?s=avatar", "/page/2/?s=a", "/?s=zzzznotfound99999"]:
             u, _, cdoc = await get_doc(path)
             cards = cdoc.select("article, ul.MovieList > li, .TPost, .post, .item")
             pags = [str(p)[:450] for p in cdoc.select(".wp-pagenavi, .navigation, .pagination, nav.navigation, .nav-links")[:1]]
-            cats.append({
-                "path": path, "final": u, "n": len(cards),
-                "h1": cdoc.select_one("h1").get_text(" ", strip=True) if cdoc.select_one("h1") else None,
-                "card": str(cards[0])[:700] if cards else "",
-                "pag": pags,
-            })
-        emit("3_catalogs_a", cats[:3])
-        emit("4_catalogs_b", cats[3:])
+            cats.append({"path": path, "final": u, "n": len(cards), "card": str(cards[0])[:700] if cards else "", "pag": pags})
+        emit("3_cats_a", cats[:3])
+        emit("4_cats_b", cats[3:])
 
         mu, _, mdoc = await get_doc("/movies/star-wars-the-mandalorian-and-grogu/")
-        emit("5_movie_meta", {
+        emit("5_movie", {
             "url": mu,
-            "h1": [x.get_text(" ", strip=True) for x in mdoc.select("h1, h2.SubTitle")[:3]],
-            "meta": [str(x)[:250] for x in mdoc.select(".Image img, .TPostBg img, .Description, .Info, .Genre, .Cast, .Director, .Vote, .Qlty, .Year, .Time, [class*=tmdb], iframe[src*=youtube]")[:12]],
+            "meta": [str(x)[:250] for x in mdoc.select(".Image img, .TPostBg img, .Description, .Info, .Genre, .Cast, .Director, .Vote, .Qlty, .Year, .Time, iframe[src*=youtube]")[:12]],
             "players": [str(x)[:750] for x in mdoc.select("ul.aa-tbs-video, .TPlayerNv, .VideoPlayer, .TPlayer, [id^=options-], iframe")[:6]],
+            "single": str(mdoc.select_one("article.TPost.Single, main, .Single"))[:1600],
         })
-        emit("6_movie_dom", {"single": str(mdoc.select_one("article.TPost.Single, main, .Single"))[:3500]})
 
         su, _, sdoc = await get_doc("/series/one-piece/")
         ep_links = [a.get("href") for a in sdoc.select("a[href]") if "/episode" in (a.get("href") or "")]
@@ -118,7 +143,7 @@ async def run_patchright():
                 });
                 return {status: r.status, text: (await r.text()).slice(0, 1400)};
             }""", posts[0])
-        emit("7_series", {"url": su, "season_els": season_els, "ep_links": ep_links[:8], "posts": posts[:3], "ajax_s2": ajax_res})
+        emit("6_series", {"url": su, "season_els": season_els, "ep_links": ep_links[:8], "posts": posts[:3], "ajax_s2": ajax_res})
 
         eu, _, edoc = await get_doc("/episode/one-piece-1x1/")
         wrappers = []
@@ -132,15 +157,30 @@ async def run_patchright():
             wu, whtml, wdoc = await get_doc(wurl)
             h_ifr = [urllib.parse.urljoin(wu, i.get("src") or i.get("data-src")) for i in wdoc.select("iframe") if (i.get("src") or i.get("data-src"))]
             wrap_out.append({"w": wurl, "final": wu, "iframes": h_ifr, "html": whtml[:450] if not h_ifr else ""})
-        emit("8_ep_and_wrappers", {
-            "ep_url": eu,
-            "ep_players": [str(x)[:650] for x in edoc.select("ul.aa-tbs-video, [id^=options-], iframe")[:5]],
-            "wrappers": wrap_out,
-        })
+        emit("7_ep_wrappers", {"ep_url": eu, "ep_players": [str(x)[:650] for x in edoc.select("ul.aa-tbs-video, [id^=options-], iframe")[:5]], "wrappers": wrap_out})
         await browser.close()
+        return True
 
 
 try:
-    asyncio.run(run_patchright())
+    probe_hosts()
+    ok = asyncio.run(try_solve_cf_and_probe())
+    if not ok:
+        # Try camoufox fallback
+        try:
+            from camoufox.sync_api import Camoufox
+            with Camoufox(headless=False) as browser:
+                page = browser.new_page()
+                page.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
+                import time
+                for _ in range(10):
+                    time.sleep(2)
+                    t = page.title()
+                    h = page.content()
+                    if "moment" not in t.lower() and len(h) > 20000:
+                        break
+                emit("8_camoufox", {"title": page.title(), "len": len(page.content()), "url": page.url})
+        except Exception as ce:
+            emit("8_camoufox_err", str(ce))
 except BaseException as exc:
     emit("probe_error", {"type": type(exc).__name__, "tb": traceback.format_exc()})
