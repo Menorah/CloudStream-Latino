@@ -52,6 +52,19 @@ class PeliCineHDProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
+    /**
+     * El sitio solo contesta al navegador, así que el complemento necesita WebView: con esto la
+     * app lo desactiva donde no la haya en lugar de fallar.
+     */
+    override val usesWebView = true
+
+    /** Cada página se carga en la WebView y eso tarda segundos: se pide más margen del normal. */
+    override val getMainPageTimeoutMs: Long? = 120_000L
+    override val searchTimeoutMs: Long? = 90_000L
+    override val quickSearchTimeoutMs: Long? = 90_000L
+    override val loadTimeoutMs: Long? = 120_000L
+    override val loadLinksTimeoutMs: Long? = 180_000L
+
     override val mainPage = mainPageOf(
         "latest" to "Novedades",
         // `%d` marca los listados paginados; la primera página se pide sin `/page/1/`.
