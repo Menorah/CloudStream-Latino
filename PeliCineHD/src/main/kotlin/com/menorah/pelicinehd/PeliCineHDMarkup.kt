@@ -176,7 +176,7 @@ internal object PeliCineHDMarkup {
         return raw.asSequence()
             .filter { !it.hasClass("single") && !it.hasClass("episodes") }
             .filter { it.closest(".post.single, .related, aside, #episode_by_temp, .wdgt-sidebar") == null }
-            .mapNotNull(::parseCard)
+            .mapNotNull { el -> parseCard(el) }
             .distinctBy { it.url }
             .toList()
     }
@@ -226,9 +226,14 @@ internal object PeliCineHDMarkup {
         return null
     }
 
+    private fun metaOgImage(doc: Document): String? {
+        val el: Element = doc.selectFirst("meta[property=og:image][content]") ?: return null
+        return cleanUrlAttr(el.baseUri(), el.attr("content"))
+    }
+
     fun detail(doc: Document): PeliCineDetail? {
         val pageUrl = doc.location().ifBlank { doc.baseUri() }
-        val root = doc.selectFirst(".post.single, article.single, main > article.post") ?: doc
+        val root: Element = doc.selectFirst(".post.single, article.single, main > article.post") ?: doc
         val title = root.selectFirst("h1.entry-title, .entry-header h1, .entry-title, h1")
             ?.text()?.trim()?.takeIf { it.isNotBlank() && !it.contains("Telegram", true) }
             ?: doc.select("h1.entry-title, h1").asSequence()
@@ -243,19 +248,15 @@ internal object PeliCineHDMarkup {
             else -> doc.selectFirst(".choose-season, #episode_by_temp, .sel-temp") == null
         }
 
-        val poster = upgradeTmdbPoster(
-            (imageUrl(root.selectFirst(".post-thumbnail img, figure img"))
-                ?: doc.selectFirst("meta[property=og:image][content]")?.let { cleanUrlAttr(it.baseUri(), it.attr("content")) })
-                ?.takeIf { isValidImage(it, pageUrl) }
-        )
+        val ogImage = metaOgImage(doc)
+        val rawPoster = imageUrl(root.selectFirst(".post-thumbnail img, figure img")) ?: ogImage
+        val poster = upgradeTmdbPoster(rawPoster?.takeIf { isValidImage(it, pageUrl) })
 
         val backdropCandidate = doc.select(".bghd img, .backdrop img")
             .asSequence()
-            .mapNotNull(::imageUrl)
+            .mapNotNull { el -> imageUrl(el) }
             .firstOrNull { isValidImage(it, pageUrl) }
-            ?: doc.selectFirst("meta[property=og:image][content]")
-                ?.let { cleanUrlAttr(it.baseUri(), it.attr("content")) }
-                ?.takeIf { isValidImage(it, pageUrl) }
+            ?: ogImage?.takeIf { isValidImage(it, pageUrl) }
         val backdrop = upgradeTmdbBackdrop(backdropCandidate) ?: poster
 
         val plotParagraphs = root.select(".description p:not([class])")
@@ -298,7 +299,7 @@ internal object PeliCineHDMarkup {
         val recommendations = doc.select(".related .post, section .post-lst .post")
             .asSequence()
             .filter { !it.hasClass("single") && !it.hasClass("episodes") }
-            .mapNotNull(::parseCard)
+            .mapNotNull { el -> parseCard(el) }
             .filter { normalizeKey(it.url) != normalizeKey(pageUrl) }
             .distinctBy { it.url }
             .toList()
@@ -409,8 +410,8 @@ internal object PeliCineHDMarkup {
         for (tab in tabs) {
             val href = tab.attr("href").trim()
             val tabId = TAB_ID_REGEX.matchEntire(href)?.groupValues?.get(1) ?: continue
-            val pane = doc.getElementById(tabId) ?: continue
-            val iframe = pane.selectFirst("iframe[data-src], iframe[src]") ?: continue
+            val pane: Element = doc.getElementById(tabId) ?: continue
+            val iframe: Element = pane.selectFirst("iframe[data-src], iframe[src]") ?: continue
             val rawUrl = iframe.attr("data-src").ifBlank { iframe.attr("src") }
             val url = cleanUrlAttr(iframe.baseUri().ifBlank { doc.baseUri() }, rawUrl) ?: continue
             if (isYoutube(url)) continue
