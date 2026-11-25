@@ -1,0 +1,33 @@
+name: Reproducción PeliCineHD (manifiesto HLS)
+# Comprueba el último tramo del complemento sin dispositivo: descarga el manifiesto que el
+# complemento extrae del reproductor del sitio y pide su primer segmento. Los manifiestos del
+# hoster están firmados y caducan, por eso se obtiene uno nuevo en la misma ejecución.
+# No sustituye a una prueba en el dispositivo: si Cloudflare pide verificación, se informa.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'PeliCineHD/**'
+      - 'scripts/pelicinehd_playback.py'
+      - '.github/workflows/pelicinehd-playback.yml'
+permissions:
+  contents: read
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Comprobar el manifiesto y su primer segmento
+        run: python3 scripts/pelicinehd_playback.py | tee playback.txt
+      - name: Anotar el resumen
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          path = pathlib.Path('playback.txt')
+          text = path.read_text(errors='replace') if path.exists() else 'sin salida'
+          for line in text.splitlines()[:40]:
+              print('::notice::' + line.replace('%', '%25').replace('\n', '%0A'))
+          PY
