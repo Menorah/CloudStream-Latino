@@ -17,49 +17,34 @@ def emit(tag, obj):
 
 try:
     jr = s.get("https://cinecalidad.org/wp-content/themes/cc/assets/build/static/assets/app.js?v=1792993674", timeout=20).text
+    m_ed = re.search(r'function\s+ed\([^)]*\)\{[\s\S]{0,450}', jr)
+    emit("1_ed_body", m_ed.group(0) if m_ed else None)
 
-    # 1. Inspect `ed(` / filter builder and `/listing/` callers in app.js
-    m_ed = re.search(r'function\s+ed\b[^}]{0,600}|const\s+ed\s*=[^;]{0,600}|(?<=,)\s*ed=\([^)]*\)=>[^;]{0,600}', jr)
-    # Also search for `taxonomy` / `termId` / `JSON.stringify` near `filter`
-    f_ctx = [jr[max(0, m.start()-180):min(len(jr), m.end()+240)] for m in re.finditer(r'filter:JSON\.stringify|taxonomy:r,termId', jr)]
-    # Also find all occurrences of `orderBy:` and `"tops"` / `destacad`
-    ord_ctx = [jr[max(0, m.start()-120):min(len(jr), m.end()+180)] for m in re.finditer(r'orderBy:|/tops|postTypes:', jr)]
-    emit("1_appjs_filters", {
-        "ed": m_ed.group(0) if m_ed else None,
-        "f_ctx": f_ctx[:5],
-        "ord_ctx": ord_ctx[:8],
+    # Test /tops and filter combos!
+    tops_m = s.get("https://cinecalidad.org/wp-api/v1/tops?postType=movies&postsPerPage=10&range=week", timeout=20).json()
+    tops_t = s.get("https://cinecalidad.org/wp-api/v1/tops?postType=tvshows&postsPerPage=10&range=week", timeout=20).json()
+    f_year = s.get('https://cinecalidad.org/wp-api/v1/listing/any?page=1&orderBy=latest&order=desc&postType=any&postsPerPage=5&filter={"years":[19805]}', timeout=20).json()
+    f_cast = s.get('https://cinecalidad.org/wp-api/v1/listing/any?page=1&orderBy=latest&order=desc&postType=any&postsPerPage=5&filter={"lang":[89583]}', timeout=20).json()
+    f_sub = s.get('https://cinecalidad.org/wp-api/v1/listing/any?page=1&orderBy=latest&order=desc&postType=any&postsPerPage=5&filter={"lang":[89605]}', timeout=20).json()
+
+    emit("2_tops_and_filters", {
+        "tops_m_cnt": len((tops_m.get("data") or {}).get("posts", [])) if isinstance(tops_m.get("data"), dict) else tops_m,
+        "tops_t_cnt": len((tops_t.get("data") or {}).get("posts", [])) if isinstance(tops_t.get("data"), dict) else tops_t,
+        "tops_m_first": ((tops_m.get("data") or {}).get("posts") or [{}])[0].get("slug") if isinstance(tops_m.get("data"), dict) else None,
+        "year_2026_slugs": [(p.get("slug"), p.get("years")) for p in (f_year.get("data") or {}).get("posts", [])],
+        "cast_slugs": [p.get("slug") for p in (f_cast.get("data") or {}).get("posts", [])],
+        "sub_slugs": [p.get("slug") for p in (f_sub.get("data") or {}).get("posts", [])],
     })
 
-    # 2. Extract siteConfig.datas from home HTML cleanly so we know exact IDs!
-    home_html = s.get("https://cinecalidad.org/", timeout=20).text
-    m_cfg = re.search(r'datas:\s*(\{.*?\}),\s*routes:', home_html, re.S)
-    emit("2_datas_len", len(m_cfg.group(1)) if m_cfg else 0)
-    if m_cfg:
-        # Print genres & langs sections
-        g_m = re.search(r'genres:\s*(\{.*?\}),\s*years:', m_cfg.group(1), re.S)
-        l_m = re.search(r'langs:\s*(\{.*?\})', m_cfg.group(1), re.S)
-        emit("2b_genres_langs", {"genres": g_m.group(1)[:1800] if g_m else None, "langs": l_m.group(1)[:1500] if l_m else None})
-
-    # 3. Test filter formats on /listing/any and /listing/movies
-    ftests = {}
-    for label, fval in [
-        ("obj_tax_term", json.dumps([{"taxonomy": "genres", "terms": [26]}])),
-        ("obj_type_val", json.dumps([{"type": "genres", "value": 26}])),
-        ("obj_tax_id", json.dumps([{"taxonomy": "genres", "termId": 26}])),
-        ("arr_id", json.dumps([26])),
-        ("dict_genres", json.dumps({"genres": [26]})),
-    ]:
-        u = f"https://cinecalidad.org/wp-api/v1/listing/any?page=1&orderBy=latest&order=desc&postType=any&postsPerPage=3&filter={requests.utils.quote(fval)}"
-        r = s.get(u, timeout=20)
-        d = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-        posts = (d.get("data") or {}).get("posts", []) if isinstance(d, dict) and isinstance(d.get("data"), dict) else []
-        ftests[label] = {"st": r.status_code, "cnt": len(posts), "slugs": [p.get("slug") for p in posts], "genres_of_first": posts[0].get("genres") if posts else None}
-    # Also test popular / rating orderBy and trailer field!
-    r_pop = s.get("https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=popular&order=desc&postType=movies&postsPerPage=3", timeout=20).json()
-    r_rat = s.get("https://cinecalidad.org/wp-api/v1/listing/movies?page=1&orderBy=rating&order=desc&postType=movies&postsPerPage=3", timeout=20).json()
-    ftests["popular"] = [p.get("slug") for p in (r_pop.get("data") or {}).get("posts", [])]
-    ftests["rating"] = [(p.get("slug"), p.get("rating")) for p in (r_rat.get("data") or {}).get("posts", [])]
-    emit("3_filter_tests", ftests)
+    # Inspect trailers + player embeds on castellano/subtitulado posts + popular posts
+    extra_embeds = {}
+    trailers = []
+    for p in ((f_cast.get("data") or {}).get("posts", [])[:3] + (f_sub.get("data") or {}).get("posts", [])[:3] + ((tops_m.get("data") or {}).get("posts", []) if isinstance(tops_m.get("data"), dict) else [])[:4]):
+        if p.get("trailer"):
+            trailers.append((p.get("slug"), p.get("trailer")))
+        pr = s.get(f"https://cinecalidad.org/wp-api/v1/player?postId={p['_id']}&demo=0", timeout=20).json()
+        extra_embeds[p["slug"]] = [{"srv": e.get("server"), "lang": e.get("lang"), "q": e.get("quality"), "u": e.get("url")} for e in (pr.get("data") or {}).get("embeds", [])]
+    emit("3_trailers_and_embeds", {"trailers": trailers, "embeds": extra_embeds})
 except Exception as e:
     emit("0_err", {"err": str(e), "tb": traceback.format_exc()[:1800]})
 PY
