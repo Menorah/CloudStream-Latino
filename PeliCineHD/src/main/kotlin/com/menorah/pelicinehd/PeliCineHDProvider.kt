@@ -11,6 +11,8 @@ import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.USER_AGENT
+import com.lagradost.cloudstream3.VPNStatus
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newEpisode
@@ -18,6 +20,7 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -47,6 +50,7 @@ class PeliCineHDProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val vpnStatus = VPNStatus.MightBeNeeded
 
     override val mainPage = mainPageOf(
         "latest" to "Novedades",
@@ -68,10 +72,23 @@ class PeliCineHDProvider : MainAPI() {
         "/category/terror/page/%d/" to "Terror",
     )
 
+    /**
+     * El sitio está detrás de Cloudflare y devuelve 403 a un cliente que no ha resuelto el reto.
+     * `CloudflareKiller` es el interceptor que trae la propia app: cuando ve ese 403 abre una
+     * WebView, resuelve el reto y reutiliza las cookies `cf_clearance` en las peticiones siguientes.
+     */
+    private val cloudflare by lazy { CloudflareKiller() }
+
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36",
-        "Accept-Language" to "es-AR,es;q=0.9",
+        "User-Agent" to USER_AGENT,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
     )
+
+    /** Cookies de Cloudflare ya resueltas, para las imágenes y los enlaces de vídeo. */
+    private fun clearanceHeaders(): Map<String, String> = runCatching {
+        cloudflare.getCookieHeaders(mainUrl).toMap()
+    }.getOrDefault(emptyMap())
 
     private fun withReferer(referer: String?): Map<String, String> =
         if (referer.isNullOrBlank()) headers else headers + mapOf("Referer" to referer)
@@ -83,19 +100,34 @@ class PeliCineHDProvider : MainAPI() {
     private suspend fun fetch(input: String, referer: String? = null, timeout: Long = 18L): Document {
         val url = absolute(input)
         require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD: $url" }
-        val response = app.get(url, headers = withReferer(referer), timeout = timeout)
+        val response = app.get(url, headers = withReferer(referer), timeout = timeout, interceptor = cloudflare)
+        if (response.code == 403 || response.code == 503) {
+            throw ErrorLoadingException(
+                "PeliCineHD respondió HTTP ${response.code}: Cloudflare no resolvió el reto. " +
+                    "Abre el sitio en el navegador del dispositivo o usa una VPN y reintenta."
+            )
+        }
         if (!response.isSuccessful) throw IllegalStateException("PeliCineHD respondió HTTP ${response.code}")
         if (!PeliCineHDMarkup.siteUrl(response.url)) throw IllegalStateException("PeliCineHD redirigió fuera del sitio")
         return Jsoup.parse(response.text, response.url)
     }
 
-    private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { card ->
-        if (card.movie) newMovieSearchResponse(card.title, card.url, TvType.Movie) {
-            posterUrl = card.poster
-            year = card.year
-        } else newTvSeriesSearchResponse(card.title, card.url, TvType.TvSeries) {
-            posterUrl = card.poster
-            year = card.year
+    /**
+     * Las portadas van en el mismo dominio protegido, así que se adjuntan las cabeceras de
+     * Cloudflare; si aún no hay cookies resueltas el mapa queda vacío y se cargan igualmente.
+     */
+    private fun responses(cards: List<Card>): List<SearchResponse> {
+        val posterHeaders = clearanceHeaders() + mapOf("Referer" to "$mainUrl/")
+        return cards.map { card ->
+            if (card.movie) newMovieSearchResponse(card.title, card.url, TvType.Movie) {
+                posterUrl = card.poster
+                this.posterHeaders = posterHeaders
+                year = card.year
+            } else newTvSeriesSearchResponse(card.title, card.url, TvType.TvSeries) {
+                posterUrl = card.poster
+                this.posterHeaders = posterHeaders
+                year = card.year
+            }
         }
     }
 
@@ -157,6 +189,7 @@ class PeliCineHDProvider : MainAPI() {
         if (!PeliCineHDMarkup.isSeries(doc)) {
             return newMovieLoadResponse(details.title, canonical, TvType.Movie, canonical) {
                 posterUrl = details.poster
+                posterHeaders = clearanceHeaders()
                 backgroundPosterUrl = details.poster
                 plot = details.plot
                 year = details.year
@@ -175,10 +208,12 @@ class PeliCineHDProvider : MainAPI() {
                 season = item.season
                 episode = item.episode
                 posterUrl = item.poster ?: details.poster
+                posterHeaders = clearanceHeaders()
             }
         }
         return newTvSeriesLoadResponse(details.title, canonical, TvType.TvSeries, episodes) {
             posterUrl = details.poster
+            posterHeaders = clearanceHeaders()
             backgroundPosterUrl = details.poster
             plot = details.plot
             year = details.year
@@ -217,6 +252,7 @@ class PeliCineHDProvider : MainAPI() {
                                 headers = withReferer(PeliCineHDMarkup.canonical(doc) ?: absolute(doc.location())) +
                                     mapOf("X-Requested-With" to "XMLHttpRequest"),
                                 timeout = 18L,
+                                interceptor = cloudflare,
                             )
                             if (!response.isSuccessful) return@runCatching emptyList()
                             PeliCineHDMarkup.episodes(Jsoup.parse(response.text)).filter { it.season == season }
@@ -234,7 +270,7 @@ class PeliCineHDProvider : MainAPI() {
 
     /** Sondeo corto de los enlaces de vídeo; nunca bloquea más del tiempo indicado. */
     private suspend fun probe(url: String, referer: String?): List<String> = runCatching<List<String>> {
-        val response = app.get(url, headers = withReferer(referer), timeout = 15L)
+        val response = app.get(url, headers = withReferer(referer), timeout = 15L, interceptor = cloudflare)
         if (!response.isSuccessful) return emptyList()
         PeliCineHDMarkup.streamsFromHost(response.text)
     }.getOrDefault(emptyList())
@@ -258,7 +294,7 @@ class PeliCineHDProvider : MainAPI() {
 
             // 1) El wrapper `?trembed=…` revela el host real.
             val host = runCatching<String?> {
-                val response = app.get(option.url, headers = withReferer(pageUrl), timeout = 15L)
+                val response = app.get(option.url, headers = withReferer(pageUrl), timeout = 15L, interceptor = cloudflare)
                 if (!response.isSuccessful) null else PeliCineHDMarkup.wrappedUrl(response.text, response.url)
             }.getOrNull()
 
@@ -280,7 +316,7 @@ class PeliCineHDProvider : MainAPI() {
                 callback(
                     newExtractorLink("PeliCineHD", label, stream, ExtractorLinkType.M3U8) {
                         this.referer = referer
-                        this.headers = headers
+                        this.headers = headers + clearanceHeaders()
                     }
                 )
             }
