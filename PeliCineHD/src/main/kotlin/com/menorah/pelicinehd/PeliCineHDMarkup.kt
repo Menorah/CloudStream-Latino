@@ -319,7 +319,10 @@ internal object PeliCineHDMarkup {
     fun seasons(document: Document): List<SeasonRef> {
         val post = seasonsPostId(document)
         val fromLinks: List<SeasonRef> = document
-            .select("div.choose-season a[data-post], div.choose-season a[data-season], div.aa-drp a[data-season]")
+            .select(
+                "div.choose-season a, div.aa-drp.choose-season a, " +
+                    "div.aa-drp a[data-post], div.aa-drp a[data-season]"
+            )
             .mapIndexedNotNull { index, anchor ->
                 val owner = anchor.attr("data-post").trim().toIntOrNull() ?: post ?: return@mapIndexedNotNull null
                 val season = anchor.attr("data-season").trim().toIntOrNull()
