@@ -50,10 +50,9 @@ class PeliCineHDProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "latest" to "Novedades",
-        "/peliculas/" to "Películas",
-        "/series/" to "Series",
-        "/peliculas/page/%d/" to "Películas (catálogo)",
-        "/series/page/%d/" to "Series (catálogo)",
+        // `%d` marca los listados paginados; la primera página se pide sin `/page/1/`.
+        "/peliculas/page/%d/" to "Películas",
+        "/series/page/%d/" to "Series",
         "/category/accion/page/%d/" to "Acción",
         "/category/animacion/page/%d/" to "Animación",
         "/category/aventura/page/%d/" to "Aventura",

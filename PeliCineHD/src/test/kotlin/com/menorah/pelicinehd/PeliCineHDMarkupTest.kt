@@ -181,6 +181,20 @@ class PeliCineHDMarkupTest {
     // ---------------------------------------------------------------- enlaces
 
     @Test
+    fun `las rutas de catalogo usan page N solo desde la segunda pagina`() {
+        // Misma regla que aplica getMainPage a las entradas con `%d`.
+        fun path(template: String, page: Int): String = when {
+            !template.contains("%d") -> template
+            page <= 1 -> template.format(1).replace("page/1/", "")
+            else -> template.format(page)
+        }
+        assertEquals("/peliculas/", path("/peliculas/page/%d/", 1))
+        assertEquals("/peliculas/page/3/", path("/peliculas/page/%d/", 3))
+        assertEquals("/series/page/2/", path("/series/page/%d/", 2))
+        assertEquals("/category/terror/", path("/category/terror/page/%d/", 1))
+    }
+
+    @Test
     fun `solo se aceptan enlaces del dominio`() {
         assertTrue(PeliCineHDMarkup.siteUrl("https://pelicinehd.com/movies/la-odisea/"))
         assertTrue(PeliCineHDMarkup.siteUrl("https://www.pelicinehd.com/series/x/"))
