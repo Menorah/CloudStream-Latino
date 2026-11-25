@@ -45,7 +45,7 @@ object PlaybackProbe {
                     check(emptySections.isEmpty()) { "empty home sections: $emptySections" }
                     check(elapsed < 45_000) { "home too slow: $elapsed ms" }
 
-                    val searchNaruto = provider.search("naruto") ?: error("null search naruto")
+                    val searchNaruto = provider.search("naruto", 1) ?: error("null search naruto")
                     check(searchNaruto.items.isNotEmpty()) { "empty naruto search" }
                     val searchP2 = provider.search("a", 2) ?: error("null search a page 2")
                     check(searchP2.items.isNotEmpty()) { "empty search a page 2" }
