@@ -15,14 +15,24 @@ def emit(tag, obj):
     print(f"::notice title={tag}::{safe[:3900]}", flush=True)
 
 
+def extract_obj(text, key):
+    m = re.search(rf"\b{key}\s*:\s*", text)
+    if not m:
+        return None
+    obj, _ = json.JSONDecoder().raw_decode(text[m.end():])
+    return obj
+
+
 try:
     home_html = s.get("https://cinecalidad.org/", timeout=20).text
-    langs_m = re.search(r"langs\s*:\s*(\{.*?\})\s*,", home_html)
-    years_m = re.search(r"years\s*:\s*(\{.*?\})\s*,", home_html)
-    emit("1_langs_years", {
-        "langs": json.loads(langs_m.group(1)) if langs_m else None,
-        "years_count": len(json.loads(years_m.group(1))) if years_m else None,
-        "years_sample": dict(list(json.loads(years_m.group(1)).items())[:10]) if years_m else None,
+    langs = extract_obj(home_html, "langs")
+    years = extract_obj(home_html, "years")
+    genres = extract_obj(home_html, "genres")
+    emit("1_sitecfg_taxs", {
+        "langs": langs,
+        "years_count": len(years) if years else None,
+        "years_recent": sorted([(v["name"], k) for k, v in years.items()], reverse=True)[:12] if years else None,
+        "genres_count": len(genres) if genres else None,
     })
 
     single_m = s.get("https://cinecalidad.org/wp-api/v1/single/movies?slug=madden-2026&postType=movies", timeout=20).json()
