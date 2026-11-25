@@ -1,6 +1,5 @@
 package com.menorah.pelicinehd
 
-import android.webkit.CookieManager
 import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.ErrorLoadingException
@@ -21,7 +20,6 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -54,11 +52,6 @@ class PeliCineHDProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
-    private companion object {
-        const val PAGE_TIMEOUT_S = 20L
-        const val CHALLENGE_TIMEOUT_MS = 20_000L
-    }
-
     override val mainPage = mainPageOf(
         "latest" to "Novedades",
         // `%d` marca los listados paginados; la primera página se pide sin `/page/1/`.
@@ -85,104 +78,73 @@ class PeliCineHDProvider : MainAPI() {
         "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
     )
 
-    /**
-     * UA de la WebView (`WebViewResolver.webViewUserAgent`). Un `cf_clearance` **solo** vale bajo el
-     * UA con el que se obtuvo, así que las peticiones que llevan la cookie tienen que mandar este
-     * UA y no el de la app. Si aún no hay UA de WebView se usa el de la app.
-     */
-    private val browserUserAgent: String?
-        get() = runCatching {
-            WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }
-        }.getOrNull()
-
-    private fun browserHeaders(): Map<String, String> =
-        browserUserAgent?.let { mapOf("User-Agent" to it) } ?: emptyMap()
+    /** Navegador del dispositivo: única vía por la que el sitio contesta (ver [PeliCineHDBrowser]). */
+    private val browser = PeliCineHDBrowser()
 
     /**
-     * Cookies de la WebView (`cf_clearance`, `__cf_bm`…) junto al UA de esa misma WebView.
-     * Esto es lo que CloudStream no hace por su cuenta: su `CloudflareKiller` guarda las cookies
-     * pero deja el UA de la app, y Cloudflare invalida la cookie por ese cambio.
+     * Últimas páginas pedidas al navegador. Abrir la WebView cuesta segundos y CloudStream pide la
+     * portada, la ficha y los enlaces seguidos, a veces dos veces; se guardan unas pocas.
      */
-    private fun clearanceHeaders(): Map<String, String> = runCatching {
-        val raw = CookieManager.getInstance().getCookie(mainUrl).orEmpty()
-        if (!raw.contains("cf_clearance")) return@runCatching emptyMap()
-        val cookies = raw.split(';').mapNotNull { part ->
-            val pair = part.trim().split('=', limit = 2)
-            if (pair.size == 2 && pair[0].isNotBlank() && pair[1].isNotBlank()) pair[0] to pair[1] else null
-        }.toMap()
-        if (cookies.isEmpty()) emptyMap() else cookies + browserHeaders()
-    }.getOrDefault(emptyMap())
-
-    /**
-     * Pide el sitio tal cual (sin interceptor que bloquee la petición) y devuelve HTML + estado.
-     * Se envían las cookies ya resueltas con su UA; si el sitio responde con el reto, se resuelve.
-     */
-    private suspend fun ask(url: String, referer: String?): Triple<Int, String, String> {
-        val response = app.get(
-            url,
-            headers = withReferer(referer) + clearanceHeaders(),
-            timeout = PAGE_TIMEOUT_S,
-        )
-        return Triple(response.code, response.text.orEmpty(), response.url)
+    private val pages = object : LinkedHashMap<String, Document>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Document>?): Boolean =
+            size > 8
     }
 
     /**
-     * Resuelve el reto de Cloudflare con una WebView acotada a 20 s. A diferencia de
-     * `CloudflareKiller` no espera al timeout de 60 s del resolver ni deja la petición colgada
-     * hasta el corte de 120 s de la app.
+     * Las portadas las descarga el cargador de imágenes de la app, que tampoco usa la WebView: se le
+     * pasan la cookie del sitio y el UA del navegador, que es lo único que puede ayudarle.
      */
-    private suspend fun solveChallenge() {
-        runCatching {
-            WebViewResolver(
-                interceptUrl = Regex("""^never-matches-a-url$"""),
-                userAgent = null, // Cloudflare exige el UA real de la WebView.
-                useOkhttp = false,
-                timeout = CHALLENGE_TIMEOUT_MS,
-            ).resolveUsingWebView(mainUrl)
+    private fun imageHeaders(): Map<String, String> = runCatching {
+        val raw = android.webkit.CookieManager.getInstance().getCookie(mainUrl).orEmpty()
+        val cookies = raw.split(';').map { it.trim() }.filter { it.contains('=') }.joinToString("; ")
+        val agent = com.lagradost.cloudstream3.network.WebViewResolver.webViewUserAgent
+        buildMap {
+            put("Referer", "$mainUrl/")
+            if (cookies.isNotEmpty()) put("Cookie", cookies)
+            if (!agent.isNullOrBlank()) put("User-Agent", agent)
         }
-    }
+    }.getOrDefault(mapOf("Referer" to "$mainUrl/"))
 
     /**
-     * GET validado: solo se sigue dentro del dominio del sitio. Si la respuesta es el reto de
-     * Cloudflare —403/503 **o un 200 con su página de verificación**, que es lo que se escapaba—
-     * se resuelve una vez y se reintenta con la cookie y el UA de la WebView.
+     * Pide [url] al navegador del dispositivo y devuelve el documento. El sitio bloquea a los
+     * clientes HTTP por su huella (403 o conexión cerrada), no por cookies, así que no sirve
+     * mandar `cf_clearance` ni resolver el reto: hay que dejar que la WebView haga la petición.
      */
-    private suspend fun fetch(input: String, referer: String? = null): Document {
+    private suspend fun fetch(input: String, referer: String? = null, cached: Boolean = true): Document {
         val url = absolute(input)
         require(PeliCineHDMarkup.siteUrl(url)) { "Dirección fuera de PeliCineHD: $url" }
+        if (cached) synchronized(pages) { pages[url] }?.let { return it }
 
-        var answer = ask(url, referer)
-        if (PeliCineHDMarkup.isChallenge(answer.first, answer.second)) {
-            solveChallenge()
-            answer = ask(url, referer)
-        }
-        val (code, text, finalUrl) = answer
-        if (PeliCineHDMarkup.isChallenge(code, text)) {
+        val page = browser.get(url, referer ?: "$mainUrl/")
+        if (page == null) {
             throw ErrorLoadingException(
-                "PeliCineHD sigue respondiendo el reto de Cloudflare (HTTP $code). " +
-                    "Abre pelicinehd.com en el navegador del dispositivo (o usa una VPN) y vuelve a intentarlo."
+                "PeliCineHD no cargó en el navegador interno. Abre pelicinehd.com en el navegador " +
+                    "del dispositivo para pasar la verificación y vuelve a intentarlo."
             )
         }
-        if (code !in 200..299) throw IllegalStateException("PeliCineHD respondió HTTP $code")
-        if (!PeliCineHDMarkup.siteUrl(finalUrl)) throw IllegalStateException("PeliCineHD redirigió fuera del sitio")
-        return Jsoup.parse(text, finalUrl)
+        if (!page.code.toString().startsWith("2") || PeliCineHDMarkup.isChallenge(page.code, page.body)) {
+            throw ErrorLoadingException(
+                "PeliCineHD devolvió HTTP ${page.code} al cargar la página. Abre pelicinehd.com en " +
+                    "el navegador del dispositivo y vuelve a intentarlo."
+            )
+        }
+        val doc = Jsoup.parse(page.body, page.url)
+        if (cached) synchronized(pages) {
+            pages.clear() // Cada página nueva invalida las anteriores: el sitio cambia a diario.
+            pages[url] = doc
+        }
+        return doc
     }
 
-    /** Cabeceras base; si hay UA de WebView se usa ese, porque es el que vale con `cf_clearance`. */
-    private fun withReferer(referer: String?): Map<String, String> {
-        val base = if (browserUserAgent != null) headers + browserHeaders() else headers
-        return if (referer.isNullOrBlank()) base else base + mapOf("Referer" to referer)
-    }
+    private fun withReferer(referer: String?): Map<String, String> =
+        if (referer.isNullOrBlank()) headers else headers + mapOf("Referer" to referer)
 
     private fun absolute(input: String): String =
         if (input.startsWith("http")) input else URI("$mainUrl/").resolve(input.removePrefix("/")).toString()
 
-    /**
-     * Las portadas van en el mismo dominio protegido, así que se adjuntan las cabeceras de
-     * Cloudflare; si aún no hay cookies resueltas el mapa queda vacío y se cargan igualmente.
-     */
+    /** Las portadas también están tras el bloqueo: se adjuntan cookie y UA del navegador. */
     private fun responses(cards: List<Card>): List<SearchResponse> {
-        val posterHeaders = clearanceHeaders() + mapOf("Referer" to "$mainUrl/")
+        val posterHeaders = imageHeaders()
         return cards.map { card ->
             if (card.movie) newMovieSearchResponse(card.title, card.url, TvType.Movie) {
                 posterUrl = card.poster
@@ -254,7 +216,7 @@ class PeliCineHDProvider : MainAPI() {
         if (!PeliCineHDMarkup.isSeries(doc)) {
             return newMovieLoadResponse(details.title, canonical, TvType.Movie, canonical) {
                 posterUrl = details.poster
-                posterHeaders = clearanceHeaders()
+                posterHeaders = imageHeaders()
                 backgroundPosterUrl = details.poster
                 plot = details.plot
                 year = details.year
@@ -265,7 +227,7 @@ class PeliCineHDProvider : MainAPI() {
             }
         }
 
-        val items = loadEpisodes(doc)
+        val items = loadEpisodes(doc, canonical)
         if (items.isEmpty()) throw ErrorLoadingException("PeliCineHD no devolvió episodios de ${details.title}")
         val episodes = items.map { item ->
             newEpisode(item.url) {
@@ -277,7 +239,7 @@ class PeliCineHDProvider : MainAPI() {
         }
         return newTvSeriesLoadResponse(details.title, canonical, TvType.TvSeries, episodes) {
             posterUrl = details.poster
-            posterHeaders = clearanceHeaders()
+            posterHeaders = imageHeaders()
             backgroundPosterUrl = details.poster
             plot = details.plot
             year = details.year
@@ -292,7 +254,7 @@ class PeliCineHDProvider : MainAPI() {
      * `action_select_season` y el `data-post` del desplegable. Si el AJAX falla se conserva lo
      * que ya venía en el HTML para no perder la serie entera.
      */
-    private suspend fun loadEpisodes(doc: Document): List<EpisodeItem> {
+    private suspend fun loadEpisodes(doc: Document, pageUrl: String): List<EpisodeItem> {
         val current = PeliCineHDMarkup.currentEpisodes(doc)
         val seasons = PeliCineHDMarkup.seasons(doc)
         val post = PeliCineHDMarkup.postId(doc)
@@ -300,25 +262,24 @@ class PeliCineHDProvider : MainAPI() {
         val missing = seasons - current.map { it.season }.toSet()
         if (missing.isEmpty() || missing.size > 60) return current
 
-        val permits = Semaphore(3)
+        // Una WebView cada vez: abrir varias a la vez es más lento y más frágil.
+        val permits = Semaphore(1)
         val extra = coroutineScope {
             missing.map { season ->
                 async {
                     permits.withPermit {
                         runCatching<List<EpisodeItem>> {
-                            val response = app.post(
+                            val page = browser.post(
+                                pageUrl,
                                 PeliCineHDMarkup.AJAX,
-                                data = mapOf(
+                                mapOf(
                                     "action" to "action_select_season",
                                     "season" to season.toString(),
                                     "post" to post,
                                 ),
-                                headers = withReferer(PeliCineHDMarkup.canonical(doc) ?: absolute(doc.location())) +
-                                    mapOf("X-Requested-With" to "XMLHttpRequest") + clearanceHeaders(),
-                                timeout = PAGE_TIMEOUT_S,
-                            )
-                            if (!response.isSuccessful) return@runCatching emptyList()
-                            PeliCineHDMarkup.episodes(Jsoup.parse(response.text)).filter { it.season == season }
+                            ) ?: return@runCatching emptyList()
+                            if (!page.code.toString().startsWith("2")) return@runCatching emptyList()
+                            PeliCineHDMarkup.episodes(Jsoup.parse(page.body)).filter { it.season == season }
                         }.getOrDefault(emptyList())
                     }
                 }
@@ -331,13 +292,24 @@ class PeliCineHDProvider : MainAPI() {
 
     // ---------------------------------------------------------------- reproducción
 
-    /** Sondeo corto de los enlaces de vídeo; nunca bloquea más del tiempo indicado. */
-    private suspend fun probe(url: String, referer: String?): List<String> = runCatching<List<String>> {
-        val response = app.get(url, headers = withReferer(referer) + clearanceHeaders(), timeout = 15L)
-        if (!response.isSuccessful) return emptyList()
-        if (PeliCineHDMarkup.isChallenge(response.code, response.text)) return emptyList()
-        PeliCineHDMarkup.streamsFromHost(response.text)
-    }.getOrDefault(emptyList())
+    /**
+     * Página del hoster con el JW Player. Primero como cliente normal (los hosters no están
+     * protegiendo como el sitio) y, si rechaza o devuelve el reto, desde el navegador.
+     */
+    private suspend fun probe(url: String, referer: String?): List<String> {
+        val direct = runCatching<List<String>> {
+            val response = app.get(url, headers = withReferer(referer), timeout = 15L)
+            if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.code, response.text)) {
+                return@runCatching emptyList()
+            }
+            PeliCineHDMarkup.streamsFromHost(response.text)
+        }.getOrDefault(emptyList())
+        if (direct.isNotEmpty()) return direct
+
+        val page = runCatching { browser.get(url, referer ?: "$mainUrl/") }.getOrNull() ?: return emptyList()
+        if (!page.code.toString().startsWith("2")) return emptyList()
+        return PeliCineHDMarkup.streamsFromHost(page.body)
+    }
 
     override suspend fun loadLinks(
         data: String,
@@ -356,18 +328,16 @@ class PeliCineHDProvider : MainAPI() {
             val label = listOf(language, option.server.ifBlank { "Opción ${option.option + 1}" })
                 .filterNotNull().distinct().joinToString(" · ")
 
-            // 1) El wrapper `?trembed=…` revela el host real.
+            // 1) El wrapper `?trembed=…` revela el host real. Vive en el dominio protegido, así que
+            //    se prueba primero el cliente normal (barato) y luego el navegador.
             val host = runCatching<String?> {
-                val response = app.get(
-                    option.url,
-                    headers = withReferer(pageUrl) + clearanceHeaders(),
-                    timeout = 15L,
-                )
-                if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.code, response.text)) {
-                    null
-                } else {
-                    PeliCineHDMarkup.wrappedUrl(response.text, response.url)
-                }
+                val response = app.get(option.url, headers = withReferer(pageUrl), timeout = 10L)
+                if (!response.isSuccessful) null
+                else PeliCineHDMarkup.wrappedUrl(response.text, response.url)
+            }.getOrNull() ?: runCatching<String?> {
+                val wrapped = browser.get(option.url, pageUrl) ?: return@runCatching null
+                if (!wrapped.code.toString().startsWith("2")) null
+                else PeliCineHDMarkup.wrappedUrl(wrapped.body, wrapped.url)
             }.getOrNull()
 
             // 2) Ese host puede estar cubierto por un extractor de CloudStream.
@@ -389,7 +359,7 @@ class PeliCineHDProvider : MainAPI() {
                         source = label,
                         streamUrl = stream,
                         referer = referer,
-                        headers = headers + clearanceHeaders(),
+                        headers = headers,
                         name = label,
                     )
                 }.getOrElse { emptyList() }
@@ -398,7 +368,7 @@ class PeliCineHDProvider : MainAPI() {
                 val resolved = links.ifEmpty {
                     listOf(newExtractorLink("PeliCineHD", label, stream, ExtractorLinkType.M3U8) {
                         this.referer = referer
-                        this.headers = headers + clearanceHeaders()
+                        this.headers = headers
                     })
                 }
                 resolved.forEach { link ->
