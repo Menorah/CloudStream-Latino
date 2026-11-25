@@ -1,4 +1,4 @@
-version = 8
+version = 9
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -8,10 +8,10 @@ dependencies {
 }
 
 cloudstream {
-    description = "Anime y películas de AnimeOnline en español."
+    description = "Animes, películas, temporadas y episodios de AnimeOnline (ww4.animeonline.ninja) en español latino, castellano y subtitulado."
     authors = listOf("Menorah")
-    status = 3
-    tvTypes = listOf("Anime", "AnimeMovie")
+    status = 1
+    tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     language = "es"
 }
 

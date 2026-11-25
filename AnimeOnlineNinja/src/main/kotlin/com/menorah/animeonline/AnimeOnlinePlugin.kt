@@ -8,5 +8,15 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class AnimeOnlinePlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(AnimeOnlineProvider(context))
+        registerExtractorAPI(GUploadSiteExtractor())
+        registerExtractorAPI(SavefilesExtractor())
+        registerExtractorAPI(UqloadVcExtractor())
+        registerExtractorAPI(PeeplayerExtractor())
+        registerExtractorAPI(MxdropSxExtractor())
+        registerExtractorAPI(MxdropClickExtractor())
+        registerExtractorAPI(MixdropJmkExtractor())
+        registerExtractorAPI(Filemoon0TopExtractor())
+        registerExtractorAPI(FilemooonLinkExtractor())
+        registerExtractorAPI(LuluvidExtractor())
     }
 }
