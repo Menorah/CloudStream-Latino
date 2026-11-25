@@ -23,6 +23,18 @@ class PeliCineHDBrowserTest {
     }
 
     @Test
+    fun `tambien se lee cuando la webview devuelve el json entre comillas`() {
+        // Lo que devuelve `evaluateJavascript`: la cadena JSON, escapada dentro de otra cadena.
+        val inner = """{"done":true,"code":200,"url":"https://pelicinehd.com/","body":"<html>ok</html>"}"""
+        val quoted = "\"" + inner.replace("\"", "\\\"") + "\""
+
+        val page = browser.parse(quoted)
+        assertNotNull(page)
+        assertEquals(200, page!!.code)
+        assertTrue(page.body.contains("ok"))
+    }
+
+    @Test
     fun `mientras la pagina carga no hay resultado`() {
         assertNull(browser.parse("""{"done":false}"""))
         assertNull(browser.parse("null"))

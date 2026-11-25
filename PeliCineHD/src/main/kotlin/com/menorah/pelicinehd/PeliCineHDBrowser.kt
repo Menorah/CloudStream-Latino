@@ -52,6 +52,20 @@ internal class PeliCineHDBrowser(private val origin: String = PeliCineHDMarkup.B
         referer: String?,
         post: Pair<String, Map<String, String>>?,
     ): BrowserPage? {
+        // Primero sin más: si el navegador recibe el reto, la cookie queda guardada y el segundo
+        // intento ya entra en la página buena. Nunca se devuelve una página de verificación.
+        var page = attempt(load, referer, post)
+        if (page == null || PeliCineHDMarkup.isChallenge(page.code, page.body)) {
+            page = attempt(load, referer, post)
+        }
+        return page?.takeUnless { PeliCineHDMarkup.isChallenge(it.code, it.body) }
+    }
+
+    private suspend fun attempt(
+        load: String,
+        referer: String?,
+        post: Pair<String, Map<String, String>>?,
+    ): BrowserPage? {
         val captured = AtomicReference<BrowserPage?>(null)
         runCatching {
             WebViewResolver(
@@ -74,7 +88,9 @@ internal class PeliCineHDBrowser(private val origin: String = PeliCineHDMarkup.B
     /** Objeto `{done, code, url, body}`: `done=false` mientras la página aún carga. */
     internal fun parse(raw: String?): BrowserPage? = runCatching {
         if (raw.isNullOrBlank() || raw == "null") return null
-        val json = JSONObject(raw)
+        // `evaluateJavascript` puede devolver el objeto ya en JSON o la cadena JSON entre comillas.
+        val text = raw.trim().removeSurrounding("\"").replace("\\\"", "\"")
+        val json = JSONObject(text)
         if (!json.optBoolean("done")) return null
         val body = json.optString("body")
         if (body.isBlank()) return null
@@ -123,7 +139,9 @@ internal class PeliCineHDBrowser(private val origin: String = PeliCineHDMarkup.B
                     try { new Image().src = $ready + Date.now(); } catch (e) {}
                 }
                 function go() {
-                    if (document.readyState !== 'complete') { return setTimeout(go, 300); }
+                    // `interactive` ya tiene el DOM completo; `complete` puede no llegar nunca si
+                    // la página deja anuncios o sondeos abiertos.
+                    if (document.readyState === 'loading') { return setTimeout(go, 300); }
                     $body
                 }
                 setTimeout(go, 300);
