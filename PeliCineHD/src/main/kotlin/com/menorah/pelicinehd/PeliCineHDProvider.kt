@@ -66,7 +66,8 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     private val site = SiteClient.create(context)
 
     // Every section asks its own page, and the browser fallback is slower than plain HTTP.
-    override val getMainPageTimeoutMs: Long? = 180_000L
+    // Every section asks its own page through the browser first, so the screen gets room.
+    override val getMainPageTimeoutMs: Long? = 300_000L
     override val searchTimeoutMs: Long? = 60_000L
     override val loadTimeoutMs: Long? = 90_000L
     override val loadLinksTimeoutMs: Long? = 240_000L
