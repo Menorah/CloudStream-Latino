@@ -377,7 +377,7 @@ internal class AnimeOnline2PosterHelper(
         webViewMutex.withLock {
             val missing = urls.filter { getValidCachedFile(it)?.also { f -> out[it] = f } == null }
             if (missing.isEmpty()) return
-            withTimeoutOrNull(18_000L) {
+            withTimeoutOrNull(22_000L) {
                 fetchViaHiddenWebView(ctx, missing, out)
             }
         }
@@ -411,7 +411,7 @@ internal class AnimeOnline2PosterHelper(
         }
 
         val timeoutRunnable = Runnable { cleanup() }
-        handler.postDelayed(timeoutRunnable, 16_000L)
+        handler.postDelayed(timeoutRunnable, 20_000L)
 
         val bridge = object {
             @JavascriptInterface

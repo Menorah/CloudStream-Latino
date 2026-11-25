@@ -174,9 +174,11 @@ object AnimeOnline2Parser {
             else -> "$BASE/${clean.trimStart('/')}"
         }
         return when {
-            siteHostRegex.containsMatchIn(abs) || anySubdomainAnimeOnlineRegex.containsMatchIn(abs) ->
-                abs.replace(anySubdomainAnimeOnlineRegex, BASE)
+            siteHostRegex.containsMatchIn(abs) ->
+                abs.replace(siteHostRegex, BASE)
                     .replaceFirst("http://", "https://", ignoreCase = true)
+            anySubdomainAnimeOnlineRegex.containsMatchIn(abs) ->
+                abs.replaceFirst("http://", "https://", ignoreCase = true)
             abs.startsWith("http://", ignoreCase = true) &&
                 !abs.startsWith("http://127.0.0.1", ignoreCase = true) &&
                 !abs.startsWith("http://localhost", ignoreCase = true) ->
