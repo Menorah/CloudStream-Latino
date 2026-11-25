@@ -215,8 +215,8 @@ class PeliCineHDMarkupTest {
         """.trimIndent()
         assertTrue(PeliCineHDMarkup.isChallenge(200, challenge))
         assertTrue(PeliCineHDMarkup.isChallenge(403, ""))
-        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("inicio.html")))
-        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("pelicula.html")))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("inicio")))
+        assertFalse(PeliCineHDMarkup.isChallenge(200, fixture("pelicula")))
         assertFalse(PeliCineHDMarkup.isChallenge(200, ""))
     }
 
