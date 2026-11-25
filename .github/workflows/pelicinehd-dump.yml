@@ -22,10 +22,10 @@ jobs:
           {
           echo "== python urllib"
           python3 - <<'PY'
-          import urllib.request, shutil
+          import urllib.request, shutil, zipfile
           urls = [
-            "https://tmpfiles.org/dl/wyAFaaTTlcbA/paginaweb.zip",
             "https://tmpfiles.org/dl/1795611062.e3750b7cfe9db9d1/wyAFaaTTlcbA/paginaweb.zip",
+            "https://tmpfiles.org/dl/wyAFaaTTlcbA/paginaweb.zip",
             "https://tmpfiles.org/wyAFaaTTlcbA/paginaweb.zip",
           ]
           for u in urls:
@@ -33,8 +33,10 @@ jobs:
                   req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Referer": "https://tmpfiles.org/"})
                   with urllib.request.urlopen(req, timeout=120) as r, open("/tmp/paginaweb.zip", "wb") as f:
                       shutil.copyfileobj(r, f)
-                  print("OK", u, r.status)
-                  break
+                  if zipfile.is_zipfile("/tmp/paginaweb.zip"):
+                      print("OK", u, r.status)
+                      break
+                  print("NOTZIP", u, r.status)
               except Exception as e:
                   print("FAIL", u, repr(e)[:300])
           PY
