@@ -112,16 +112,36 @@ internal object PeliCineHDMarkup {
             .mapNotNull { card(it) }
             .distinctBy { it.url }
 
+    /**
+     * `a.lnk-blk` is the theme's full-card overlay. If a template drops it, any link of the card
+     * that points inside the site is used instead, so a small markup change does not empty a row.
+     */
     private fun card(article: Element): Card? {
-        val link = article.selectFirst("a.lnk-blk[href]") ?: return null
-        val url = absolute(link.attr("href"), article.baseUri()) ?: return null
-        if (!siteUrl(url)) return null
+        val candidates = buildList {
+            article.selectFirst("a.lnk-blk[href]")?.let { add(it) }
+            addAll(article.select("a[href]"))
+        }
+        val url = candidates.asSequence()
+            .mapNotNull { absolute(it.attr("href"), article.baseUri()) }
+            .firstOrNull { siteUrl(it) && !looksLikeCategory(it) }
+            ?: return null
         val title = article.selectFirst("h2.entry-title, h3.entry-title")?.text()?.trim()
-            ?.takeIf { it.isNotEmpty() } ?: return null
+            ?.takeIf { it.isNotEmpty() }
+            ?: article.selectFirst("img[alt]")?.attr("alt")?.removePrefix("Image ")?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            ?: return null
         val thumbnail: Element? = article.selectFirst("div.post-thumbnail img, figure img")
         val poster = absolute(thumbnail?.let { image(it) }, article.baseUri())
         val movie = !article.hasClass("series") && !url.contains("/series/")
         return Card(title, url, poster, movie, year(article))
+    }
+
+    /** Site pages that are lists, not titles: a card must link to its own detail page. */
+    private fun looksLikeCategory(url: String): Boolean {
+        val path = runCatching { URI(url).path.orEmpty() }.getOrDefault("")
+        return path.isEmpty() || path == "/" ||
+            listOf("/peliculas/", "/series/", "/category/", "/page/", "/tag/", "/?s=")
+                .any { path.startsWith(it) }
     }
 
     /** Images use `src`, but some templates only ship `data-src` (lazy loading). */

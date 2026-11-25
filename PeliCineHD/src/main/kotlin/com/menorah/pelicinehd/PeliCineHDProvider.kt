@@ -93,6 +93,9 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
                 return fetchOnce(url, referer)
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: ErrorLoadingException) {
+                // A challenge will not disappear by asking again, and each browser attempt is slow.
+                throw e
             } catch (e: Exception) {
                 lastError = e
             }

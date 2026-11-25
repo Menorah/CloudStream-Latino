@@ -170,7 +170,7 @@ internal class BrowserSiteTransport(
     }
 
     companion object {
-        private const val WEBVIEW_MILLIS = 35_000L
+        private const val WEBVIEW_MILLIS = 25_000L
         private const val MAX_BODY_CHARS = 2_000_000
         internal fun looksLikeChallenge(text: String): Boolean = PeliCineHDMarkup.isChallenge(text)
     }

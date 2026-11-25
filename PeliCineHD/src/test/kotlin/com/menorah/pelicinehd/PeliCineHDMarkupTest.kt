@@ -314,4 +314,34 @@ class PeliCineHDMarkupTest {
         assertEquals("91ecde02e3", PeliCineHDMarkup.ajaxNonce(html))
         assertNull(PeliCineHDMarkup.ajaxNonce("<html></html>"))
     }
+
+    @Test
+    fun `a card without the overlay link still resolves its own page`() {
+        val html = """
+            <html><body><ul class="post-lst">
+            <article class="post dfx fcl movies">
+                <header class="entry-header"><h2 class="entry-title">Pacífico</h2></header>
+                <div class="post-thumbnail"><figure><img src="//image.tmdb.org/t/p/w500/nB1Hq2Gz8Q5lUQAGDHNdXbyfoIF.jpg"></figure></div>
+                <a class="more" href="https://pelicinehd.com/movies/pacifico/"></a>
+                <a class="cat" href="https://pelicinehd.com/category/accion/">Acción</a>
+            </article>
+            </ul></body></html>
+        """.trimIndent()
+        val cards = PeliCineHDMarkup.cards(org.jsoup.Jsoup.parse(html, "https://pelicinehd.com/peliculas/"))
+        assertEquals(1, cards.size)
+        assertEquals("https://pelicinehd.com/movies/pacifico/", cards[0].url)
+        assertEquals("Pacífico", cards[0].title)
+        assertEquals("https://image.tmdb.org/t/p/w500/nB1Hq2Gz8Q5lUQAGDHNdXbyfoIF.jpg", cards[0].poster)
+    }
+
+    @Test
+    fun `a card that only links to a category is dropped`() {
+        val html = """
+            <html><body><article class="post dfx fcl movies">
+            <h2 class="entry-title">Publicidad</h2>
+            <a href="https://pelicinehd.com/category/terror/">Terror</a>
+            </article></body></html>
+        """.trimIndent()
+        assertTrue(PeliCineHDMarkup.cards(org.jsoup.Jsoup.parse(html, "https://pelicinehd.com/peliculas/")).isEmpty())
+    }
 }
