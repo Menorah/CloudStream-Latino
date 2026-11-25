@@ -22,10 +22,15 @@ private const val ATTEMPTS = 3
 private const val ALL_SECTIONS_FAILED = 8
 private const val REQUEST_TIMEOUT = 25L
 
-/** Request headers the site (and its Cloudflare setup) expect from a browser. */
+/**
+ * Request headers the site (and its Cloudflare setup) expect from a browser. The User-Agent
+ * matters: Cloudflare answers 403 to clients that identify themselves as an app or a WebView.
+ */
 private val PAGE_HEADERS = mapOf(
+    "User-Agent" to BrowserSiteTransport.BROWSER_AGENT,
     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8",
+    "Upgrade-Insecure-Requests" to "1",
     "Referer" to "https://pelicinehd.com/"
 )
 
@@ -106,7 +111,10 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
     private suspend fun fetchOnce(url: String, referer: String): Document {
         val response = site.getHtml(url, PAGE_HEADERS + ("Referer" to referer))
         if (!response.isSuccessful) {
-            throw IllegalStateException("PeliCineHD no respondió correctamente (HTTP ${response.code}).")
+            throw IllegalStateException(
+                "PeliCineHD no respondió correctamente (HTTP ${response.code}), ni con el cliente " +
+                    "HTTP ni con el navegador del dispositivo."
+            )
         }
         if (!PeliCineHDMarkup.siteUrl(response.url)) {
             throw IllegalStateException("PeliCineHD redirigió fuera del sitio.")
@@ -288,17 +296,21 @@ class PeliCineHDProvider(context: Context) : MainAPI() {
 
     /** Season switch: `action_select_season` returns the same episode cards the site injects. */
     private suspend fun seasonEpisodes(post: Int, season: Int, pageUrl: String): List<EpisodeItem> {
-        val response = app.post(
-            "$mainUrl${PeliCineHDMarkup.AJAX_PATH}",
-            data = mapOf(
-                "action" to "action_select_season",
-                "season" to season.toString(),
-                "post" to post.toString()
-            ),
-            headers = PAGE_HEADERS,
-            referer = pageUrl,
-            timeout = REQUEST_TIMEOUT
-        )
+        val response = try {
+            site.post(
+                "$mainUrl${PeliCineHDMarkup.AJAX_PATH}",
+                PAGE_HEADERS + ("Referer" to pageUrl) + ("X-Requested-With" to "XMLHttpRequest"),
+                mapOf(
+                    "action" to "action_select_season",
+                    "season" to season.toString(),
+                    "post" to post.toString()
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return emptyList()
+        }
         if (!response.isSuccessful || PeliCineHDMarkup.isChallenge(response.text)) return emptyList()
         return PeliCineHDMarkup.parseSeasonHtml(response.text, pageUrl, season)
     }

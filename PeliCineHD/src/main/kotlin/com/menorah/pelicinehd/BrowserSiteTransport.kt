@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.CookieManager
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -26,7 +27,7 @@ internal class BrowserSiteTransport(
     private val context: Context,
     // Optional response source for deterministic on-device tests; production leaves it null.
     private val testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
-) : SiteTransport {
+) : SiteTransport, SitePoster, CookieSource {
     private val slots = Semaphore(4)
 
     override suspend fun get(url: String, headers: Map<String, String>): SiteResponse {
@@ -34,15 +35,43 @@ internal class BrowserSiteTransport(
         return slots.withPermit { load(url, headers) }
     }
 
+    override suspend fun post(
+        url: String,
+        headers: Map<String, String>,
+        data: Map<String, String>
+    ): SiteResponse {
+        require(PeliCineHDMarkup.siteUrl(url)) { "URL ajena al sitio" }
+        val body = JSONObject(data as Map<*, *>).toString()
+        return slots.withPermit { load(url, headers, postBody = body) }
+    }
+
+    override suspend fun cookiesFor(url: String): Map<String, String> {
+        if (!PeliCineHDMarkup.siteUrl(url)) return emptyMap()
+        val jar = try {
+            CookieManager.getInstance().getCookie(url)
+        } catch (_: Exception) {
+            null
+        } ?: return emptyMap()
+        return jar.split(';').mapNotNull { part ->
+            val index = part.indexOf('=')
+            if (index <= 0) null else part.substring(0, index).trim() to part.substring(index + 1).trim()
+        }.toMap()
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
-    private suspend fun load(target: String, headers: Map<String, String>): SiteResponse = suspendCancellableCoroutine { continuation ->
+    private suspend fun load(
+        target: String,
+        headers: Map<String, String>,
+        postBody: String? = null
+    ): SiteResponse = suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
         val finished = AtomicBoolean(false)
         var webView: WebView? = null
         var status = 200
         var fetchStarted = false
         var generation = 0
-        val apiRequest = URI(target).path.orEmpty().startsWith("/wp-admin/admin-ajax.php")
+        val apiRequest = URI(target).path.orEmpty().startsWith("/wp-admin/admin-ajax.php") &&
+            postBody == null
         val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value
         val base = referer?.takeIf { PeliCineHDMarkup.siteUrl(it) && URI(it).host.equals(URI(target).host, true) }
             ?: URI(target).let { "${it.scheme}://${it.host}/" }
@@ -100,6 +129,10 @@ internal class BrowserSiteTransport(
             try {
                 val view = WebView(context)
                 webView = view
+                // Android's WebView advertises itself with "; wv", which Cloudflare's bot rules
+                // reject even after the challenge. A plain Chrome User-Agent is required here.
+                view.settings.userAgentString = BROWSER_AGENT
+                CookieManager.getInstance().setAcceptCookie(true)
                 view.settings.javaScriptEnabled = true
                 view.settings.domStorageEnabled = true
                 view.settings.blockNetworkImage = true
@@ -154,7 +187,13 @@ internal class BrowserSiteTransport(
                                 fetchStarted = true
                                 // Report an allowed landing redirect instead of issuing a cross-origin fetch.
                                 val quoted = JSONObject.quote(if (sameOrigin) target else url)
-                                val script = """window.__peliCineResult=null; fetch($quoted,{credentials:'same-origin'}).then(async r=>{let t=await r.text();window.__peliCineResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__peliCineResult=JSON.stringify({status:0,url:location.href,text:''});});"""
+                                val options = if (postBody == null) {
+                                    "{credentials:'same-origin'}"
+                                } else {
+                                    val encoded = postBody
+                                    "{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body:${JSONObject.quote(encoded)}}"
+                                }
+                                val script = """window.__peliCineResult=null; fetch($quoted,$options).then(async r=>{let t=await r.text();window.__peliCineResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__peliCineResult=JSON.stringify({status:0,url:location.href,text:''});});"""
                                 view.evaluateJavascript(script, null)
                                 handler.postDelayed(poll, 250L)
                             }
@@ -162,7 +201,12 @@ internal class BrowserSiteTransport(
                     }
                 }
                 handler.postDelayed(timeout, WEBVIEW_MILLIS)
-                view.loadUrl(if (apiRequest) base else target)
+                if (postBody != null) {
+                    // Land on the site first so the POST is same-origin and carries the cookies.
+                    view.loadUrl(base)
+                } else {
+                    view.loadUrl(if (apiRequest) base else target)
+                }
             } catch (e: Exception) {
                 finish(Result.failure(e))
             }
@@ -170,6 +214,14 @@ internal class BrowserSiteTransport(
     }
 
     companion object {
+        /**
+         * The UA a stock Chrome on Android sends. It must not contain `; wv`: Cloudflare treats
+         * an embedded WebView as a bot and answers 403 before the challenge even starts.
+         */
+        const val BROWSER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/131.0.0.0 Mobile Safari/537.36"
+
         private const val WEBVIEW_MILLIS = 25_000L
         private const val MAX_BODY_CHARS = 2_000_000
         internal fun looksLikeChallenge(text: String): Boolean = PeliCineHDMarkup.isChallenge(text)

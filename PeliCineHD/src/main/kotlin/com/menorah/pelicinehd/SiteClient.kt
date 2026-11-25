@@ -2,9 +2,12 @@ package com.menorah.pelicinehd
 
 import android.content.Context
 import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class SiteResponse(val code: Int, val url: String, val text: String) {
     val isSuccessful: Boolean get() = code in 200..299
@@ -14,48 +17,111 @@ internal fun interface SiteTransport {
     suspend fun get(url: String, headers: Map<String, String>): SiteResponse
 }
 
-/** On refusal try the browser as a transport, not merely its cookies in the HTTP client. */
+internal fun interface SitePoster {
+    suspend fun post(url: String, headers: Map<String, String>, data: Map<String, String>): SiteResponse
+}
+
+/** The browser is the only transport that can solve a Cloudflare challenge and read its cookies. */
+internal interface CookieSource {
+    suspend fun cookiesFor(url: String): Map<String, String>
+}
+
+/**
+ * Two transports behind one door.
+ *
+ * Plain HTTP is used first because it is fast and cheap. When Cloudflare refuses it (`403`, or a
+ * `200` whose body is the challenge page), the site is opened once in the device browser: that
+ * solves the challenge and hands out `cf_clearance`, whose cookies are then attached to every
+ * later HTTP request. A page is only fetched inside the browser when HTTP still fails with the
+ * cookies in place, so a normal session opens the browser once instead of once per page.
+ */
 internal class SiteClient(
     private val http: SiteTransport,
     private val browser: SiteTransport,
+    private val httpPost: SitePoster? = null,
+    private val cookieSource: CookieSource? = null,
 ) {
+    private val cookies = ConcurrentHashMap<String, String>()
     private val browserPreferred = ConcurrentHashMap.newKeySet<String>()
+    private val solved = AtomicBoolean(false)
+    private val solveMutex = Mutex()
+
+    private fun withCookies(headers: Map<String, String>): Map<String, String> {
+        if (cookies.isEmpty()) return headers
+        val jar = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        return headers + ("Cookie" to jar)
+    }
+
+    /** Copies the browser's cookies for the site so plain HTTP can reuse them. */
+    private suspend fun learnCookies(url: String) {
+        val source = cookieSource ?: return
+        val found = attempt { source.cookiesFor(url) } ?: return
+        if (found.isNotEmpty()) cookies.putAll(found)
+    }
 
     suspend fun get(url: String, headers: Map<String, String> = emptyMap()): SiteResponse {
         val host = runCatching { URI(url).host?.lowercase() }.getOrNull().orEmpty()
-        var browserResult: SiteResponse? = null
-        var browserTried = false
         if (host in browserPreferred) {
-            browserTried = true
-            browserResult = attempt { browser.get(url, headers) }
-            if (browserResult?.isSuccessful == true) return browserResult
+            val fromBrowser = attempt { browser.get(url, headers) }
+            if (fromBrowser != null && fromBrowser.isSuccessful &&
+                !PeliCineHDMarkup.isChallenge(fromBrowser.text)
+            ) {
+                return fromBrowser
+            }
             browserPreferred.remove(host)
         }
-        val response = attempt { http.get(url, headers) }
-        if (response != null && response.code !in REFUSALS) return response
-        val fromBrowser = if (browserTried) browserResult else attempt { browser.get(url, headers) }
-        if (fromBrowser?.isSuccessful == true) {
-            if (host.isNotEmpty()) browserPreferred.add(host)
+
+        val direct = attempt { http.get(url, withCookies(headers)) }
+        if (direct != null && direct.isSuccessful && !PeliCineHDMarkup.isChallenge(direct.text)) {
+            return direct
+        }
+
+        // Cloudflare is refusing this client: solve the challenge once, then retry over HTTP.
+        solve()
+        val retried = attempt { http.get(url, withCookies(headers)) }
+        if (retried != null && retried.isSuccessful && !PeliCineHDMarkup.isChallenge(retried.text)) {
+            return retried
+        }
+
+        val fromBrowser = attempt { browser.get(url, headers) }
+        if (fromBrowser != null && fromBrowser.isSuccessful) {
+            learnCookies(url)
+            if (host.isNotEmpty() && !PeliCineHDMarkup.isChallenge(fromBrowser.text)) {
+                browserPreferred.add(host)
+            }
             return fromBrowser
         }
-        return response ?: fromBrowser
+        return direct ?: retried ?: fromBrowser
             ?: throw IllegalStateException("No se pudo conectar con PeliCineHD desde la aplicación.")
     }
 
-    /** True when the page that came back is the Cloudflare interstitial rather than site HTML. */
-    suspend fun getHtml(url: String, headers: Map<String, String> = emptyMap()): SiteResponse {
-        val response = get(url, headers)
-        if (!response.isSuccessful || !PeliCineHDMarkup.isChallenge(response.text)) return response
-        // The HTTP client got the challenge; the browser may still solve it.
-        val fromBrowser = attempt { browser.get(url, headers) }
-        if (fromBrowser != null && fromBrowser.isSuccessful &&
-            !PeliCineHDMarkup.isChallenge(fromBrowser.text)
-        ) {
-            val host = runCatching { URI(url).host?.lowercase() }.getOrNull()
-            if (!host.isNullOrEmpty()) browserPreferred.add(host)
-            return fromBrowser
+    /** Opens the home page in the browser once, which is what makes Cloudflare issue cookies. */
+    private suspend fun solve(): Unit = solveMutex.withLock {
+        if (solved.get()) return@withLock
+        val home = PeliCineHDMarkup.BASE + "/"
+        val response = attempt { browser.get(home, emptyMap()) }
+        if (response != null && response.isSuccessful) {
+            learnCookies(home)
+            solved.set(true)
         }
-        return response
+    }
+
+    /** POST for the theme's `admin-ajax.php` actions, with the same fallback order. */
+    suspend fun post(url: String, headers: Map<String, String>, data: Map<String, String>): SiteResponse {
+        val direct = attempt { httpPost?.post(url, withCookies(headers), data) }
+        if (direct != null && direct.isSuccessful && !PeliCineHDMarkup.isChallenge(direct.text)) {
+            return direct
+        }
+        solve()
+        val retried = attempt { httpPost?.post(url, withCookies(headers), data) }
+        if (retried != null && retried.isSuccessful && !PeliCineHDMarkup.isChallenge(retried.text)) {
+            return retried
+        }
+        val poster = browser as? SitePoster
+        val fromBrowser = if (poster != null) attempt { poster.post(url, headers, data) } else null
+        if (fromBrowser != null && fromBrowser.isSuccessful) return fromBrowser
+        return direct ?: retried ?: fromBrowser
+            ?: throw IllegalStateException("No se pudo enviar la petición a PeliCineHD.")
     }
 
     private suspend fun <T> attempt(block: suspend () -> T): T? = try {
@@ -67,8 +133,6 @@ internal class SiteClient(
     }
 
     companion object {
-        /** 403/429/503 are the answers Cloudflare gives to a plain HTTP client. */
-        private val REFUSALS = listOf(403, 429, 503)
         const val REQUEST_SECONDS = 25L
 
         fun create(context: Context): SiteClient {
@@ -76,8 +140,12 @@ internal class SiteClient(
                 val r = app.get(url, headers = headers, timeout = REQUEST_SECONDS)
                 SiteResponse(r.code, r.url, r.text)
             }
+            val post = SitePoster { url, headers, data ->
+                val r = app.post(url, headers = headers, data = data, timeout = REQUEST_SECONDS)
+                SiteResponse(r.code, r.url, r.text)
+            }
             val browser = BrowserSiteTransport(context.applicationContext)
-            return SiteClient(http, browser)
+            return SiteClient(http, browser, post, browser)
         }
     }
 }
