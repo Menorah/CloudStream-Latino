@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probar cadena completa + Playwright sin disable-devtool + /pl vs /pli
+      - name: Inspeccionar wvdetect.js, player.js y abrir stellarconductornexus en Chrome Xvfb
         run: |
           python3 -m pip install -q playwright
           python3 -m playwright install chromium || true
@@ -25,7 +25,10 @@ jobs:
               ("SkinCrawler_1843139", "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"),
           ]
 
-          # First dump full turnstile script via urllib so we know its exact mode
+          def emit(title, txt):
+              clean = str(txt).replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+              print(f"::notice title={title}::{clean[:3400]}")
+
           op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
           def ufetch(url, ref=None):
               h = {"User-Agent": UA}
@@ -33,18 +36,40 @@ jobs:
               with op.open(urllib.request.Request(url, headers=h), timeout=15) as r:
                   return r.read().decode("utf-8", "replace"), r.geturl()
 
-          b1, u1 = ufetch(TARGETS[0][1], "https://pelisjuanita.com/")
-          api_rel = re.search(r'data-api="([^"]+)"', b1).group(1).replace("&amp;", "&")
-          b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
-          landing = json.loads(b2)["src"]
-          b3, u3 = ufetch(landing, "https://vsembed.su/")
-          cfg = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3).group(1))
-          b4, u4 = ufetch(urllib.parse.urljoin(u3, cfg["playerUrl"]), u3)
-          i_ts = b4.find("turnstileSiteKey")
-          ts_html = b4[i_ts:i_ts+9000] if i_ts != -1 else b4[-5000:]
-          for k in range(0, len(ts_html), 3000):
-              part = ts_html[k:k+3000].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
-              print(f"::notice title=TS_SCRIPT_{k}::{part}")
+          landings = []
+          player_sample = None
+          for label, url in TARGETS:
+              b1, u1 = ufetch(url, "https://pelisjuanita.com/")
+              if label.startswith("BigGirls"):
+                  emit("MOVIE_HTML_SCRIPTS", "|".join(re.findall(r'<script[^>]*src="([^"]+)"', b1)))
+              api_rel = re.search(r'data-api="([^"]+)"', b1).group(1).replace("&amp;", "&")
+              b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
+              landing = json.loads(b2)["src"]
+              b3, u3 = ufetch(landing, "https://vsembed.su/")
+              cfg = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3).group(1))
+              player_u = urllib.parse.urljoin(u3, cfg["playerUrl"])
+              landings.append((label, landing, player_u, u3))
+              if not player_sample:
+                  player_sample, _ = ufetch(player_u, u3)
+
+          # Fetch wvdetect.js & check player.js references to pli/plc/wv_beacon/vs:verified
+          m_wv = re.search(r'src="(/embed/iframe_player/assets/wvdetect\.js[^"]*)"', player_sample)
+          if m_wv:
+              wv_js, _ = ufetch(urllib.parse.urljoin(landings[0][2], m_wv.group(1)), landings[0][2])
+              emit("WVDETECT_JS", wv_js[:3400])
+              if len(wv_js) > 3400:
+                  emit("WVDETECT_JS_2", wv_js[3400:6800])
+
+          m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', player_sample)
+          if m_pj:
+              p_js, _ = ufetch(urllib.parse.urljoin(landings[0][2], m_pj.group(1)), landings[0][2])
+              hits = []
+              for kw in ["vs:verified", "apiToken", "pli", "plc", "generate", "stream_urls", "TokenLoader", "token="]:
+                  for m in re.finditer(re.escape(kw), p_js):
+                      hits.append(f"[{kw}] " + p_js[max(0, m.start()-60):m.end()+140])
+                      if len(hits) >= 24:
+                          break
+              emit("PLAYER_JS_HITS", "\n".join(hits)[:3400])
 
           with sync_playwright() as p:
               try:
@@ -52,36 +77,34 @@ jobs:
               except Exception:
                   browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
               ctx = browser.new_context(viewport={"width": 1280, "height": 720}, user_agent=UA)
-              ctx.add_init_script("""
-                  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                  Object.defineProperty(window, 'DisableDevtool', {
-                      value: function() {}, writable: false, configurable: false
-                  });
-              """)
-              for label, url in TARGETS:
+              ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+              for label, landing, player_u, u3 in landings:
                   page = ctx.new_page()
                   page.route(re.compile(r"disable-devtool|histats|acscdn|cloudflareinsights", re.I), lambda r: r.abort())
                   events = []
-                  found = {"stream": "", "headers": {}}
+                  found = {"stream": "", "headers": {}, "verify": ""}
                   def on_req(req):
                       u = req.url
                       low = u.lower()
-                      if any(k in low for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "turnstile", "/pl/", "/pli/", "/plc/"]):
-                          events.append(f"REQ:{u[:105]}")
+                      if any(k in low for k in ["/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "wv_beacon", "turnstile", "/pl/", "/pli/", "/plc/", "challenges.cloudflare"]):
+                          events.append(f"REQ:{u[:110]}")
                       if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
                           found["stream"] = u
                           found["headers"] = dict(req.headers)
                   def on_resp(resp):
                       u = resp.url
-                      if any(k in u for k in ["vs_src.php", "verify.php", "generate.php", "data.vidsrc.sh"]):
+                      if any(k in u for k in ["verify.php", "generate.php", "data.vidsrc.sh", "wv_beacon", "challenges.cloudflare"]):
                           try:
-                              events.append(f"RESP:{resp.status}:{u[:60]}:{resp.text()[:120]}")
+                              txt = resp.text()[:180]
+                              if "verify.php" in u: found["verify"] = txt
+                              events.append(f"RESP:{resp.status}:{u[:55]}:{txt}")
                           except Exception:
-                              events.append(f"RESP:{resp.status}:{u[:60]}")
+                              events.append(f"RESP:{resp.status}:{u[:55]}")
                   page.on("request", on_req)
                   page.on("response", on_resp)
-                  page.on("framenavigated", lambda fr: events.append(f"NAV:{fr.url[:80]}"))
-                  page.goto(url, referer="https://pelisjuanita.com/", wait_until="domcontentloaded", timeout=25000)
+                  page.on("console", lambda m: events.append(f"CON:{m.type}:{m.text[:100]}") if m.type in ("error", "warning") else None)
+                  page.on("framenavigated", lambda fr: events.append(f"NAV:{fr.url[:85]}"))
+                  page.goto(landing, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
 
                   for step in range(45):
                       if found["stream"]:
@@ -97,8 +120,7 @@ jobs:
                                   pass
                           if "challenges.cloudflare.com" in fr.url and step in (10, 18, 26):
                               try:
-                                  el = fr.frame_element()
-                                  box = el.bounding_box()
+                                  box = fr.frame_element().bounding_box()
                                   events.append(f"TS_BOX:{box}")
                                   if box and box["width"] > 20 and box["height"] > 20:
                                       page.mouse.click(box["x"] + 28, box["y"] + box["height"] / 2)
@@ -113,15 +135,16 @@ jobs:
                           try:
                               ts_info = fr.evaluate("""() => ({
                                   hasApiToken: !!(window.CONFIG && window.CONFIG.apiToken),
-                                  turnstile: !!(window.CONFIG && window.CONFIG.turnstile),
+                                  rateLimited: !!(window.CONFIG && window.CONFIG.rateLimited),
                                   gateClass: (document.getElementById('tsGate') || {}).className || '',
                                   gateText: ((document.getElementById('tsGate') || {}).innerText || '').slice(0, 120),
-                                  errText: ((document.getElementById('errorText') || {}).innerText || '')
+                                  errText: ((document.getElementById('errorText') || {}).innerText || ''),
+                                  iframeSrcs: Array.from(document.querySelectorAll('iframe')).map(i => i.src)
                               })""")
                           except Exception as e:
                               ts_info = {"eval_err": repr(e)}
 
-                  res = {"label": label, "stream": found["stream"], "headers": found["headers"], "ts": ts_info, "events": events[-24:]}
+                  res = {"label": label, "stream": found["stream"], "verify": found["verify"], "ts": ts_info, "events": events[-24:]}
                   if found["stream"]:
                       hdrs = {k: v for k, v in found["headers"].items() if k.lower() in ("origin", "referer", "user-agent")}
                       for mode in ["orig", "pli", "plc"]:
@@ -144,8 +167,7 @@ jobs:
                                           res[f"{mode}_child"] = {"code": ce.code}
                           except urllib.error.HTTPError as e:
                               res[f"{mode}_master"] = {"code": e.code}
-                  s = json.dumps(res, ensure_ascii=False)[:3400].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
-                  print(f"::notice title=CHROME_{label}::{s}")
+                  emit(f"CHROME_{label}", json.dumps(res, ensure_ascii=False))
                   page.close()
               browser.close()
           PY
