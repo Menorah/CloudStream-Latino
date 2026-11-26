@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Read-only inventory of the user-provided pelisjuanita.com.zip archive."""
+"""Compact inventory of non-media files in pelisjuanita.com.zip (<= 8 annotations)."""
 import base64
 import hashlib
 import http.cookiejar
 import json
 import re
+import subprocess
 import traceback
 import urllib.request
 import zipfile
@@ -25,8 +26,6 @@ def redact(s: str) -> str:
 def download_zip(dest_path):
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    errors = []
-    # First visit landing page to obtain cookies + fresh download link
     try:
         req = urllib.request.Request(LANDING_URL, headers={"User-Agent": UA, "Accept": "text/html,*/*"})
         with opener.open(req, timeout=30) as r:
@@ -38,69 +37,46 @@ def download_zip(dest_path):
             data = r2.read()
             if data[:2] == b"PK":
                 open(dest_path, "wb").write(data)
-                return len(data), dl
-            errors.append(f"non-zip status={r2.status} ct={r2.headers.get('Content-Type')} head={data[:120]!r}")
-    except Exception as e:
-        errors.append(f"landing flow: {e!r}")
-
-    # Fallback: curl via subprocess in case TLS fingerprint matters
-    import subprocess
-    for url in (DIRECT_URL,):
-        proc = subprocess.run(
-            ["curl", "-sSL", "-A", UA, "-e", LANDING_URL, "-o", dest_path, "-w", "%{http_code} %{size_download}", url],
-            capture_output=True, text=True, timeout=180
-        )
-        errors.append(f"curl({proc.returncode}): {proc.stdout} {proc.stderr[:120]}")
-        try:
-            with open(dest_path, "rb") as f:
-                if f.read(2) == b"PK":
-                    import os
-                    return os.path.getsize(dest_path), url
-        except Exception:
-            pass
-    raise RuntimeError(" | ".join(errors))
+                return len(data)
+    except Exception:
+        pass
+    subprocess.run(
+        ["curl", "-sSL", "-A", UA, "-e", LANDING_URL, "-o", dest_path, DIRECT_URL],
+        check=True, timeout=180,
+    )
+    import os
+    return os.path.getsize(dest_path)
 
 
 def main():
     zip_path = "/tmp/pelisjuanita.com.zip"
-    size, used_url = download_zip(zip_path)
-    entries = []
-    unique_text = {}
-    media_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".webm", ".avif"}
+    size = download_zip(zip_path)
+    media_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".webm", ".avif", ".svg", ".css"}
+    ext_counts = {}
+    non_media = []
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
-            ext = ""
-            if "." in info.filename.rsplit("/", 1)[-1]:
-                ext = "." + info.filename.rsplit(".", 1)[-1].lower()
-            raw = zf.read(info.filename)
-            sha = hashlib.sha256(raw).hexdigest()[:16]
-            entries.append({
-                "name": redact(info.filename),
-                "size": info.file_size,
-                "ext": ext,
-                "sha": sha,
-            })
-            if ext not in media_exts and sha not in unique_text:
-                text_preview = redact(raw[:500].decode("utf-8", "replace"))
-                unique_text[sha] = {
-                    "sample_name": redact(info.filename),
-                    "size": len(raw),
-                    "preview": text_preview,
-                }
-    report = {
-        "zip_bytes": size,
-        "used_url_host": used_url.split("/")[2],
-        "total_files": len(entries),
-        "entries": entries,
-        "unique_non_media": unique_text,
-    }
+            base = info.filename.rsplit("/", 1)[-1]
+            ext = ("." + base.rsplit(".", 1)[-1].lower()) if "." in base else ""
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            if ext not in media_exts:
+                raw = zf.read(info.filename)
+                sha = hashlib.sha256(raw).hexdigest()[:12]
+                head = redact(raw[:220].decode("utf-8", "replace"))
+                non_media.append({
+                    "n": redact(info.filename),
+                    "s": info.file_size,
+                    "h": sha,
+                    "p": head if not head.startswith("/*!") else head[:80],
+                })
+    report = {"zip_bytes": size, "ext_counts": ext_counts, "non_media": non_media}
     raw = json.dumps(report, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     b64 = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
     total_chunks = (len(b64) + 3199) // 3200
     for idx, i in enumerate(range(0, len(b64), 3200)):
-        print(f"::notice::PJZIP1 {idx + 1}/{total_chunks} {b64[i:i+3200]}", flush=True)
+        print(f"::notice::PJINV {idx + 1}/{total_chunks} {b64[i:i+3200]}", flush=True)
 
 
 if __name__ == "__main__":
