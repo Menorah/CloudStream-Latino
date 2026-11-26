@@ -135,7 +135,7 @@ object PlaybackProbe {
                         "Earnvids" to "https://callistanise.com/v/lg0w6ezhvyd8",
                         "StreamWish" to "https://hglink.to/e/u8jqwoe4cnpt",
                         "Byse" to "https://bysesukior.com/e/92rgcn88ka85",
-                        "MixDrop" to "https://mixdrop.top/e/7kgq9r3vcmjjx4",
+                        "MixDrop" to "https://mixdrop.top/e/q11gg30obxxogvn",
                         "Voe" to "https://voe.sx/e/ltvamjdzsvxv",
                         "Savefiles" to "https://savefiles.com/e/lpkobe2ki65z",
                         "Lulustream" to "https://lulustream.com/e/zxfcz3pz68ds",

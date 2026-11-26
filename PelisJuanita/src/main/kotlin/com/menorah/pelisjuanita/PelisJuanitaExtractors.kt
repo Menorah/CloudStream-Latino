@@ -22,6 +22,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -1283,7 +1284,8 @@ open class PelisJuanitaMixDropTopExtractor : ExtractorApi() {
                 } ?: continue
                 if (!res.isSuccessful) continue
 
-                val sourcesToScan: List<String> = PelisJuanitaVidHideParser.unpackAll(res.text) + res.text
+                val csUnpacked = runCatching { getAndUnpack(res.text) }.getOrNull()?.takeIf { it != res.text }
+                val sourcesToScan: List<String> = listOfNotNull(csUnpacked) + PelisJuanitaVidHideParser.unpackAll(res.text) + res.text
                 val rawWurl = sourcesToScan.firstNotNullOfOrNull { text ->
                     WURL_REGEX.find(text)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
                 } ?: continue
