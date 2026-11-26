@@ -9,23 +9,37 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Byse playback and Lulustream tail
+      - name: Check Byse POST and Lulustream unpack
         run: |
           python3 - <<'PY'
           import urllib.request, urllib.error, urllib.parse, json, re
           ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-          def hit(url, data=None, hdrs=None):
-              body = urllib.parse.urlencode(data).encode() if data else None
-              req = urllib.request.Request(url, data=body, headers={"User-Agent": ua, **(hdrs or {})})
+          def hit(url, data=None, hdrs=None, method=None):
+              body = data.encode() if isinstance(data, str) else (urllib.parse.urlencode(data).encode() if data else None)
+              req = urllib.request.Request(url, data=body, headers={"User-Agent": ua, **(hdrs or {})}, method=method)
               try:
                   with urllib.request.urlopen(req, timeout=15) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
               except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), e.read().decode("utf-8", "replace")
-          c, u, t = hit("https://n1mwq.org/api/videos/92rgcn88ka85/embed/playback", None, {"Accept":"*/*","Referer":"https://n1mwq.org/fe4/92rgcn88ka85","x-embed-parent":"https://bysesukior.com/e/92rgcn88ka85"})
-          print("::notice::BYSE_PB=" + json.dumps({"code": c, "url": u, "body": t[:1500]})[:3800].replace("%","%25").replace("\n","%0A"))
-          c2, u2, t2 = hit("https://lplaygo.com/dl", {"op":"embed","file_code":"zxfcz3pz68ds","auto":"1","referer":"https://pelisjuanita.com/"}, {"Referer":"https://lplaygo.com/e/zxfcz3pz68ds"})
-          idx = t2.find("vplayer")
-          tail = t2[max(0, idx-200):idx+2500] if idx >= 0 else t2[-2500:]
-          print("::notice::LULU_TAIL=" + json.dumps({"code": c2, "len": len(t2), "tail": tail})[:3800].replace("%","%25").replace("\n","%0A"))
+                  return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
+          c, u, h, t = hit("https://n1mwq.org/fe4/92rgcn88ka85", None, {"Referer": "https://bysesukior.com/e/92rgcn88ka85"})
+          print("::notice::BYSE_HTML=" + json.dumps({"code": c, "url": u, "head": t[:2000]})[:3800].replace("%","%25").replace("\n","%0A"))
+          c_p, u_p, h_p, t_p = hit("https://n1mwq.org/api/videos/92rgcn88ka85/embed/playback", data="{}", hdrs={"Accept":"*/*","Content-Type":"application/json","Referer":"https://n1mwq.org/fe4/92rgcn88ka85","Origin":"https://n1mwq.org","x-embed-parent":"https://bysesukior.com/e/92rgcn88ka85"}, method="POST")
+          print("::notice::BYSE_POST=" + json.dumps({"code": c_p, "url": u_p, "body": t_p[:1500]})[:3800].replace("%","%25").replace("\n","%0A"))
+          c2, u2, h2, t2 = hit("https://lplaygo.com/dl", {"op":"embed","file_code":"zxfcz3pz68ds","auto":"1","referer":"https://pelisjuanita.com/"}, {"Referer":"https://lplaygo.com/e/zxfcz3pz68ds"})
+          m = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split", t2, re.S)
+          if m:
+              p, a, _, k = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
+              alpha = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+              def rep(mt):
+                  s = mt.group(0)
+                  n = sum(alpha.index(ch)*(a**i) for i, ch in enumerate(reversed(s)))
+                  return k[n] if n < len(k) and k[n] else s
+              unp = re.sub(r"\b[0-9a-zA-Z]+\b", rep, p)
+              print("::notice::LULU_UNP=" + unp[:1500].replace("%","%25").replace("\n","%0A"))
+              u_m3u8 = re.search(r'file:"([^"]+)"', unp)
+              if u_m3u8:
+                  mu = u_m3u8.group(1)
+                  mc, _, mh, mt = hit(mu, None, {"Referer":"https://lplaygo.com/","Origin":"https://lplaygo.com"})
+                  print("::notice::LULU_M3U8=" + json.dumps({"url": mu, "code": mc, "head": mt[:800]})[:3800].replace("%","%25").replace("\n","%0A"))
           PY
