@@ -49,6 +49,16 @@ internal object PelisJuanitaVerificationDialog {
         else -> null
     }
 
+    internal fun collectSiteCookies(currentUrl: String? = null): String = runCatching {
+        val cm = CookieManager.getInstance()
+        val apex = cm.getCookie(PelisJuanitaMarkup.MAIN_URL).orEmpty()
+        val www = cm.getCookie("https://www.pelisjuanita.com").orEmpty()
+        val cur = currentUrl?.takeIf { PelisJuanitaMarkup.isSiteUrl(it) }?.let { cm.getCookie(it).orEmpty() }.orEmpty()
+        var merged = PelisJuanitaSessionHelper.mergeCookieHeaders(www, apex)
+        merged = PelisJuanitaSessionHelper.mergeCookieHeaders(merged, cur)
+        merged
+    }.getOrNull().orEmpty()
+
     @SuppressLint("SetJavaScriptEnabled")
     fun show(
         context: Context,
@@ -188,50 +198,68 @@ internal object PelisJuanitaVerificationDialog {
             }
             webView.webChromeClient = WebChromeClient()
 
-            fun inspectCompletion(url: String?) {
+            fun persistVerifiedSession(currentUrl: String, fallbackCookie: String, autoDismiss: Boolean) {
+                if (!savedSuccess.compareAndSet(false, true)) return
+                runCatching { CookieManager.getInstance().flush() }
+                val finalCookie = collectSiteCookies(currentUrl).ifBlank { fallbackCookie }
+                val ua = runCatching { webView.settings.userAgentString }.getOrNull().orEmpty()
+                sessionStore.save(
+                    PelisJuanitaSessionData(
+                        cookieHeader = finalCookie,
+                        userAgent = ua,
+                        verifiedAtMs = System.currentTimeMillis(),
+                    ),
+                )
+                statusText.text = "✅ Sesión verificada — ya puedes cerrar y reproducir"
+                statusText.setTextColor(Color.parseColor("#86EFAC"))
+                onVerified?.invoke()
+                if (autoDismiss) {
+                    handler.postDelayed({
+                        if (!disposed.get() && dialog.isShowing) {
+                            runCatching { dialog.dismiss() }
+                        }
+                    }, 900L)
+                }
+            }
+
+            fun inspectCompletion(url: String?, allowEarlyDismissSave: Boolean = false) {
                 if (disposed.get() || savedSuccess.get()) return
-                val currentUrl = url ?: webView.url ?: return
+                val currentUrl = url ?: runCatching { webView.url }.getOrNull() ?: return
                 if (!PelisJuanitaMarkup.isSiteUrl(currentUrl)) return
                 if (currentUrl.contains("/inicio.php", ignoreCase = true)) return
 
-                val cookieHeader = runCatching {
-                    CookieManager.getInstance().getCookie(PelisJuanitaMarkup.MAIN_URL)
-                }.getOrNull().orEmpty()
+                val cookieHeader = collectSiteCookies(currentUrl)
                 val hasPhpSession = PelisJuanitaSessionHelper.parseCookieHeader(cookieHeader)
                     .keys.any { it.equals("PHPSESSID", ignoreCase = true) }
                 if (!hasPhpSession) return
+
+                if (allowEarlyDismissSave) {
+                    persistVerifiedSession(currentUrl, cookieHeader, autoDismiss = false)
+                    return
+                }
 
                 val js = "(document.documentElement ? document.documentElement.outerHTML.slice(0, 65000) : '')"
                 webView.evaluateJavascript(js) { rawHtml ->
                     if (disposed.get() || savedSuccess.get()) return@evaluateJavascript
                     val html = (runCatching { JSONTokener(rawHtml ?: "null").nextValue() as? String }.getOrNull())
                         .orEmpty()
-                    if (PelisJuanitaSessionHelper.looksLikeVerifiedCatalogOrDetail(currentUrl, html)) {
-                        if (savedSuccess.compareAndSet(false, true)) {
-                            runCatching { CookieManager.getInstance().flush() }
-                            val finalCookie = runCatching {
-                                CookieManager.getInstance().getCookie(PelisJuanitaMarkup.MAIN_URL)
-                            }.getOrNull().orEmpty().ifBlank { cookieHeader }
-                            val ua = runCatching { webView.settings.userAgentString }.getOrNull().orEmpty()
-                            sessionStore.save(
-                                PelisJuanitaSessionData(
-                                    cookieHeader = finalCookie,
-                                    userAgent = ua,
-                                    verifiedAtMs = System.currentTimeMillis(),
-                                ),
-                            )
-                            statusText.text = "✅ Sesión verificada — ya puedes cerrar y reproducir"
-                            statusText.setTextColor(Color.parseColor("#86EFAC"))
-                            onVerified?.invoke()
-                            handler.postDelayed({
-                                if (!disposed.get() && dialog.isShowing) {
-                                    runCatching { dialog.dismiss() }
-                                }
-                            }, 900L)
-                        }
+                    val verifiedBody = PelisJuanitaSessionHelper.looksLikeVerifiedCatalogOrDetail(currentUrl, html) ||
+                        (html.isNotBlank() &&
+                            !PelisJuanitaSessionHelper.looksLikeVerificationGate(200, currentUrl, html) &&
+                            !PelisJuanitaSessionHelper.looksLikeCloudflareChallenge(200, html))
+                    if (verifiedBody) {
+                        persistVerifiedSession(currentUrl, cookieHeader, autoDismiss = true)
                     }
                 }
             }
+
+            lateinit var pollVerification: Runnable
+            pollVerification = Runnable {
+                if (disposed.get() || savedSuccess.get()) return@Runnable
+                inspectCompletion(null, allowEarlyDismissSave = false)
+                handler.postDelayed(pollVerification, 650L)
+            }
+            handler.postDelayed(pollVerification, 900L)
 
             webView.webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -240,8 +268,12 @@ internal object PelisJuanitaVerificationDialog {
                     return true
                 }
 
+                override fun onPageCommitVisible(view: WebView, url: String?) {
+                    inspectCompletion(url, allowEarlyDismissSave = false)
+                }
+
                 override fun onPageFinished(view: WebView, url: String?) {
-                    inspectCompletion(url)
+                    inspectCompletion(url, allowEarlyDismissSave = false)
                 }
             }
 
@@ -259,10 +291,12 @@ internal object PelisJuanitaVerificationDialog {
             }
 
             closeBtn.setOnClickListener {
+                inspectCompletion(null, allowEarlyDismissSave = true)
                 runCatching { dialog.dismiss() }
             }
 
             dialog.setOnDismissListener {
+                inspectCompletion(null, allowEarlyDismissSave = true)
                 if (disposed.compareAndSet(false, true)) {
                     handler.removeCallbacksAndMessages(null)
                     runCatching { CookieManager.getInstance().flush() }
@@ -292,6 +326,7 @@ internal data class PelisJuanitaWebResponse(
     val code: Int,
     val url: String,
     val text: String,
+    val cookieHeader: String = "",
 )
 
 /**
@@ -314,10 +349,11 @@ internal object PelisJuanitaWebTransport {
         url: String,
         referer: String,
         userAgent: String? = null,
+        seedCookieHeader: String? = null,
         testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
     ): PelisJuanitaWebResponse {
         require(PelisJuanitaMarkup.isSiteUrl(url)) { "URL ajena a PelisJuanita" }
-        return slots.withPermit { load(context, url, referer, null, userAgent, testResponse) }
+        return slots.withPermit { load(context, url, referer, null, userAgent, seedCookieHeader, testResponse) }
     }
 
     suspend fun post(
@@ -326,10 +362,11 @@ internal object PelisJuanitaWebTransport {
         referer: String,
         form: Map<String, String>,
         userAgent: String? = null,
+        seedCookieHeader: String? = null,
         testResponse: ((WebResourceRequest) -> WebResourceResponse?)? = null,
     ): PelisJuanitaWebResponse {
         require(PelisJuanitaMarkup.isSiteUrl(url)) { "URL ajena a PelisJuanita" }
-        return slots.withPermit { load(context, url, referer, form, userAgent, testResponse) }
+        return slots.withPermit { load(context, url, referer, form, userAgent, seedCookieHeader, testResponse) }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -339,6 +376,7 @@ internal object PelisJuanitaWebTransport {
         referer: String,
         form: Map<String, String>?,
         userAgent: String?,
+        seedCookieHeader: String?,
         testResponse: ((WebResourceRequest) -> WebResourceResponse?)?,
     ): PelisJuanitaWebResponse = suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
@@ -359,14 +397,18 @@ internal object PelisJuanitaWebTransport {
 
         fun finish(result: Result<PelisJuanitaWebResponse>?) {
             if (!finished.compareAndSet(false, true)) return
+            val enriched = result?.map { res ->
+                val cmCookies = PelisJuanitaVerificationDialog.collectSiteCookies(res.url)
+                if (cmCookies.isNotBlank()) res.copy(cookieHeader = cmCookies) else res
+            }
             handler.post {
                 runCatching { CookieManager.getInstance().flush() }
                 webView?.stopLoading()
                 webView?.destroy()
                 webView = null
             }
-            if (result != null && continuation.isActive) {
-                result.fold(
+            if (enriched != null && continuation.isActive) {
+                enriched.fold(
                     onSuccess = { continuation.resume(it) },
                     onFailure = { continuation.resumeWithException(it) },
                 )
@@ -413,6 +455,7 @@ internal object PelisJuanitaWebTransport {
                     cm.setAcceptCookie(true)
                     cm.setAcceptThirdPartyCookies(view, true)
                 }
+                PelisJuanitaSessionHelper.syncMissingCookiesToWebView(seedCookieHeader)
                 view.settings.javaScriptEnabled = true
                 view.settings.domStorageEnabled = true
                 view.settings.allowFileAccess = false
@@ -496,6 +539,10 @@ internal object PelisJuanitaWebTransport {
                                 handler.postDelayed({ checkReady(view, url, expectedGen) }, 350L)
                                 return@evaluateJavascript
                             }
+                            if (!isAjax && (httpStatus == 403 || httpStatus == 503) && pageText.isBlank()) {
+                                finish(Result.success(PelisJuanitaWebResponse(httpStatus, pageUrl, pageText)))
+                                return@evaluateJavascript
+                            }
                             if (httpStatus == 0) {
                                 finish(Result.failure(IllegalStateException("El navegador no pudo cargar PelisJuanita.")))
                                 return@evaluateJavascript
@@ -518,6 +565,8 @@ internal object PelisJuanitaWebTransport {
                                     }
                                     val quotedBody = JSONObject.quote(encoded)
                                     """window.__pjFetchResult=null;fetch($quotedTarget,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body:$quotedBody}).then(async r=>{const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
+                                } else if (isAjax) {
+                                    """window.__pjFetchResult=null;fetch($quotedTarget,{credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}}).then(async r=>{const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
                                 } else {
                                     """window.__pjFetchResult=null;fetch($quotedTarget,{credentials:'same-origin'}).then(async r=>{const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
                                 }

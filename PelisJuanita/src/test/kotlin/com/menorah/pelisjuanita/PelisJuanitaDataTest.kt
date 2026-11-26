@@ -31,10 +31,19 @@ class PelisJuanitaDataTest {
         )
         assertTrue(session.hasPhpSession())
         val ajaxHeaders = PelisJuanitaSessionHelper.buildRequestHeaders(session, referer = "https://pelisjuanita.com/movies/", isAjax = true)
-        assertEquals("TestAgent/1.0", ajaxHeaders["User-Agent"])
+        assertEquals("TestAgent/1.0", ajaxHeaders["user-agent"])
+        assertNull(ajaxHeaders["User-Agent"])
         assertEquals("PHPSESSID=sess42; cf_clearance=clear1", ajaxHeaders["Cookie"])
         assertEquals("XMLHttpRequest", ajaxHeaders["X-Requested-With"])
         assertEquals("https://pelisjuanita.com/movies/", ajaxHeaders["Referer"])
+
+        val noCookieHeaders = PelisJuanitaSessionHelper.buildRequestHeaders(
+            session,
+            referer = "https://pelisjuanita.com/movies/",
+            isAjax = false,
+            includeCookieHeader = false,
+        )
+        assertNull(noCookieHeaders["Cookie"])
 
         val gateHtml = """<html><form method="POST"><input name="empresa_hp"><input name="captcha"></form></html>"""
         assertTrue(PelisJuanitaSessionHelper.looksLikeVerificationGate(302, "https://pelisjuanita.com/inicio.php", ""))
@@ -43,6 +52,9 @@ class PelisJuanitaDataTest {
         assertFalse(PelisJuanitaSessionHelper.looksLikeVerificationGate(200, "https://pelisjuanita.com/movies/", "<div id=\"dt_contenedor\"><div class=\"grid-container\"></div></div>"))
         assertTrue(PelisJuanitaSessionHelper.looksLikeVerifiedCatalogOrDetail("https://pelisjuanita.com/movies/", "<div id=\"dt_contenedor\"><div class=\"grid-item\"></div></div>"))
         assertTrue(PelisJuanitaSessionHelper.looksLikeCloudflareChallenge(403, "<html><title>Just a moment...</title></html>"))
+        assertTrue(PelisJuanitaSessionHelper.shouldTryWebTransport(403, "https://pelisjuanita.com/movies/pelicula/madden", "", null))
+        assertTrue(PelisJuanitaSessionHelper.shouldTryWebTransport(302, "https://pelisjuanita.com/inicio.php", "", null))
+        assertFalse(PelisJuanitaSessionHelper.shouldTryWebTransport(200, "https://pelisjuanita.com/movies/movieInfo.php", "<div>ok</div>", null))
     }
 
     @Test
@@ -63,10 +75,14 @@ class PelisJuanitaDataTest {
         assertEquals(mapOf("page" to "2"), ep2.postForm)
 
         assertEquals("https://pelisjuanita.com/tv/app/buscar.php?q=%25&pagina=3", PelisJuanitaMarkup.buildSearchApiUrl("%", 3))
+        assertEquals("https://pelisjuanita.com/movies/pelicula/madden", PelisJuanitaMarkup.buildMovieShellUrl("madden"))
         assertEquals("https://pelisjuanita.com/movies/movieInfo.php?title=culpa-nuestra&p=", PelisJuanitaMarkup.buildMovieInfoUrl("culpa-nuestra"))
+        assertEquals("https://pelisjuanita.com/movies/movieInfo.php?title=madden&p=55775", PelisJuanitaMarkup.buildMovieInfoUrl("madden", 55775L))
+        assertEquals(55775L, PelisJuanitaMarkup.extractMovieIdFromShell("""<script>let u = `movieInfo.php?title=` + encodeURIComponent(title) + `&p=55775`;</script>"""))
         assertEquals("https://pelisjuanita.com/series/ver-serie/the-bads-of-bollywood", PelisJuanitaMarkup.buildSerieShellUrl("the-bads-of-bollywood"))
         assertEquals("https://pelisjuanita.com/series/serieInfo.php?nombreSerie=mobland&nroTemporada=1&nroEpisodio=3&p=7650", PelisJuanitaMarkup.buildSerieInfoEpisodeUrl("mobland", 1, 3, 7650L))
         assertEquals("https://pelisjuanita.com/series/serieInfo.php?nombreSerie=mobland&temporada=2&snum=1&enum=1&p=7650", PelisJuanitaMarkup.buildSerieInfoSeasonUrl("mobland", 2, 1, 1, 7650L))
+        assertEquals("https://pelisjuanita.com/series/serieInfo.php?nombreSerie=mobland&nroTemporada=1&nroEpisodio=0&modoTemporada=1&p=7650", PelisJuanitaMarkup.buildSerieInfoSeasonModeUrl("mobland", 1, 7650L))
 
         val movieTarget = PelisJuanitaMarkup.parseTargetUrl("https://pelisjuanita.com/movies/pelicula/culpa-nuestra")
         assertNotNull(movieTarget)
@@ -338,6 +354,42 @@ class PelisJuanitaDataTest {
         assertEquals(52, ep1.runtimeMinutes)
         assertEquals("30/03/2025", ep1.releaseDate)
         assertEquals("Primer episodio.", ep1.description)
+
+        // Real serieInfo.php?nroTemporada=1&nroEpisodio=1 leaves #ulTemporada empty while JS fetches ?temporada=1 bare fragments
+        val emptySeasonShellHtml = """
+            <html><head><meta name="snum" content="1"/><meta name="enum" content="1"/></head><body>
+            <div class="titleInfo"><h1>MobLand</h1></div>
+            <div id="temporadasDropdown">
+              <div class="server-item" onclick="cargarEpisodiosDeTemporada('1');"><span>Temporada 1</span></div>
+              <div class="server-item" onclick="cargarEpisodiosDeTemporada('2');"><span>Temporada 2</span></div>
+            </div>
+            <ul class="ul-temporada" id="ulTemporada"></ul>
+            </body></html>
+        """.trimIndent()
+        val emptyShellDetail = PelisJuanitaMarkup.parseSeriesDetailHtml(emptySeasonShellHtml, "https://pelisjuanita.com/series/ver-serie/mobland")
+        assertNotNull(emptyShellDetail)
+        assertTrue(emptyShellDetail!!.episodes.isEmpty())
+        assertEquals(listOf(1, 2), emptyShellDetail.seasons)
+
+        val bareSeasonFragment = """
+            <a class="episodio-item visible" href="https://pelisjuanita.com/series/ver-serie/mobland/02x01">
+              <div class="episodio-texto">
+                <h2 class="list-title">[02x01] Regreso</h2>
+                <div class="episodio-meta"><span class="episodio-info">50 m • 10/01/2026</span></div>
+              </div>
+            </a>
+            <a class="episodio-item" href="/series/ver-serie/mobland/02x02">
+              <div class="episodio-texto">
+                <h2 class="list-title">[02x02] Cuenta atrás</h2>
+              </div>
+            </a>
+        """.trimIndent()
+        val parsedFragment = PelisJuanitaMarkup.parseSeasonEpisodesHtml(bareSeasonFragment, "mobland", defaultSeason = 2)
+        assertEquals(2, parsedFragment.size)
+        assertEquals(2, parsedFragment[0].season)
+        assertEquals(1, parsedFragment[0].episode)
+        assertEquals("Regreso", parsedFragment[0].title)
+        assertEquals(2, parsedFragment[1].episode)
     }
 
     @Test

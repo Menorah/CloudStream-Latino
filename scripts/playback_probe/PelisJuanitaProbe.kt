@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
+import android.webkit.CookieManager
+import android.webkit.WebResourceResponse
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -18,12 +20,16 @@ import coil3.request.SuccessResult
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.MovieLoadResponse
+import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
 import kotlinx.coroutines.*
+import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
 import java.util.Collections
+import kotlin.coroutines.resume
 
 // Added to a temporary build only; never part of the published plugin.
 object PlaybackProbe {
@@ -87,6 +93,11 @@ object PlaybackProbe {
                     }
                     check(gateOk) { "expected clear Ajustes verification ErrorLoadingException" }
                     Log.i("CSPlaybackProbe", "PASS unverified movie metadata and verification prompt")
+
+                    // Verified-session WebView regression check: CookieManager wipe recovery,
+                    // empty #ulTemporada + bare temporada=N fragment series loading, and movie ?p=<id> loadLinks.
+                    verifyVerifiedSessionFlows(context)
+                    Log.i("CSPlaybackProbe", "PASS verified session WebView series/movie/cookie flow")
 
                     // Coil image checks across home, search and loaded detail
                     val posterChecks = mutableListOf<Triple<String, String?, Map<String, String>?>>()
@@ -223,5 +234,121 @@ object PlaybackProbe {
                 error("Coil failed for $label ($url): ${result.throwable.javaClass.simpleName}: ${result.throwable.message}")
             }
         }
+    }
+
+    private suspend fun clearWebViewCookies() {
+        withContext(Dispatchers.Main) {
+            suspendCancellableCoroutine<Unit> { cont ->
+                runCatching {
+                    val cm = CookieManager.getInstance()
+                    cm.removeAllCookies {
+                        cm.flush()
+                        if (cont.isActive) cont.resume(Unit)
+                    }
+                }.onFailure {
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
+        }
+    }
+
+    private suspend fun verifyVerifiedSessionFlows(context: Context) {
+        clearWebViewCookies()
+
+        val verifiedStore = InMemoryPelisJuanitaSessionStore(
+            PelisJuanitaSessionData(
+                cookieHeader = "PHPSESSID=verified-probe-sess; cf_clearance=probe-clear",
+                userAgent = PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                verifiedAtMs = System.currentTimeMillis(),
+            ),
+        )
+        val verifiedProvider = PelisJuanitaProvider(context, verifiedStore)
+        val seenMovieInfoUrls = Collections.synchronizedList(mutableListOf<String>())
+
+        verifiedProvider.testWebResponse = { req ->
+            val u = req.url.toString()
+            val html = when {
+                u.contains("/series/ver-serie/mobland") -> """
+                    <html><head><title>MobLand</title></head><body>
+                    <script>window.CURRENT_SERIE_ID=7650;</script>
+                    <div id="dt_contenedor"></div>
+                    </body></html>
+                """.trimIndent()
+                u.contains("serieInfo.php") && u.contains("temporada=1") -> """
+                    <a class="episodio-item" href="/series/ver-serie/mobland/01x01"><div class="episodio-texto"><h2 class="list-title">[01x01] Ep 1</h2></div></a>
+                    <a class="episodio-item" href="/series/ver-serie/mobland/01x02"><div class="episodio-texto"><h2 class="list-title">[01x02] Ep 2</h2></div></a>
+                """.trimIndent()
+                u.contains("serieInfo.php") && u.contains("temporada=2") -> """
+                    <a class="episodio-item" href="/series/ver-serie/mobland/02x01"><div class="episodio-texto"><h2 class="list-title">[02x01] Ep 1 T2</h2></div></a>
+                    <a class="episodio-item" href="/series/ver-serie/mobland/02x02"><div class="episodio-texto"><h2 class="list-title">[02x02] Ep 2 T2</h2></div></a>
+                """.trimIndent()
+                u.contains("serieInfo.php") -> """
+                    <html><head><meta name="snum" content="1"/><meta name="enum" content="1"/></head><body>
+                    <div id="dt_contenedor"><div class="titleInfo"><h1>MobLand</h1><p class="sinopsis">Serie de prueba.</p></div>
+                    <div id="temporadasDropdown">
+                      <div class="server-item" onclick="cargarEpisodiosDeTemporada('1');"><span>Temporada 1</span></div>
+                      <div class="server-item" onclick="cargarEpisodiosDeTemporada('2');"><span>Temporada 2</span></div>
+                    </div>
+                    <ul id="ulTemporada"></ul></div></body></html>
+                """.trimIndent()
+                u.contains("/movies/pelicula/madden") -> """
+                    <html><body><div id="dt_contenedor"></div>
+                    <script>let url = `movieInfo.php?title=` + encodeURIComponent('madden') + `&p=55775`;</script>
+                    </body></html>
+                """.trimIndent()
+                u.contains("movieInfo.php") -> {
+                    seenMovieInfoUrls.add(u)
+                    if (u.contains("p=55775")) {
+                        """
+                        <html><body><div id="dt_contenedor"><div class="titleInfo">
+                          <div class="columna imagen"><img src="/bRa83oPFFPqaAF3wrpVWPqqfFel.jpg"/></div>
+                          <h1>Madden</h1><p class="sinopsis">Película verificada.</p>
+                        </div>
+                        <div class="box-download">
+                          <a class="row-download" data-idioma="latino" data-tipo="stream" data-url="https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden">
+                            <span>Fastserver</span><span>FULLHD</span>
+                          </a>
+                        </div></div></body></html>
+                        """.trimIndent()
+                    } else {
+                        """<html><body><form><input name="empresa_hp"></form></body></html>"""
+                    }
+                }
+                else -> "<html><body><div id=\"dt_contenedor\"></div></body></html>"
+            }
+            WebResourceResponse("text/html", "UTF-8", 200, "OK", emptyMap(), ByteArrayInputStream(html.toByteArray(StandardCharsets.UTF_8)))
+        }
+
+        val seriesResp = withContext(Dispatchers.IO) {
+            verifiedProvider.load("${PelisJuanitaMarkup.MAIN_URL}/series/ver-serie/mobland")
+        } as? TvSeriesLoadResponse ?: error("verified series load returned null")
+        check(!seriesResp.comingSoon) { "verified series still flagged comingSoon=true" }
+        check(seriesResp.episodes.size == 4) { "expected 4 episodes across 2 seasons, got ${seriesResp.episodes.size}" }
+        check(seriesResp.episodes.any { it.season == 1 && it.episode == 1 } && seriesResp.episodes.any { it.season == 2 && it.episode == 2 }) {
+            "missing season 1 or season 2 episodes: ${seriesResp.episodes.map { it.season to it.episode }}"
+        }
+
+        val restoredCookies = withContext(Dispatchers.Main) {
+            CookieManager.getInstance().getCookie(PelisJuanitaMarkup.MAIN_URL).orEmpty()
+        }
+        check(restoredCookies.contains("PHPSESSID=verified-probe-sess")) {
+            "expected CookieManager PHPSESSID restoration after wipe, got '$restoredCookies'"
+        }
+
+        val movieResp = withContext(Dispatchers.IO) {
+            verifiedProvider.load("${PelisJuanitaMarkup.MAIN_URL}/movies/pelicula/madden")
+        } as? MovieLoadResponse ?: error("verified movie load returned null")
+        check(movieResp.name == "Madden") { "unexpected movie title ${movieResp.name}" }
+        check(seenMovieInfoUrls.any { it.contains("p=55775") }) {
+            "expected movieInfo.php to receive &p=55775, saw $seenMovieInfoUrls"
+        }
+
+        val extractedLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        val okLinks = withContext(Dispatchers.IO) {
+            verifiedProvider.loadLinks(movieResp.dataUrl, false, {}, { extractedLinks.add(it) })
+        }
+        check(okLinks && extractedLinks.isNotEmpty()) { "expected verified movie loadLinks to extract playable links" }
+
+        clearWebViewCookies()
     }
 }

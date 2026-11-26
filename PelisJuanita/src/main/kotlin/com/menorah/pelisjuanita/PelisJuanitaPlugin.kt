@@ -8,11 +8,14 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class PelisJuanitaPlugin : Plugin() {
     override fun load(context: Context) {
         val sessionStore = AndroidPelisJuanitaSessionStore(context)
+        val provider = PelisJuanitaProvider(context, sessionStore)
         openSettings = { ctx ->
-            PelisJuanitaVerificationDialog.show(ctx, sessionStore)
+            PelisJuanitaVerificationDialog.show(ctx, sessionStore) {
+                provider.clearCaches()
+            }
         }
 
-        registerMainAPI(PelisJuanitaProvider(context, sessionStore))
+        registerMainAPI(provider)
         registerExtractorAPI(PelisJuanitaVimeusExtractor())
         registerExtractorAPI(PelisJuanitaVimeosExtractor())
         registerExtractorAPI(PelisJuanitaVimeosWwwExtractor())
