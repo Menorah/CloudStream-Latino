@@ -7,11 +7,22 @@ on:
 permissions:
   contents: read
 jobs:
-  inspect_player_and_ts:
+  chrome_and_android_api33_probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
-      - name: Leer STATIC_PL_RE/fetchStream/sub_url y probar Chrome sin add_init_script
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Capturar streams reales con Chrome Xvfb y validar /pl vs /pli vs /plc
         run: |
           python3 -m pip install -q playwright
           python3 -m playwright install chromium || true
@@ -20,8 +31,10 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          U1477963 = "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
-          U1843139 = "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"
+          TARGETS = [
+              ("BigGirls_1477963", "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"),
+              ("SkinCrawler_1843139", "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"),
+          ]
 
           def emit(title, txt):
               clean = str(txt).replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
@@ -34,94 +47,512 @@ jobs:
               with op.open(urllib.request.Request(url, headers=h), timeout=15) as r:
                   return r.read().decode("utf-8", "replace"), r.geturl()
 
-          b1, u1 = ufetch(U1477963, "https://pelisjuanita.com/")
-          api_rel = re.search(r'data-api="([^"]+)"', b1).group(1).replace("&amp;", "&")
-          b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
-          landing = json.loads(b2)["src"]
-          b3, u3 = ufetch(landing, "https://vsembed.su/")
-          cfg = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3).group(1))
-          b4, u4 = ufetch(urllib.parse.urljoin(u3, cfg["playerUrl"]), u3)
+          landings = []
+          for label, url in TARGETS:
+              b1, u1 = ufetch(url, "https://pelisjuanita.com/")
+              api_rel = re.search(r'data-api="([^"]+)"', b1).group(1).replace("&amp;", "&")
+              b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
+              landing = json.loads(b2)["src"]
+              landings.append((label, landing))
+              if label.startswith("BigGirls"):
+                  b3, u3 = ufetch(landing, "https://vsembed.su/")
+                  cfg = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3).group(1))
+                  b4, u4 = ufetch(urllib.parse.urljoin(u3, cfg["playerUrl"]), u3)
+                  m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', b4)
+                  p_js, _ = ufetch(urllib.parse.urljoin(u4, m_pj.group(1)), u4)
+                  i_st = p_js.find("function start(")
+                  emit("PJS_START_FN", p_js[max(0, i_st-50):i_st+3200] if i_st != -1 else "NO_START")
+                  # Refresh landing for BigGirls so it isn't pre-consumed
+                  b1r, u1r = ufetch(url, "https://pelisjuanita.com/")
+                  apir = re.search(r'data-api="([^"]+)"', b1r).group(1).replace("&amp;", "&")
+                  b2r, _ = ufetch(urllib.parse.urljoin(u1r, apir), u1r)
+                  landings[-1] = (label, json.loads(b2r)["src"])
 
-          m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', b4)
-          p_js, _ = ufetch(urllib.parse.urljoin(u4, m_pj.group(1)), u4)
-          i_st = p_js.find("STATIC_PL_RE")
-          emit("PJS_STATIC_PL", p_js[max(0, i_st-100):i_st+3200] if i_st != -1 else "NO_STATIC")
-          i_fs = p_js.find("function fetchStream")
-          emit("PJS_FETCHSTREAM", p_js[max(0, i_fs-100):i_fs+3200] if i_fs != -1 else "NO_FS")
-          i_lh = p_js.find("function playStream")
-          if i_lh == -1: i_lh = p_js.find("new Hls(")
-          emit("PJS_PLAYSTREAM", p_js[max(0, i_lh-400):i_lh+2800] if i_lh != -1 else "NO_PLAY")
-
-          m_sub = re.search(r'src="(/embed/iframe_player/assets/subtitles\.js[^"]*)"', b4)
-          if m_sub:
-              s_js, _ = ufetch(urllib.parse.urljoin(u4, m_sub.group(1)), u4)
-              i_su = s_js.find("sub_url")
-              if i_su == -1: i_su = s_js.find("defaultSub")
-              if i_su == -1: i_su = s_js.find("CONFIG.sub")
-              emit("SUBS_CUSTOM", s_js[max(0, i_su-300):i_su+3000] if i_su != -1 else s_js[-3300:])
-
-          # Fresh landing_b WITHOUT consuming landing_b
-          b1_b, u1_b = ufetch(U1843139, "https://pelisjuanita.com/")
-          api_b = re.search(r'data-api="([^"]+)"', b1_b).group(1).replace("&amp;", "&")
-          b2_b, _ = ufetch(urllib.parse.urljoin(u1_b, api_b), u1_b)
-          landing_b = json.loads(b2_b)["src"]
-
+          captured = {}
           with sync_playwright() as p:
               try:
                   browser = p.chromium.launch(channel="chrome", headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
               except Exception:
                   browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
               ctx = browser.new_context(viewport={"width": 1280, "height": 720})
-              page = ctx.new_page()
-              page.route(re.compile(r"disable-devtool", re.I), lambda r: r.abort())
-              events = []
-              found = {"stream": "", "verify": "", "headers": {}}
-              def on_req(req):
-                  u = req.url
-                  low = u.lower()
-                  if any(k in low for k in ["verify.php", "generate.php", "data.vidsrc.sh", "/pl/", "/pli/", "/plc/", "challenges.cloudflare"]):
-                      events.append(f"REQ:{u[:105]}")
-                  if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
-                      found["stream"] = u
-                      found["headers"] = dict(req.headers)
-              def on_resp(resp):
-                  u = resp.url
-                  if any(k in u for k in ["verify.php", "generate.php", "data.vidsrc.sh", "/embed/player/"]):
-                      try:
-                          txt = resp.text()[:180] if "verify.php" in u or "generate.php" in u or "data.vidsrc" in u else ""
-                          if "verify.php" in u: found["verify"] = txt
-                          events.append(f"RESP:{resp.status}:{u[:55]}:{txt}")
-                      except Exception:
-                          events.append(f"RESP:{resp.status}:{u[:55]}")
-              page.on("request", on_req)
-              page.on("response", on_resp)
-              page.on("console", lambda m: events.append(f"CON:{m.type}:{m.text[:100]}") if m.type in ("error", "warning") else None)
-              page.goto(landing_b, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
+              for label, landing in landings:
+                  page = ctx.new_page()
+                  page.route(re.compile(r"disable-devtool", re.I), lambda r: r.abort())
+                  found = {"stream": "", "headers": {}, "verify": ""}
+                  def on_req(req):
+                      u = req.url
+                      low = u.lower()
+                      if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
+                          found["stream"] = u
+                          found["headers"] = dict(req.headers)
+                  def on_resp(resp):
+                      if "verify.php" in resp.url:
+                          try: found["verify"] = resp.text()[:200]
+                          except Exception: pass
+                  page.on("request", on_req)
+                  page.on("response", on_resp)
+                  page.goto(landing, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
 
-              for step in range(40):
-                  if found["stream"]: break
-                  for fr in page.frames:
-                      if "/embed/movie/" in fr.url and "/embed/player/" not in fr.url:
+                  for _ in range(45):
+                      if found["stream"]: break
+                      for fr in page.frames:
+                          if "/embed/movie/" in fr.url and "/embed/player/" not in fr.url:
+                              try:
+                                  bp = fr.locator("#bigPlay")
+                                  if bp.count() > 0 and bp.is_visible():
+                                      bp.click()
+                              except Exception:
+                                  pass
+                      time.sleep(0.8)
+
+                  info = {"label": label, "stream": found["stream"], "headers": found["headers"], "verify": found["verify"]}
+                  if found["stream"]:
+                      hdrs = {k: v for k, v in found["headers"].items() if k.lower() in ("origin", "referer", "user-agent")}
+                      for mode in ["orig", "pli", "plc"]:
+                          tu = found["stream"] if mode == "orig" else re.sub(r'/pl(i|c)?/', f'/{mode}/', found["stream"], count=1)
                           try:
-                              bp = fr.locator("#bigPlay")
-                              if bp.count() > 0 and bp.is_visible():
-                                  bp.click()
-                                  events.append("CLICKED_BIGPLAY")
-                          except Exception:
-                              pass
-                  time.sleep(0.8)
-              ts_info = {}
-              for fr in page.frames:
-                  if "/embed/player/" in fr.url:
-                      try:
-                          ts_info = fr.evaluate("""() => ({
-                              hasApiToken: !!(window.CONFIG && window.CONFIG.apiToken),
-                              gateClass: (document.getElementById('tsGate') || {}).className || '',
-                              gateText: ((document.getElementById('tsGate') || {}).innerText || '').slice(0, 120),
-                              errText: ((document.getElementById('errorText') || {}).innerText || '')
-                          })""")
-                      except Exception as e:
-                          ts_info = {"eval_err": repr(e)}
-              emit("CLEAN_CHROME_1843139", json.dumps({"stream": found["stream"], "verify": found["verify"], "ts": ts_info, "events": events[-24:]}))
+                              with urllib.request.urlopen(urllib.request.Request(tu, headers=hdrs), timeout=15) as r:
+                                  body = r.read().decode("utf-8", "replace")
+                                  lines = [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.startswith("#")]
+                                  info[f"{mode}_master"] = {"code": r.status, "has_tok": "token=" in body, "lines": len(lines), "first": lines[0][:120] if lines else body[:120]}
+                                  if lines:
+                                      cu = urllib.parse.urljoin(tu, lines[0])
+                                      try:
+                                          with urllib.request.urlopen(urllib.request.Request(cu, headers=hdrs), timeout=15) as rc:
+                                              cb = rc.read().decode("utf-8", "replace")
+                                              cl = [ln.strip() for ln in cb.splitlines() if ln.strip() and not ln.startswith("#")]
+                                              info[f"{mode}_child"] = {"code": rc.status, "has_tok": "token=" in cb, "first_seg": cl[0][:120] if cl else cb[:120]}
+                                              if cl:
+                                                  su = urllib.parse.urljoin(cu, cl[0])
+                                                  try:
+                                                      with urllib.request.urlopen(urllib.request.Request(su, headers=hdrs), timeout=15) as rs:
+                                                          info[f"{mode}_seg"] = {"code": rs.status, "len": len(rs.read(128))}
+                                                  except urllib.error.HTTPError as se:
+                                                      info[f"{mode}_seg"] = {"code": se.code}
+                                      except urllib.error.HTTPError as ce:
+                                          info[f"{mode}_child"] = {"code": ce.code}
+                          except urllib.error.HTTPError as e:
+                              info[f"{mode}_master"] = {"code": e.code}
+                  captured[label] = info
+                  emit(f"CHROME_{label}", json.dumps(info, ensure_ascii=False))
+                  page.close()
               browser.close()
+          open("/tmp/chrome_captured.json", "w").write(json.dumps(captured))
           PY
+
+      - name: Preparar script de sonda en Android API 33 (Media3 + WebView)
+        run: |
+          cat > /tmp/run_vsembed_probe.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cat > PelisJuanita/src/main/kotlin/com/menorah/pelisjuanita/PlaybackProbe.kt <<'KT'
+          package com.menorah.pelisjuanita
+
+          import android.content.Context
+          import android.graphics.SurfaceTexture
+          import android.net.http.SslError
+          import android.util.Log
+          import android.view.Surface
+          import android.webkit.*
+          import androidx.media3.common.MediaItem
+          import androidx.media3.common.MimeTypes
+          import androidx.media3.datasource.okhttp.OkHttpDataSource
+          import androidx.media3.exoplayer.ExoPlayer
+          import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+          import com.lagradost.cloudstream3.USER_AGENT
+          import com.lagradost.cloudstream3.app
+          import kotlinx.coroutines.*
+          import okhttp3.Request
+          import org.json.JSONObject
+          import java.io.BufferedReader
+          import java.io.File
+          import java.io.InputStreamReader
+          import java.net.InetAddress
+          import java.net.ServerSocket
+          import java.net.URI
+          import java.net.URLDecoder
+          import java.net.URLEncoder
+          import java.util.concurrent.CopyOnWriteArrayList
+
+          object PlaybackProbe {
+              private const val TAG = "VsembedProbe"
+
+              private const val BIG_GIRLS_URL =
+                  "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
+              private const val SKIN_CRAWLER_URL =
+                  "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"
+
+              fun start(context: Context) {
+                  Log.i(TAG, "START_PROBE called")
+                  CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+                      try {
+                          delay(3000)
+                          val defaultWvUa = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull().orEmpty()
+                          Log.i(TAG, "ANDROID_WV_DEFAULT_UA=$defaultWvUa")
+                          withTimeout(360_000) {
+                              // 1) Media3 tests from Chrome-captured stream on same IP
+                              val seedFile = File("/sdcard/Cloudstream3/chrome_captured.json")
+                              if (seedFile.exists()) {
+                                  val j = JSONObject(seedFile.readText())
+                                  for (key in j.keys()) {
+                                      val item = j.getJSONObject(key)
+                                      val sUrl = item.optString("stream")
+                                      if (sUrl.isBlank()) {
+                                          Log.i(TAG, "NO_STREAM_FROM_CHROME $key")
+                                          continue
+                                      }
+                                      val hdrObj = item.optJSONObject("headers")
+                                      val origin = hdrObj?.optString("origin")?.ifBlank { null } ?: "https://stellarconductornexus.com"
+                                      val ua = hdrObj?.optString("user-agent")?.ifBlank { null } ?: USER_AGENT
+                                      val playHeaders = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to ua)
+
+                                      val plRes = runCatching { play(context, sUrl, playHeaders, waitMs = 1500) }
+                                      Log.i(TAG, "SEED_MEDIA3 $key mode=orig_pl ok=${plRes.isSuccess} err=${plRes.exceptionOrNull()?.message}")
+
+                                      val pliUrl = sUrl.replaceFirst("/pl/", "/pli/")
+                                      val pliRes = runCatching { play(context, pliUrl, playHeaders, waitMs = 1500) }
+                                      Log.i(TAG, "SEED_MEDIA3 $key mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
+
+                                      val plcUrl = sUrl.replaceFirst("/pl/", "/plc/")
+                                      val plcRes = runCatching { play(context, plcUrl, playHeaders, waitMs = 1500) }
+                                      Log.i(TAG, "SEED_MEDIA3 $key mode=plc ok=${plcRes.isSuccess} err=${plcRes.exceptionOrNull()?.message}")
+
+                                      val proxyRes = runCatching { playViaLocalProxy(context, sUrl, playHeaders) }
+                                      Log.i(TAG, "SEED_MEDIA3 $key mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
+
+                                      if (key.startsWith("BigGirls") && (pliRes.isSuccess || proxyRes.isSuccess)) {
+                                          val testUrl = if (pliRes.isSuccess) pliUrl else sUrl
+                                          delay(65_000)
+                                          val afterRes = withContext(Dispatchers.IO) {
+                                              runCatching {
+                                                  val req = Request.Builder().url(testUrl)
+                                                      .header("Origin", origin)
+                                                      .header("Referer", "$origin/")
+                                                      .header("User-Agent", ua)
+                                                      .build()
+                                                  app.baseClient.newCall(req).execute().use { r ->
+                                                      "code=${r.code} len=${r.body?.string()?.length ?: -1}"
+                                                  }
+                                              }.getOrElse { it.message ?: "err" }
+                                          }
+                                          Log.i(TAG, "AFTER_65S $key -> $afterRes")
+                                      }
+                                  }
+                              } else {
+                                  Log.i(TAG, "NO_CHROME_CAPTURE_FILE")
+                              }
+
+                              // 2) Live Android WebView API 33 capture test (with and without Desktop UA)
+                              val r1 = captureWithWebView(context, "WV_BigGirls_DefaultUA", BIG_GIRLS_URL, customUa = null)
+                              Log.i(TAG, "WV_CAPTURE ${r1.label} stream=${r1.streamUrl} verify=${r1.verifyJson} hops=${r1.hops} state=${r1.domState}")
+                              if (r1.streamUrl.isNotBlank()) {
+                                  val origin = r1.origin.ifBlank { "https://stellarconductornexus.com" }
+                                  val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to (r1.ua.ifBlank { defaultWvUa }))
+                                  val pRes = runCatching { playViaLocalProxy(context, r1.streamUrl, hdrs) }
+                                  Log.i(TAG, "WV_LIVE_MEDIA3 ${r1.label} local_proxy ok=${pRes.isSuccess} err=${pRes.exceptionOrNull()?.message}")
+                              }
+
+                              val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                              val r2 = captureWithWebView(context, "WV_SkinCrawler_DesktopUA", SKIN_CRAWLER_URL, customUa = desktopUa)
+                              Log.i(TAG, "WV_CAPTURE ${r2.label} stream=${r2.streamUrl} verify=${r2.verifyJson} hops=${r2.hops} state=${r2.domState}")
+                              if (r2.streamUrl.isNotBlank()) {
+                                  val origin = r2.origin.ifBlank { "https://stellarconductornexus.com" }
+                                  val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to desktopUa)
+                                  val pRes = runCatching { playViaLocalProxy(context, r2.streamUrl, hdrs) }
+                                  Log.i(TAG, "WV_LIVE_MEDIA3 ${r2.label} local_proxy ok=${pRes.isSuccess} err=${pRes.exceptionOrNull()?.message}")
+                              }
+
+                              Log.i(TAG, "PASS_VSEMBED_PROBE")
+                          }
+                      } catch (t: Throwable) {
+                          Log.e(TAG, "FAIL_VSEMBED_PROBE ${t.javaClass.simpleName}: ${t.message}", t)
+                      }
+                  }
+              }
+
+              data class WvResult(
+                  val label: String,
+                  val streamUrl: String,
+                  val origin: String,
+                  val ua: String,
+                  val verifyJson: String,
+                  val hops: String,
+                  val domState: String
+              )
+
+              private suspend fun captureWithWebView(
+                  context: Context,
+                  label: String,
+                  startUrl: String,
+                  customUa: String?
+              ): WvResult {
+                  val hops = CopyOnWriteArrayList<String>()
+                  var streamUrl = ""
+                  var streamOrigin = ""
+                  var verifyHits = ""
+                  var done = false
+
+                  val wv = WebView(context)
+                  val cm = CookieManager.getInstance()
+                  cm.setAcceptCookie(true)
+                  cm.setAcceptThirdPartyCookies(wv, true)
+                  cm.flush()
+
+                  with(wv.settings) {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      mediaPlaybackRequiresUserGesture = false
+                      javaScriptCanOpenWindowsAutomatically = false
+                      mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                      if (customUa != null) userAgentString = customUa
+                  }
+                  wv.layout(0, 0, 1080, 1920)
+                  val activeUa = wv.settings.userAgentString
+                  var promotedLanding = false
+                  var promotedPlayer = false
+
+                  wv.webViewClient = object : WebViewClient() {
+                      override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                          val u = request.url.toString()
+                          val low = u.lowercase()
+                          if ((low.contains("/pl/") || low.contains("/pli/") || low.contains("/plc/")) && low.contains("token=")) {
+                              if (streamUrl.isBlank()) {
+                                  streamUrl = u
+                                  streamOrigin = request.requestHeaders["Origin"]
+                                      ?: request.requestHeaders["Referer"]?.trimEnd('/') ?: ""
+                                  done = true
+                                  hops.add("STREAM:${u.take(90)}")
+                              }
+                          }
+                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh")) {
+                              if (hops.size < 30) hops.add("REQ:${u.take(75)}")
+                              if (low.contains("verify.php")) verifyHits = "called"
+                          }
+                          if (low.contains("stellarconductornexus.com/embed/movie/") && !promotedLanding) {
+                              promotedLanding = true
+                              hops.add("HOP_LANDING:${u.take(65)}")
+                              view.post { view.loadUrl(u, mapOf("Referer" to "https://vsembed.su/")) }
+                          } else if (customUa != null && low.contains("stellarconductornexus.com/embed/player/") && !promotedPlayer) {
+                              promotedPlayer = true
+                              hops.add("HOP_PLAYER:${u.take(65)}")
+                              val ref = view.url ?: "https://stellarconductornexus.com/"
+                              view.post { view.loadUrl(u, mapOf("Referer" to ref)) }
+                          }
+                          return super.shouldInterceptRequest(view, request)
+                      }
+                      override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                          handler.proceed()
+                      }
+                  }
+
+                  wv.loadUrl(startUrl, mapOf("Referer" to "https://pelisjuanita.com/"))
+
+                  var domState = ""
+                  val pollJs = """
+                      (function() {
+                        var u = location.href;
+                        var isLanding = u.indexOf('/embed/movie/') !== -1 && u.indexOf('/embed/player/') === -1;
+                        var bp = document.getElementById('bigPlay');
+                        var pf = document.getElementById('player_frame');
+                        var clicked = false;
+                        if (isLanding && !pf && bp && bp.offsetParent !== null) { bp.click(); clicked = true; }
+                        else if (isLanding && !pf && window.CFG && window.CFG.playerUrl) { location.href = window.CFG.playerUrl; clicked = true; }
+                        var c = window.CONFIG || {};
+                        var g = document.getElementById('tsGate');
+                        return JSON.stringify({
+                          url: u.slice(0, 75),
+                          pf: pf ? (pf.src || 'present').slice(0, 55) : '',
+                          clicked: clicked,
+                          ts: !!c.turnstile,
+                          apiTok: !!(c.apiToken && c.apiToken.length > 0),
+                          gateClass: g ? g.className : '',
+                          gateText: g ? (g.innerText || '').slice(0, 60) : ''
+                        });
+                      })()
+                  """.trimIndent()
+
+                  for (step in 1..45) {
+                      if (done) break
+                      delay(1000)
+                      domState = suspendCancellableCoroutine { cont ->
+                          wv.evaluateJavascript(pollJs) { v ->
+                              if (cont.isActive) cont.resume(v ?: "") {}
+                          }
+                      }
+                      if (step == 12 || step == 24 || step == 45) {
+                          Log.i(TAG, "WV_POLL $label step=$step state=$domState")
+                      }
+                  }
+
+                  runCatching {
+                      wv.stopLoading()
+                      wv.loadUrl("about:blank")
+                      wv.destroy()
+                  }
+                  return WvResult(label, streamUrl, streamOrigin, activeUa, verifyHits, hops.joinToString("|"), domState)
+              }
+
+              private suspend fun play(context: Context, url: String, headers: Map<String, String>, waitMs: Long) = withTimeout(35_000) {
+                  val texture = SurfaceTexture(0)
+                  val surface = Surface(texture)
+                  val cleanHeaders = headers.toMutableMap()
+                  val userAgent = cleanHeaders.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: USER_AGENT
+                  cleanHeaders.keys.filter { it.equals("User-Agent", true) }.forEach { cleanHeaders.remove(it) }
+                  val factory = OkHttpDataSource.Factory(app.baseClient)
+                      .setUserAgent(userAgent)
+                      .setDefaultRequestProperties(cleanHeaders)
+                  val item = MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+                  val media = DefaultMediaSourceFactory(factory).createMediaSource(item)
+                  val player = ExoPlayer.Builder(context).build()
+                  try {
+                      player.setVideoSurface(surface)
+                      player.setMediaSource(media)
+                      player.prepare()
+                      player.playWhenReady = true
+                      while (true) {
+                          player.playerError?.let { throw it }
+                          if ((player.videoDecoderCounters?.renderedOutputBufferCount ?: 0) > 0 && player.currentPosition > waitMs) break
+                          delay(250)
+                      }
+                      check(player.videoSize.width > 0 && player.videoSize.height > 0) { "no decoded video" }
+                  } finally {
+                      player.release()
+                      surface.release()
+                      texture.release()
+                  }
+              }
+
+              private suspend fun playViaLocalProxy(context: Context, rawPlUrl: String, headers: Map<String, String>) {
+                  val token = URI(rawPlUrl).rawQuery.orEmpty().split("&")
+                      .firstOrNull { it.startsWith("token=") }?.substringAfter("token=").orEmpty()
+                  check(token.isNotBlank()) { "missing token in rawPlUrl" }
+                  val origin = headers["Origin"] ?: "https://stellarconductornexus.com"
+                  val referer = headers["Referer"] ?: "$origin/"
+                  val ua = headers["User-Agent"] ?: USER_AGENT
+
+                  val server = withContext(Dispatchers.IO) { ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")) }
+                  val port = server.localPort
+                  val proxyJob = CoroutineScope(Dispatchers.IO).launch {
+                      while (isActive && !server.isClosed) {
+                          val sock = runCatching { server.accept() }.getOrNull() ?: break
+                          launch {
+                              sock.use { s ->
+                                  val reader = BufferedReader(InputStreamReader(s.getInputStream()))
+                                  val reqLine = reader.readLine() ?: return@use
+                                  while (true) {
+                                      val ln = reader.readLine() ?: break
+                                      if (ln.isEmpty()) break
+                                  }
+                                  val path = reqLine.split(" ").getOrNull(1) ?: "/master.m3u8"
+                                  val upstreamUrl = if (path.startsWith("/fetch?u=")) {
+                                      URLDecoder.decode(path.substringAfter("/fetch?u="), "UTF-8")
+                                  } else {
+                                      rawPlUrl
+                                  }
+                                  val req = Request.Builder().url(upstreamUrl)
+                                      .header("Origin", origin)
+                                      .header("Referer", referer)
+                                      .header("User-Agent", ua)
+                                      .build()
+                                  val bodyText = app.baseClient.newCall(req).execute().use { r ->
+                                      if (!r.isSuccessful) error("upstream ${r.code} for $upstreamUrl")
+                                      r.body?.string().orEmpty()
+                                  }
+                                  val baseUri = URI(upstreamUrl)
+                                  val isMaster = bodyText.contains("#EXT-X-STREAM-INF")
+                                  val outText = bodyText.lines().joinToString("\n") { line ->
+                                      val tr = line.trim()
+                                      if (tr.isEmpty() || tr.startsWith("#")) {
+                                          line
+                                      } else {
+                                          val abs = baseUri.resolve(tr).toString()
+                                          val sep = if (abs.contains("?")) "&" else "?"
+                                          val stamped = if (abs.contains("token=")) abs else "${abs}${sep}token=$token"
+                                          if (isMaster) {
+                                              "http://127.0.0.1:$port/fetch?u=" + URLEncoder.encode(stamped, "UTF-8")
+                                          } else {
+                                              stamped
+                                          }
+                                      }
+                                  }
+                                  val bytes = outText.toByteArray(Charsets.UTF_8)
+                                  val resp = "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
+                                  s.getOutputStream().write(resp.toByteArray(Charsets.US_ASCII))
+                                  s.getOutputStream().write(bytes)
+                                  s.getOutputStream().flush()
+                              }
+                          }
+                      }
+                  }
+                  try {
+                      play(context, "http://127.0.0.1:$port/master.m3u8", headers, waitMs = 1500)
+                  } finally {
+                      proxyJob.cancel()
+                      runCatching { server.close() }
+                  }
+              }
+          }
+          KT
+
+          python3 - <<'PY'
+          p = 'PelisJuanita/src/main/kotlin/com/menorah/pelisjuanita/PelisJuanitaPlugin.kt'
+          s = open(p).read().replace(
+              'registerExtractorAPI(PelisJuanitaVidHideExtractor())',
+              'registerExtractorAPI(PelisJuanitaVidHideExtractor()); PlaybackProbe.start(context)',
+          )
+          assert 'PlaybackProbe.start(context)' in s
+          open(p, 'w').write(s)
+
+          p = 'PelisJuanita/build.gradle.kts'
+          s = open(p).read().replace(
+              'dependencies {',
+              'dependencies {\n    compileOnly("androidx.media3:media3-exoplayer:1.9.3")\n    compileOnly("androidx.media3:media3-exoplayer-hls:1.9.3")\n    compileOnly("androidx.media3:media3-datasource-okhttp:1.9.3")',
+              1,
+          )
+          open(p, 'w').write(s)
+          PY
+
+          ./gradlew :PelisJuanita:make --stacktrace
+          curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cloudstream.apk
+          adb install -r /tmp/cloudstream.apk
+          package=com.lagradost.cloudstream3.prerelease
+          adb shell pm grant "$package" android.permission.READ_EXTERNAL_STORAGE || true
+          adb shell pm grant "$package" android.permission.WRITE_EXTERNAL_STORAGE || true
+          adb shell appops set "$package" MANAGE_EXTERNAL_STORAGE allow || true
+          adb shell mkdir -p /sdcard/Cloudstream3/plugins
+          if [ -f /tmp/chrome_captured.json ]; then
+            adb push /tmp/chrome_captured.json /sdcard/Cloudstream3/chrome_captured.json
+          fi
+          adb push PelisJuanita/build/PelisJuanita.cs3 /sdcard/Cloudstream3/plugins/PelisJuanita.cs3
+          adb shell ls -la /sdcard/Cloudstream3/ /sdcard/Cloudstream3/plugins/
+          adb logcat -c
+          adb shell monkey -p "$package" 1
+          for i in $(seq 1 80); do
+            sleep 5
+            log=$(adb logcat -d -s VsembedProbe:* '*:S')
+            if echo "$log" | grep -q 'PASS_VSEMBED_PROBE\|FAIL_VSEMBED_PROBE'; then
+              echo "$log" | head -n 45 | while IFS= read -r ln; do
+                clean=$(printf '%s' "$ln" | sed 's/%/%25/g; s/\r//g')
+                echo "::notice title=VSEMBED_LOG::$clean"
+              done
+              if echo "$log" | grep -q 'FAIL_VSEMBED_PROBE'; then exit 1; fi
+              exit 0
+            fi
+          done
+          adb logcat -d -s VsembedProbe:* AndroidRuntime:E PluginManager:* '*:S' | tail -40 | while IFS= read -r ln; do
+            clean=$(printf '%s' "$ln" | sed 's/%/%25/g; s/\r//g')
+            echo "::notice title=VSEMBED_TIMEOUT::$clean"
+          done
+          exit 1
+          SH
+          chmod +x /tmp/run_vsembed_probe.sh
+
+      - name: Probar Media3 y Android WebView en CloudStream APK (API 33)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: /tmp/run_vsembed_probe.sh
