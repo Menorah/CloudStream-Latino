@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect waaw player_init_js & savefiles
+      - name: Inspect waaw get_md5 & un() & token
         run: |
           python3 - <<'PY'
-          import re, urllib.request, urllib.parse, urllib.error
+          import json, re, urllib.request, urllib.parse, urllib.error
 
           UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
           notices = []
@@ -37,41 +37,52 @@ jobs:
                   return -1, url, {}, repr(e)
 
           _, _, _, wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
-          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
-
-          # Search across scripts[35..48] for player_init_js, md5, m3u8, src, ajax, fetch, ws, url
-          for idx in [35, 38, 42, 45, 47]:
-              sc = scripts[idx] if idx < len(scripts) else ""
-              hits = []
-              for kw in ["player_init_js", "get_md5", "m3u8", "mp4", "player.src", "olplayer.src", "ajax", "fetch(", "XMLHttpRequest", "ws", "master", "createcxt", "clickj", "md5", "serv="]:
-                  for m in re.finditer(re.escape(kw), sc):
-                      hits.append(f"[{kw}@{m.start()}]: {sc[max(0,m.start()-60):m.start()+180]}")
-                      if len(hits) >= 12:
-                          break
-                  if len(hits) >= 12:
-                      break
-              add_notice(f"WAAW_S{idx}_H", f"len={len(sc)} " + (" || ".join(hits) if hits else f"HEAD={sc[:1200]}"))
-
           _, _, _, ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
-          ehits = []
-          for kw in ["player_init_js", "get_md5", "m3u8", "olplayer.src", "ajax", "fetch(", "XMLHttpRequest", "createcxt", "clickj", "player_loaded", "adfree"]:
-              for m in re.finditer(re.escape(kw), ejs):
-                  ehits.append(f"[{kw}@{m.start()}]: {ejs[max(0,m.start()-60):m.start()+220]}")
-                  if len(ehits) >= 16:
-                      break
-              if len(ehits) >= 16:
-                  break
-          add_notice("WAAW_EJS_H", " || ".join(ehits)[:3700])
 
-          # Extract block around player_init_js in ejs if present
+          # Extract rest of player_init_js + go_load + un() + callers of go_next + htoken/click_hash/shh
           m = re.search(r"function\s+player_init_js", ejs)
           if m:
-              add_notice("WAAW_PIJS", ejs[m.start():m.start()+3600])
+              pijs = ejs[m.start():]
+              add_notice("PIJS_2", pijs[3500:7100])
+              add_notice("PIJS_3", pijs[7100:10700])
+              add_notice("PIJS_4", pijs[10700:14300])
 
-          # Savefiles
-          form = urllib.parse.urlencode({"op": "embed", "file_code": "lpkobe2ki65z", "auto": "1", "referer": "https://pelisjuanita.com/"}).encode()
-          c, u, h, sb = fetch("https://savefiles.com/dl", {"Referer": "https://savefiles.com/e/lpkobe2ki65z", "Origin": "https://savefiles.com", "Content-Type": "application/x-www-form-urlencoded"}, data=form)
-          add_notice("SAVEFILES", f"c={c} len={len(sb)} m3={re.findall(r'https?://[^\\s\"\\x27<>\\\\]+\\.m3u8[^\\s\"\\x27<>\\\\]*', sb)} head={sb[:1200]}")
+          un_hits = []
+          for kw in ["function un(", "un = function", "obf_link", "click_hash", "htoken", "shh", "go_next(", "player_init("]:
+              for m2 in re.finditer(re.escape(kw), ejs):
+                  un_hits.append(f"[{kw}@{m2.start()}]: {ejs[max(0,m2.start()-80):m2.start()+280]}")
+                  if len(un_hits) >= 14:
+                      break
+          add_notice("EJS_UN", " || ".join(un_hits)[:3700])
+
+          # Also check scripts 47, 49, 57 in wb and test get_md5.php directly
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
+          add_notice("WB_VARS", " || ".join(f"[{i}:{len(scripts[i])}] {scripts[i].strip()[:600]}" for i in [46, 47, 48, 49, 57] if i < len(scripts))[:3700])
+
+          # Check if videokeyorig is in wb and test POST /player/get_md5.php
+          payload = json.dumps({
+              "htoken": "",
+              "sh": "",
+              "ver": "4",
+              "secure": "0",
+              "adb": "180899",
+              "v": "ALdJ0Jeeqk66",
+              "token": "",
+              "gt": "",
+              "embed_from": "0",
+              "wasmcheck": 0,
+              "adscore": "",
+              "click_hash": "",
+              "clickx": 0,
+              "clicky": 0,
+          }).encode()
+          c, u, h, gb = fetch("https://waaw.to/player/get_md5.php", {
+              "Referer": "https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F",
+              "Origin": "https://waaw.to",
+              "Content-Type": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+          }, data=payload)
+          add_notice("GET_MD5_RAW", f"c={c} body={gb[:2000]}")
 
           for n in notices[:8]:
               print(f"::notice::{n}")
