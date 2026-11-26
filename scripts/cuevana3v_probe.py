@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
-"""Inspect actual video hosts behind Cuevana3v.pro (Hyper, Nebula, Goldmember, Death Star, Trinity, Mahoutokoro)."""
+"""Unpack Hyper (lkhjerbhye3wikhoduh5xiczuvd.lol) and Nebula (vibuxer.com) scripts and test live m3u8 streams."""
 import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    "Accept": "*/*",
     "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
 }
 
 
 def fetch(url: str, referer: str = "https://tungtungsahur.cuevana3v.pro/"):
-    hdrs = dict(HEADERS)
-    hdrs["Referer"] = referer
-    req = urllib.request.Request(url, headers=hdrs)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return resp.status, resp.geturl(), dict(resp.headers), resp.read().decode("utf-8", "replace")
+    req = urllib.request.Request(url, headers={**HEADERS, "Referer": referer})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
 
 
 def emit(tag: str, obj):
@@ -28,38 +25,68 @@ def emit(tag: str, obj):
         print("::notice::" + line[i : i + 3800])
 
 
-hosts = [
+def unpack_packer(html: str):
+    results = []
+    for m in re.finditer(
+        r"eval\(function\(p,a,c,k,e,[dr]\)\{.*?return p\}\('(.*?)',\s*(\d+),\s*(\d+),\s*'([^']*)'\.split\('\|'\)",
+        html,
+        re.S,
+    ):
+        p, a, c, k_str = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
+        k = k_str.split("|")
+        alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        def base_n(num: int) -> str:
+            if num == 0:
+                return "0"
+            if a <= 36:
+                digits = alphabet[:a]
+                out = ""
+                while num:
+                    out = digits[num % a] + out
+                    num //= a
+                return out
+            first = "" if num < a else base_n(num // a)
+            rem = num % a
+            return first + (chr(rem + 29) if rem > 35 else alphabet[rem])
+
+        lookup = {base_n(i): (k[i] if i < len(k) and k[i] else base_n(i)) for i in range(c)}
+        unpacked = re.sub(r"\b\w+\b", lambda mm: lookup.get(mm.group(0), mm.group(0)), p)
+        unpacked = unpacked.replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+        results.append(unpacked)
+    return results
+
+
+for label, url in [
     ("hyper_hunger", "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/7q1v682peq0u"),
     ("hyper_deriva", "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/ctqo0qlm4k4r"),
     ("nebula_hunger", "https://vibuxer.com/e/zopp6y5coyze"),
-    ("nebula_deriva", "https://vibuxer.com/e/8jjtlsm270pf"),
-    ("goldmember", "https://vsembed.ru/embed/movie?tmdb=1300968&ds_lang=es"),
-    ("deathstar", "https://vidlink.pro/movie/1300968"),
-    ("trinity", "https://player.videasy.net/movie/1300968"),
-    ("mahoutokoro", "https://vidapi.xyz/embed/movie/1300968"),
-]
-
-for tag, url in hosts:
+    ("nebula_navidad", "https://vibuxer.com/e/ozr7pger1ybv"),
+    ("hyper_navidad", "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/ztse1nq65me5"),
+]:
     try:
-        st, fu, hdrs, body = fetch(url)
-        s = BeautifulSoup(body, "html.parser")
-        iframes = [i.get("src") or i.get("data-src") for i in s.select("iframe")]
-        scripts_src = [sc.get("src") for sc in s.select("script[src]")]
-        inline = [sc.get_text(strip=True)[:1000] for sc in s.select("script:not([src])") if sc.get_text(strip=True)]
-        m3u8_or_eval = re.findall(r'(?:https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*|eval\(function\(p,a,c,k,e,[dr]\).*?split\([^\)]+\))', body, re.S)
-        emit(tag, {
+        st, fu, _, html = fetch(url)
+        unpacked_list = unpack_packer(html)
+        emit(label, {
             "status": st,
             "final": fu,
-            "len": len(body),
-            "title": s.title.get_text(strip=True) if s.title else None,
-            "iframes": iframes,
-            "scripts_src": scripts_src[:8],
-            "inline": inline[:3],
-            "m3u8_eval": [x[:500] for x in m3u8_or_eval[:2]],
-            "head": body[:900],
+            "packed_count": len(unpacked_list),
+            "unpacked_0": unpacked_list[0][:3400] if unpacked_list else html[:1000],
+            "unpacked_0_tail": unpacked_list[0][3400:6800] if unpacked_list and len(unpacked_list[0]) > 3400 else "",
         })
-    except urllib.error.HTTPError as he:
-        err_body = he.read().decode("utf-8", "replace")[:400]
-        emit(tag, {"http_err": he.code, "url": he.geturl(), "headers": dict(he.headers), "body": err_body})
+        if unpacked_list:
+            text = unpacked_list[0]
+            # Check all URLs or relative .m3u8 paths inside unpacked script
+            m3u8s = re.findall(r"""['"]((?:https?:)?//[^'"]+\.(?:m3u8|mp4|txt)[^'"]*|/[a-zA-Z0-9_./-]+\.(?:m3u8|txt)[^'"]*)['"]""", text)
+            origin = f"{urllib.parse.urlparse(fu).scheme}://{urllib.parse.urlparse(fu).netloc}"
+            tests = []
+            for candidate in m3u8s[:4]:
+                abs_u = urllib.parse.urljoin(origin + "/", candidate)
+                try:
+                    mst, mfu, mhdr, mbody = fetch(abs_u, referer=origin + "/")
+                    tests.append({"cand": candidate, "abs": abs_u, "status": mst, "ct": mhdr.get("Content-Type"), "head": mbody[:300]})
+                except Exception as me:
+                    tests.append({"cand": candidate, "abs": abs_u, "err": repr(me)})
+            emit(f"{label}_m3u8", tests)
     except Exception as e:
-        emit(tag, {"err": repr(e)})
+        emit(label, {"err": repr(e)})
