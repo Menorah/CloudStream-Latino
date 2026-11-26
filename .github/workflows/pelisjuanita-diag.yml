@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect waaw get_md5 & un() & token
+      - name: Inspect waaw htoken/shh/createcxt/s47
         run: |
           python3 - <<'PY'
-          import json, re, urllib.request, urllib.parse, urllib.error
+          import re, urllib.request, urllib.error
 
           UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
           notices = []
@@ -23,66 +23,41 @@ jobs:
               s = f"{tag}: {msg}".replace("%", "%25").replace("\r", "").replace("\n", " | ")
               notices.append(s[:3800])
 
-          def fetch(url, headers=None, data=None, timeout=10):
+          def fetch(url, headers=None):
               h = {"User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9,en;q=0.8"}
               if headers:
                   h.update(headers)
-              req = urllib.request.Request(url, data=data, headers=h)
-              try:
-                  with urllib.request.urlopen(req, timeout=timeout) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
-              except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, url, {}, repr(e)
+              req = urllib.request.Request(url, headers=h)
+              with urllib.request.urlopen(req, timeout=10) as r:
+                  return r.read().decode("utf-8", "replace")
 
-          _, _, _, wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
-          _, _, _, ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
-
-          # Extract rest of player_init_js + go_load + un() + callers of go_next + htoken/click_hash/shh
-          m = re.search(r"function\s+player_init_js", ejs)
-          if m:
-              pijs = ejs[m.start():]
-              add_notice("PIJS_2", pijs[3500:7100])
-              add_notice("PIJS_3", pijs[7100:10700])
-              add_notice("PIJS_4", pijs[10700:14300])
-
-          un_hits = []
-          for kw in ["function un(", "un = function", "obf_link", "click_hash", "htoken", "shh", "go_next(", "player_init("]:
-              for m2 in re.finditer(re.escape(kw), ejs):
-                  un_hits.append(f"[{kw}@{m2.start()}]: {ejs[max(0,m2.start()-80):m2.start()+280]}")
-                  if len(un_hits) >= 14:
-                      break
-          add_notice("EJS_UN", " || ".join(un_hits)[:3700])
-
-          # Also check scripts 47, 49, 57 in wb and test get_md5.php directly
+          wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
+          ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
           scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
-          add_notice("WB_VARS", " || ".join(f"[{i}:{len(scripts[i])}] {scripts[i].strip()[:600]}" for i in [46, 47, 48, 49, 57] if i < len(scripts))[:3700])
 
-          # Check if videokeyorig is in wb and test POST /player/get_md5.php
-          payload = json.dumps({
-              "htoken": "",
-              "sh": "",
-              "ver": "4",
-              "secure": "0",
-              "adb": "180899",
-              "v": "ALdJ0Jeeqk66",
-              "token": "",
-              "gt": "",
-              "embed_from": "0",
-              "wasmcheck": 0,
-              "adscore": "",
-              "click_hash": "",
-              "clickx": 0,
-              "clicky": 0,
-          }).encode()
-          c, u, h, gb = fetch("https://waaw.to/player/get_md5.php", {
-              "Referer": "https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F",
-              "Origin": "https://waaw.to",
-              "Content-Type": "application/json",
-              "X-Requested-With": "XMLHttpRequest",
-          }, data=payload)
-          add_notice("GET_MD5_RAW", f"c={c} body={gb[:2000]}")
+          # Check createcxt, shh=, htoken=, click_hash=, 407 in ejs & script 35
+          for label, src in [("EJS", ejs), ("S35", scripts[35])]:
+              hits = []
+              for kw in ["createcxt", "shh", "htoken", "click_hash", "get_md5", "407", "need_captcha", "gol()"]:
+                  for m in re.finditer(re.escape(kw), src):
+                      hits.append(f"[{kw}@{m.start()}]: {src[max(0,m.start()-60):m.start()+200]}")
+                      if len(hits) >= 12:
+                          break
+                  if len(hits) >= 12:
+                      break
+              add_notice(f"W_{label}", " || ".join(hits)[:3700])
+
+          # Show script 47 in full chunks (26KB) - just head/tail + what function it defines
+          s47 = scripts[47]
+          add_notice("W_S47_HEAD", s47[:3600])
+          add_notice("W_S47_TAIL", s47[-3600:])
+
+          # Also check /js/d_check.js?36 and /js/click.31.js?165
+          try:
+              dc = fetch("https://waaw.to/js/d_check.js?36", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
+              add_notice("W_DCHECK", dc[:3600])
+          except Exception as e:
+              add_notice("W_DCHECK", repr(e))
 
           for n in notices[:8]:
               print(f"::notice::{n}")
