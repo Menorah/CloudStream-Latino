@@ -18,7 +18,7 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | Cuevana3v | **Creado desde cero y verificado (v1)** | Catálogo completo HTML SSR (`/peliculas`, `/series`, `/episodios/recientes`, `/explorar?s=`, géneros, estrenos), descifrado XOR/Base64 de `tungtungsahur.cuevana3v.pro`, extractores propios VidHide para Hyper (`lkhjerbhye3wikhoduh5xiczuvd.lol`) y Nebula (`vibuxer.com`), portadas Coil y reproducción Media3 verificada. |
 | VerAni | Publicado (tareas previas) | Mantiene su módulo propio para VerAni.me. |
 | SoloLatino | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario siempre mostró «Enlaces no encontrados»: los botones `data-player-token` los inserta JavaScript y el sitio va tras Cloudflare; el usuario decidió retirarlo tras varias rondas de arreglos. |
-| PoseidonHD2 | **Publicado** | Reproducción representativa verificada el 24-nov: película + 3 episodios reproducidos con Media3; se corrigieron episodios sin enlaces (variante `thisEpisode` y fuentes directas). Ciudad de Dios 2x3 y Yellowjackets 1x1 se informan como no disponibles por sus hosts (DNS/403/JS) desde la red de CI. |
+| PoseidonHD2 | **Reconstruido y verificado (v2)** | Sustituye por completo al complemento antiguo sobre el SSR `__NEXT_DATA__` de `poseidonhd2.co`: 27 secciones paginadas (`/page/<n>`), búsqueda, promoción episodio→serie, extractores propios para VOE (ALTCHA v2 PBKDF2 + descifrado), StreamWish (`medixiru.com` → `vsembed.com` AES-128-CBC), VidHide (cascada de espejos `hls2`), `bysejikuar.com`, más extractores integrados (`Vidara`, `DoodStream`) y reproducción Media3 verificada. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
 | pelisplus.fit | **Sin complemento viable** | Ídem. |
 | pelisplus-to.com | **Sin complemento viable** | Ídem. |
@@ -102,16 +102,17 @@ proveedor con la cadena completa + pruebas JVM/Android). El sitio bloquea la red
 (Black Clover T1E1) y CloudStream está en esa misma red. Pendiente: verificación de
 reproducción desde esa red (la release es el único canal de instalación del usuario).
 
-## PoseidonHD2.co
+## PoseidonHD2.co (v2) — reconstruido desde cero y verificado con Media3
 
-Sitio Next.js: los datos de reproducción están en `__NEXT_DATA__`
-(`thisMovie.videos` / `thisSerie.seasons[].episodes[]` / `episode`|`thisEpisode.videos`)
-con claves `latino|spanish|english`, campo `result` (envoltorio
-`player.poseidonhd2.co/player.php` con `var url=…` o URL directa del hoster).
-Correcciones del 24-nov: aceptar fuentes directas y la variante `thisEpisode`
-(algunos episodios quedaban sin enlaces). Estado de hosts: Netu con hCaptcha,
-Streamtape 404, Doodstream con verificación; VOE/Streamwish/Vidara reproducen.
-Pendiente: repetir la sonda de reproducción con más episodios.
+Extensión reconstruida desde cero (originalmente probada de forma independiente y consolidada en `PoseidonHD2` v2 reemplazando la implementación anterior) a partir del `__NEXT_DATA__` SSR de Next.js en `https://www.poseidonhd2.co/` e imágenes directas de TMDB (`w500` / `original`):
+- Portada y catálogos paginados (`/page/<n>`): Películas, Estrenos, Tendencias (Día/Semana), Series, Estrenos de Series, Tendencias de Series (Día/Semana), Últimos Episodios (`/episodios`) y los 18 géneros reales del sitio (`/genero/...`), más búsqueda en `/search?q=...`.
+- Fichas de películas y series con sinopsis, reparto, géneros, valoración (`Score.from10`), duración, relacionadas, temporadas ordenadas numéricamente (filtrando la temporada 0 vacía) y promoción automática de episodios recientes hacia la ficha de la serie padre.
+- Resolución de envoltorios `player.poseidonhd2.co/player.php` y extractores propios:
+  - **VOE** (`voe.sx` / `caseyseemavoid.com`): resolución nativa de ALTCHA v2 (`PBKDF2/SHA-256` en Kotlin con midstate HMAC + workers paralelos en `Dispatchers.Default`) y descifrado del payload.
+  - **StreamWish / HGLink** (`streamwish.to` -> `medixiru.com` -> `vsembed.com`): API `/api/stream/tracking` con cifrado/descifrado AES-128-CBC (`x-tracking`) más subtítulos de `/api/stream` y respaldo `tiktok` HLS.
+  - **VidHide** (`vidhidepro.com`, `callistanise.com`, etc.): cascada de espejos priorizando dominios activos y pistas `hls2` limpias frente a espejos muertos/enmascarados.
+  - **Byse** (`bysejikuar.com`) y delegación a extractores integrados (`Vidara`, `DoodStream`, `StreamTape`), etiquetando cada enlace por idioma (`Latino`, `Español`, `Subtitulado`).
+- Verificación real en CloudStream pre-release + Coil 3.3.0 + Media3 ExoPlayer (frames decodificados): 27 secciones de portada sin vacíos, paginación verificada, 15 portadas/fondos con Coil, episodios recientes (`12-12-12 1x4`) y multi-temporada (`La Casa del Dragón 1x1`), películas (estreno reciente y `El camino del pequeño guerrero`) y reproducción directa en Media3 de los tres servidores principales (`VidHide`, `Voe` y `StreamWish`).
 
 ## RePelis24.shop — reproducción verificada (24-nov, run 45299012816)
 
