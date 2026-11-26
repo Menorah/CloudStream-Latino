@@ -95,13 +95,16 @@ class Cuevana3vLiveTest {
 
         val movieSources = Cuevana3vMarkup.parsePlayerTabs(movieHtml)
         assertTrue("Expected player sources on movie", movieSources.isNotEmpty())
-        val firstHyper = movieSources.firstOrNull { it.serverName.equals("Hyper", ignoreCase = true) }
-        assertNotNull("Expected Hyper server", firstHyper)
+        val firstHyper = movieSources.firstOrNull {
+            it.serverName.equals("Hyper", ignoreCase = true) ||
+                it.serverName.equals("Nebula", ignoreCase = true)
+        }
+        assertNotNull("Expected Hyper/Nebula server in $movieSources", firstHyper)
         val decodedHyper = Cuevana3vMarkup.decodeTungUrl(firstHyper!!.rawServerUrl)
         assertNotNull("Decoded Hyper URL", decodedHyper)
         val hyperHtml = getText(decodedHyper!!, "${Cuevana3vMarkup.TUNG_URL}/")
         val parsedHyper = CuevanaVidHideParser.parse(hyperHtml, decodedHyper)
-        assertTrue("Expected streams from Hyper embed", parsedHyper.streams.isNotEmpty())
+        assertTrue("Expected streams from ${firstHyper.serverName} embed", parsedHyper.streams.isNotEmpty())
         assertEquals("hls2", parsedHyper.streams.first().key)
 
         val seriesUrl = "${Cuevana3vMarkup.MAIN_URL}/serie/dexter-resurreccion"
