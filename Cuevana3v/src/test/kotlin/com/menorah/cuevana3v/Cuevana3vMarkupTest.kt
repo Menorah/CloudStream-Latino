@@ -11,11 +11,11 @@ class Cuevana3vMarkupTest {
 
     @Test
     fun `decodeTungUrl decodes Hyper, Nebula and base64 v embeds`() {
-        val hyperUrl = "https://tungtungsahur.cuevana3v.pro/?token=1Vl0ZUFoGB3A3B3E3"
+        val hyperUrl = "https://tungtungsahur.cuevana3v.pro/?token=1VkUEEAYMURVIQwNM"
         val resolvedHyper = Cuevana3vMarkup.decodeTungUrl(hyperUrl)
         assertEquals("https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/7q1v682peq0u", resolvedHyper)
 
-        val nebulaUrl = "https://tungtungsahur.cuevana3v.pro/?token=3GxkPBB0JUhUGAQN1"
+        val nebulaUrl = "https://tungtungsahur.cuevana3v.pro/?token=3G1tFFgZNVgZCS0lc"
         val resolvedNebula = Cuevana3vMarkup.decodeTungUrl(nebulaUrl)
         assertEquals("https://vibuxer.com/e/zopp6y5coyze", resolvedNebula)
 

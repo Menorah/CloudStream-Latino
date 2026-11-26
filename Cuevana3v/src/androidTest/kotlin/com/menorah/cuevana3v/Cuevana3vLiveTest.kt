@@ -56,11 +56,11 @@ class Cuevana3vLiveTest {
     fun offlineParserSmoke() {
         assertEquals(
             "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/7q1v682peq0u",
-            Cuevana3vMarkup.decodeTungUrl("https://tungtungsahur.cuevana3v.pro/?token=1Vl0ZUFoGB3A3B3E3"),
+            Cuevana3vMarkup.decodeTungUrl("https://tungtungsahur.cuevana3v.pro/?token=1VkUEEAYMURVIQwNM"),
         )
         assertEquals(
             "https://vibuxer.com/e/zopp6y5coyze",
-            Cuevana3vMarkup.decodeTungUrl("https://tungtungsahur.cuevana3v.pro/?token=3GxkPBB0JUhUGAQN1"),
+            Cuevana3vMarkup.decodeTungUrl("https://tungtungsahur.cuevana3v.pro/?token=3G1tFFgZNVgZCS0lc"),
         )
         assertEquals(
             "https://cuevana3v.pro/serie/a-la-deriva-2",

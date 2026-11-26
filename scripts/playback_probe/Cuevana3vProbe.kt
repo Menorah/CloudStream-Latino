@@ -51,10 +51,21 @@ object PlaybackProbe {
                     check(emptySections.isEmpty()) { "empty home sections: $emptySections" }
                     check(elapsed < 45_000) { "home too slow: $elapsed ms" }
 
-                    // Check page 2 of main catalog & page 2 of tendencies (hasNext should be false)
+                    // Check page 2 of main catalog
                     val moviesSection = provider.mainPage.first { it.data == "/peliculas" }
                     val moviesP2 = provider.getMainPage(2, MainPageRequest(moviesSection.name, moviesSection.data, moviesSection.horizontalImages))
-                    check(moviesP2 != null && moviesP2.items.flatMap { it.list }.isNotEmpty()) { "empty /peliculas page 2" }
+                    val moviesP2Items = moviesP2?.items?.flatMap { it.list }.orEmpty()
+                    if (moviesP2Items.isEmpty()) {
+                        val rawP2 = withContext(Dispatchers.IO) {
+                            com.lagradost.cloudstream3.app.get(
+                                "https://cuevana3v.pro/peliculas?page=2",
+                                referer = "https://cuevana3v.pro/",
+                                headers = mapOf("User-Agent" to Cuevana3vMarkup.DEFAULT_USER_AGENT),
+                                timeout = 20,
+                            )
+                        }
+                        error("empty /peliculas page 2 (http=${rawP2.code}, len=${rawP2.text.length}, parsed=${Cuevana3vMarkup.parseCatalogItems(rawP2.text).size})")
+                    }
 
                     val searchMatrix = provider.search("matrix", 1) ?: error("null search matrix")
                     check(searchMatrix.items.isNotEmpty()) { "empty matrix search" }

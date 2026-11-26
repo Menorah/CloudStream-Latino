@@ -55,6 +55,7 @@ class Cuevana3vProvider : MainAPI() {
     private val tungConfigRef = AtomicReference(Cuevana3vMarkup.defaultTungConfig)
     private val tungConfigMutex = Mutex()
     private val tungRefreshedOnce = AtomicReference(false)
+    private val siteGate = Semaphore(6)
     private val seasonGate = Semaphore(4)
     private val linkGate = Semaphore(4)
 
@@ -66,19 +67,26 @@ class Cuevana3vProvider : MainAPI() {
     )
 
     private suspend fun getHtml(url: String, referer: String = "$mainUrl/", timeoutSec: Long = 18L): String? {
-        return try {
-            val res = app.get(
-                url,
-                referer = referer,
-                headers = siteHeaders,
-                timeout = timeoutSec,
-            )
-            if (res.isSuccessful) res.text else null
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
+        for (attempt in 0..2) {
+            val result = try {
+                siteGate.withPermit {
+                    val res = app.get(
+                        url,
+                        referer = referer,
+                        headers = siteHeaders,
+                        timeout = timeoutSec,
+                    )
+                    if (res.isSuccessful) res.text else null
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (result != null) return result
+            if (attempt < 2) kotlinx.coroutines.delay(350L * (attempt + 1))
         }
+        return null
     }
 
     private fun toSearchResponse(card: CuevanaCatalogCard): SearchResponse {
