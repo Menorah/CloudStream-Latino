@@ -109,7 +109,7 @@ object PlaybackProbe {
                         "VimeusSerie" to "https://vimeus.net/e/serie?tmdb=247718&se=1&ep=1&view_key=D3dX7LTo6CgnhLGPyKahD9gDNZ2n82wJ2mpWu-SjS0M&title=Pelisjuanita&theme=minimal&autoplay=1",
                         "Fastserver" to "https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden",
                         "FastserverSerie" to "https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1",
-                        "Earnvids" to "https://morencius.com/embed/036yf8jywyhr",
+                        "Earnvids" to "https://callistanise.com/v/lg0w6ezhvyd8",
                         "StreamWish" to "https://hglink.to/e/u8jqwoe4cnpt",
                         "Voe" to "https://voe.sx/e/ltvamjdzsvxv",
                         "Savefiles" to "https://savefiles.com/e/lpkobe2ki65z",

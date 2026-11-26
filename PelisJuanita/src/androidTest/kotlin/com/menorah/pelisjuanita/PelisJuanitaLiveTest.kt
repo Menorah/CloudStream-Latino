@@ -7,6 +7,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -14,8 +16,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -23,40 +23,46 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(AndroidJUnit4::class)
 class PelisJuanitaLiveTest {
 
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
+
+    private val noRedirectHttp = http.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
     private fun getText(url: String, referer: String = "${PelisJuanitaMarkup.MAIN_URL}/"): String {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 20_000
-        c.readTimeout = 20_000
-        c.instanceFollowRedirects = true
-        c.setRequestProperty("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
-        c.setRequestProperty("Accept", "application/json,text/html,*/*;q=0.8")
-        c.setRequestProperty("Accept-Language", "es-MX,es;q=0.9,en;q=0.8")
-        c.setRequestProperty("Referer", referer)
-        try {
-            assertEquals("HTTP $url", 200, c.responseCode)
-            return c.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            c.disconnect()
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
+            .header("Accept", "application/json,text/html,*/*;q=0.8")
+            .header("Accept-Language", "es-MX,es;q=0.9,en;q=0.8")
+            .header("Referer", referer)
+            .build()
+        http.newCall(req).execute().use { res ->
+            assertEquals("HTTP $url", 200, res.code)
+            return res.body?.string().orEmpty()
         }
     }
 
     private fun checkImageReachable(url: String) {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 15_000
-        c.readTimeout = 15_000
-        c.setRequestProperty("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
-        try {
-            assertEquals("Image HTTP $url", 200, c.responseCode)
-            val ct = c.contentType.orEmpty().lowercase()
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
+            .build()
+        http.newCall(req).execute().use { res ->
+            assertEquals("Image HTTP $url", 200, res.code)
+            val ct = res.header("Content-Type").orEmpty().lowercase()
             assertTrue("Unexpected content-type $ct for $url", ct.startsWith("image/"))
-            val bytes = c.inputStream.use { it.readBytes() }
+            val bytes = res.body?.bytes() ?: ByteArray(0)
             assertTrue("Empty image $url", bytes.size > 500)
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             assertNotNull("Failed to decode bitmap for $url", bmp)
             assertTrue("Decoded image too small for $url: ${bmp!!.width}x${bmp.height}", bmp.width >= 50 && bmp.height >= 50)
             bmp.recycle()
-        } finally {
-            c.disconnect()
         }
     }
 
@@ -125,17 +131,13 @@ class PelisJuanitaLiveTest {
         firstMovieRec.backdropUrl?.let { checkImageReachable(it) }
 
         // 3. Unauthenticated /movies/ redirects cleanly to /inicio.php gate
-        val gateConn = URL("${PelisJuanitaMarkup.MAIN_URL}/movies/").openConnection() as HttpURLConnection
-        gateConn.instanceFollowRedirects = false
-        gateConn.connectTimeout = 15_000
-        gateConn.readTimeout = 15_000
-        gateConn.setRequestProperty("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
-        try {
-            val code = gateConn.responseCode
-            val loc = gateConn.getHeaderField("Location").orEmpty()
-            assertTrue("Expected 302 redirect to inicio.php, got $code ($loc)", code in 300..399 && loc.contains("inicio.php"))
-        } finally {
-            gateConn.disconnect()
+        val gateReq = Request.Builder()
+            .url("${PelisJuanitaMarkup.MAIN_URL}/movies/")
+            .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
+            .build()
+        noRedirectHttp.newCall(gateReq).execute().use { res ->
+            val loc = res.header("Location").orEmpty()
+            assertTrue("Expected 302 redirect to inicio.php, got ${res.code} ($loc)", res.code in 300..399 && loc.contains("inicio.php"))
         }
 
         // 4. Real Android WebView loading /inicio.php verification gate (never auto-solving CAPTCHA)
