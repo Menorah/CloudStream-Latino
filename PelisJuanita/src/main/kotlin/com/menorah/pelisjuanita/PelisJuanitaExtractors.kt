@@ -1283,8 +1283,7 @@ open class PelisJuanitaMixDropTopExtractor : ExtractorApi() {
                 } ?: continue
                 if (!res.isSuccessful) continue
 
-                val unpacked = PelisJuanitaVidHideParser.unpackAll(res.text)
-                val sourcesToScan = listOf(unpacked, res.text)
+                val sourcesToScan: List<String> = PelisJuanitaVidHideParser.unpackAll(res.text) + res.text
                 val rawWurl = sourcesToScan.firstNotNullOfOrNull { text ->
                     WURL_REGEX.find(text)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
                 } ?: continue

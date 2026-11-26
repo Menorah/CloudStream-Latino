@@ -294,8 +294,8 @@ class PelisJuanitaLiveTest {
         // Verify MixDrop wurl unpacking across mirrors
         val mixHtml = tryGetText("https://mxdrop.click/e/7kgq9r3vcmjjx4") ?: tryGetText("https://mixdrop.top/e/7kgq9r3vcmjjx4")
         if (!mixHtml.isNullOrBlank()) {
-            val unpackedMix = PelisJuanitaVidHideParser.unpackAll(mixHtml)
-            if (unpackedMix.contains("wurl", ignoreCase = true) || mixHtml.contains("wurl", ignoreCase = true)) {
+            val mixSources = PelisJuanitaVidHideParser.unpackAll(mixHtml) + mixHtml
+            if (mixSources.any { it.contains("wurl", ignoreCase = true) }) {
                 workingHosts++
             }
         }
