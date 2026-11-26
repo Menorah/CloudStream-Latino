@@ -235,6 +235,8 @@ class PelisJuanitaDataTest {
         assertEquals("https://image.tmdb.org/t/p/w300/1UYm1w6shyYyqFGsry2JMaq56K2.jpg", doubleSlashCat.items[0].posterUrl)
         assertEquals("https://image.tmdb.org/t/p/w200/abc123456.jpg", doubleSlashCat.items[1].posterUrl)
         assertEquals("https://image.tmdb.org/t/p/w500/1UYm1w6shyYyqFGsry2JMaq56K2.jpg", PelisJuanitaMarkup.resolvePosterUrl("//1UYm1w6shyYyqFGsry2JMaq56K2.jpg"))
+        assertEquals("https://image.tmdb.org/t/p/w500/jyR9lZNJtKzjhBasj1lnfC1lwut.jpg", PelisJuanitaMarkup.resolvePosterUrl("jyR9lZNJtKzjhBasj1lnfC1lwut.jpg"))
+        assertEquals("https://image.tmdb.org/t/p/w300/jyR9lZNJtKzjhBasj1lnfC1lwut.jpg", PelisJuanitaMarkup.resolvePosterUrl("/t/p/w300//jyR9lZNJtKzjhBasj1lnfC1lwut.jpg"))
         assertNull(PelisJuanitaMarkup.resolveBackdropUrl("https://image.tmdb.org/t/p/original//"))
         assertNull(PelisJuanitaMarkup.resolvePosterUrl("https://image.tmdb.org/t/p/w500//null"))
         assertEquals(
@@ -525,18 +527,22 @@ class PelisJuanitaDataTest {
 
         // Stream row fallback outside .box-download + cargarServidor typo variant + protocol-relative URL
         val altStreams = PelisJuanitaMarkup.parseStreamSourcesHtml(
+            """<a class="row-download" data-idioma="subtitulada" data-tipo="stream" onclick="cargarServidor('//bysesukior.com/e/abc123')"><span>Byse</span><span>HD</span></a>""",
+        )
+        assertEquals(1, altStreams.size)
+        assertEquals("Subtitulado", altStreams[0].languageLabel)
+        assertEquals("https://bysesukior.com/e/abc123", altStreams[0].url)
+
+        val fallbackTipoStreams = PelisJuanitaMarkup.parseStreamSourcesHtml(
             """
-            <a class="row-download" data-idioma="subtitulada" data-tipo="stream" onclick="cargarServidor('//bysesukior.com/e/abc123')"><span>Byse</span><span>HD</span></a>
             <a class="row-download" data-idioma="latino" data-tipo="ayuda" data-url="https://pelisjuanita.com/ayuda.mp4"><span>Ayuda</span><span>HD</span></a>
             <a class="row-download" data-idioma="latino" data-tipo="tutorial" data-url="https://pelisjuanita.com/tutorial.mp4"><span>Tutorial</span><span>HD</span></a>
             <a class="row-download" data-idioma="latino" data-src="https://vidara.to/e/HnuAfGnH5Z97l"><span>Vidara</span><span>FULLHD</span></a>
             """.trimIndent(),
         )
-        assertEquals(2, altStreams.size)
-        assertEquals("Subtitulado", altStreams[0].languageLabel)
-        assertEquals("https://bysesukior.com/e/abc123", altStreams[0].url)
-        assertEquals("Vidara", altStreams[1].serverName)
-        assertEquals("https://vidara.to/e/HnuAfGnH5Z97l", altStreams[1].url)
+        assertEquals(1, fallbackTipoStreams.size)
+        assertEquals("Vidara", fallbackTipoStreams[0].serverName)
+        assertEquals("https://vidara.to/e/HnuAfGnH5Z97l", fallbackTipoStreams[0].url)
 
         // Byse deterministic PoW check against verified vector
         val vecHash = PelisJuanitaBysePow.hashNonce("5dd6af337978c416cc2cf9a6af73daad:2892".toByteArray(StandardCharsets.UTF_8))

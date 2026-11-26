@@ -167,8 +167,9 @@ internal object PelisJuanitaMarkup {
     private val SERIE_ID_REGEX = Regex("""CURRENT_SERIE_ID\s*=\s*(\d+)""")
     private val MOVIE_ID_REGEX = Regex("""CURRENT_MOVIE_ID\s*=\s*(\d+)""")
     private val MOVIE_INFO_P_REGEX = Regex("""movieInfo\.php\?[^"'<>]*?[?&]p=(\d+)""")
-    private val TMDB_FILENAME_REGEX = Regex("""^/+([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
+    private val TMDB_FILENAME_REGEX = Regex("""^/*([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
     private val TMDB_FULL_PATH_REGEX = Regex("""^/t/p/[^/]+/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp)$""", RegexOption.IGNORE_CASE)
+    private val TMDB_REL_TP_REGEX = Regex("""^/*(t/p/[^/]+/+[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
     private val MULTI_SLASH_REGEX = Regex("""/+""")
     private val SAVED_LOCAL_ASSETS_REGEX = Regex("""_files/([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
 
@@ -208,6 +209,9 @@ internal object PelisJuanitaMarkup {
         }
         TMDB_FILENAME_REGEX.matchEntire(clean)?.let { m ->
             return "$tmdbBase/${m.groupValues[1]}"
+        }
+        TMDB_REL_TP_REGEX.matchEntire(clean)?.let { m ->
+            return "https://image.tmdb.org/${MULTI_SLASH_REGEX.replace(m.groupValues[1], "/")}"
         }
         val candidate = when {
             clean.startsWith("https://", ignoreCase = true) -> clean

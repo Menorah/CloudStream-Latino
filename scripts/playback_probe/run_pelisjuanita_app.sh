@@ -55,7 +55,7 @@ for i in $(seq 1 95); do
   fi
   if echo "$log" | grep -q 'FAIL '; then
     echo "$log"
-    echo "$log" | grep -E 'home sections=|PASS pagination|PASS unverified|PASS coil posters=|PASS server |server coverage' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
+    echo "$log" | grep -E 'home sections=|PASS pagination|PASS unverified|PASS verified|PASS coil posters=|PASS server |server coverage' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
     echo "::error::$(echo "$log" | grep 'FAIL ' | tail -1 | sed -e 's/%/%25/g')"
     exit 1
   fi
