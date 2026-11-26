@@ -9,10 +9,10 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Byse and Lulustream
+      - name: Check Byse playback and Lulustream tail
         run: |
           python3 - <<'PY'
-          import urllib.request, urllib.error, urllib.parse, json
+          import urllib.request, urllib.error, urllib.parse, json, re
           ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
           def hit(url, data=None, hdrs=None):
               body = urllib.parse.urlencode(data).encode() if data else None
@@ -22,13 +22,10 @@ jobs:
                       return r.status, r.geturl(), r.read().decode("utf-8", "replace")
               except urllib.error.HTTPError as e:
                   return e.code, e.geturl(), e.read().decode("utf-8", "replace")
-          for tag, args in [
-              ("byse_details", ("https://bysesukior.com/api/videos/92rgcn88ka85/embed/details", None, {"Referer": "https://bysesukior.com/e/92rgcn88ka85"})),
-              ("lulu_get", ("https://lulustream.com/e/zxfcz3pz68ds", None, {"Referer": "https://pelisjuanita.com/"})),
-              ("lplaygo_dl", ("https://lplaygo.com/dl", {"op":"embed","file_code":"zxfcz3pz68ds","auto":"1","referer":"https://pelisjuanita.com/"}, {"Referer":"https://lplaygo.com/e/zxfcz3pz68ds"})),
-              ("lulu_dl", ("https://lulustream.com/dl", {"op":"embed","file_code":"zxfcz3pz68ds","auto":"1","referer":"https://pelisjuanita.com/"}, {"Referer":"https://lulustream.com/e/zxfcz3pz68ds"})),
-          ]:
-              c, u, t = hit(*args)
-              msg = json.dumps({"tag": tag, "code": c, "url": u, "len": len(t), "head": t[:1500]}, ensure_ascii=False)
-              print("::notice::" + msg[:3800].replace("%","%25").replace("\n","%0A").replace("\r","%0D"))
+          c, u, t = hit("https://n1mwq.org/api/videos/92rgcn88ka85/embed/playback", None, {"Accept":"*/*","Referer":"https://n1mwq.org/fe4/92rgcn88ka85","x-embed-parent":"https://bysesukior.com/e/92rgcn88ka85"})
+          print("::notice::BYSE_PB=" + json.dumps({"code": c, "url": u, "body": t[:1500]})[:3800].replace("%","%25").replace("\n","%0A"))
+          c2, u2, t2 = hit("https://lplaygo.com/dl", {"op":"embed","file_code":"zxfcz3pz68ds","auto":"1","referer":"https://pelisjuanita.com/"}, {"Referer":"https://lplaygo.com/e/zxfcz3pz68ds"})
+          idx = t2.find("vplayer")
+          tail = t2[max(0, idx-200):idx+2500] if idx >= 0 else t2[-2500:]
+          print("::notice::LULU_TAIL=" + json.dumps({"code": c2, "len": len(t2), "tail": tail})[:3800].replace("%","%25").replace("\n","%0A"))
           PY
