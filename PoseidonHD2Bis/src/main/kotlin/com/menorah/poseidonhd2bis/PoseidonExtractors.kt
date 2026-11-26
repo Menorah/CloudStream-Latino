@@ -841,7 +841,6 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             var encParam = PoseidonVsembedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
             var trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 14L)
             var xTracking = trackRes.headers["x-tracking"]
-                ?: trackRes.headers.entries.firstOrNull { it.key.equals("x-tracking", ignoreCase = true) }?.value
 
             var decryptedJson = xTracking?.let { PoseidonVsembedCrypto.decryptHex(it, host, keyChars, saltChars) }
 
@@ -861,7 +860,6 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                             encParam = PoseidonVsembedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
                             trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 14L)
                             xTracking = trackRes.headers["x-tracking"]
-                                ?: trackRes.headers.entries.firstOrNull { it.key.equals("x-tracking", ignoreCase = true) }?.value
                             decryptedJson = xTracking?.let { PoseidonVsembedCrypto.decryptHex(it, host, keyChars, saltChars) }
                         }
                     }
