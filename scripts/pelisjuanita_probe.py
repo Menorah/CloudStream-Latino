@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lossless compact multi-part extractor for pelisjuanita.com.zip (<= 9 chunks x 3800 chars per part)."""
+"""Parallel 5-part lossless extractor for pelisjuanita.com.zip HTML & JS files."""
 import argparse
 import base64
 import hashlib
@@ -58,6 +58,7 @@ def emit_chunks(tag: str, obj):
     chunk_size = 3800
     total = (len(b64) + chunk_size - 1) // chunk_size
     if total > 9:
+        # Split safely into a warning + trimmed or error with sizes
         raise RuntimeError(f"{tag} too big: {total} chunks ({len(b64)} b64 chars, {len(raw)} raw)")
     for idx, i in enumerate(range(0, len(b64), chunk_size)):
         print(f"::notice::{tag} {idx + 1}/{total} {b64[i:i+chunk_size]}", flush=True)
@@ -65,122 +66,118 @@ def emit_chunks(tag: str, obj):
 
 def clean_soup(raw_html: str) -> BeautifulSoup:
     soup = BeautifulSoup(raw_html, "html.parser")
-    for tag in soup.find_all(["style", "svg"]):
-        if tag.name == "style":
+    for tag in soup.find_all(["style", "svg", "link"]):
+        if tag.name == "link" and tag.get("rel") != ["canonical"]:
             tag.decompose()
-        else:
-            tag.clear()
+        elif tag.name != "link":
+            tag.decompose()
     for tag in soup.find_all(True):
         for attr in list(tag.attrs):
-            if attr.startswith("data-darkreader"):
+            if attr.startswith("data-darkreader") or attr == "style":
                 del tag.attrs[attr]
-        style = tag.get("style")
-        if isinstance(style, str) and "--darkreader-" in style:
-            parts = [p for p in style.split(";") if "--darkreader-" not in p and p.strip()]
-            if parts:
-                tag["style"] = ";".join(parts)
-            else:
-                del tag["style"]
+            elif isinstance(tag.attrs[attr], str) and tag.attrs[attr].startswith("data:image/"):
+                tag.attrs[attr] = "data:img"
     for meta in soup.find_all("meta", attrs={"name": "darkreader"}):
         meta.decompose()
     return soup
 
 
-def compact_body_for_catalog(soup: BeautifulSoup) -> str:
-    body = soup.body or soup
-    clone = BeautifulSoup(str(body), "html.parser")
-    for s in clone.find_all("script"):
-        s.decompose()
-    # Keep only first 3 children inside dense grids/carousels while preserving all headers/nav/forms/pagination/filters
-    for container in clone.find_all(["div", "ul", "section"]):
-        kids = [c for c in container.find_all(recursive=False)]
-        if len(kids) > 8:
-            # Check if repetitive cards (tags with <a> links)
-            with_links = sum(1 for k in kids if k.find("a") or k.name == "a")
-            if with_links >= 6:
-                kept = 0
-                removed = 0
-                for k in kids:
-                    if kept < 3:
-                        kept += 1
-                    else:
+def collapse_repeated_siblings(root: BeautifulSoup, keep_first: int = 3, keep_last: int = 1, skip_tags=("select", "datalist")):
+    for container in root.find_all(True):
+        if container.name in skip_tags:
+            continue
+        kids = [c for c in container.find_all(recursive=False) if getattr(c, "name", None)]
+        if len(kids) <= keep_first + keep_last + 1:
+            continue
+        # Group by (tag, sorted classes)
+        sigs = [(k.name, tuple(sorted(k.get("class") or []))) for k in kids]
+        dominant = max(set(sigs), key=sigs.count)
+        if sigs.count(dominant) >= 5:
+            matching = [k for k, s in zip(kids, sigs) if s == dominant]
+            if len(matching) > keep_first + keep_last:
+                to_drop = matching[keep_first:-keep_last] if keep_last > 0 else matching[keep_first:]
+                for k in to_drop:
+                    k.decompose()
+                marker = root.new_tag("div")
+                marker.string = f"[... {len(to_drop)} more {dominant[0]}.{' '.join(dominant[1])} omitted ...]"
+                if keep_last > 0:
+                    matching[-keep_last].insert_before(marker)
+                else:
+                    container.append(marker)
+
+
+def extract_page(zf: zipfile.ZipFile, filename: str, script_bank: dict, shared_parts: dict, is_detail: bool = False):
+    raw = zf.read(filename).decode("utf-8", "replace")
+    saved_m = re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600])
+    soup = clean_soup(raw)
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    canonical = (soup.find("link", rel="canonical") or {}).get("href", "")
+
+    inline_hashes = []
+    ext_scripts = []
+    for sc in soup.find_all("script"):
+        src = sc.get("src")
+        if src:
+            ext_scripts.append(src)
+        else:
+            txt = redact(sc.get_text().strip())
+            if txt:
+                h = hashlib.sha256(txt.encode("utf-8")).hexdigest()[:12]
+                script_bank.setdefault(h, txt)
+                inline_hashes.append(h)
+        sc.decompose()
+
+    # Deduplicate identical <header>, <footer>, <nav>, <select> across pages
+    for tagname in ("header", "footer", "nav"):
+        for el in soup.find_all(tagname):
+            h_html = redact(re.sub(r"\s{2,}", " ", str(el)))
+            h = hashlib.sha256(h_html.encode("utf-8")).hexdigest()[:12]
+            if h in shared_parts:
+                placeholder = soup.new_tag(tagname)
+                placeholder["data-shared-ref"] = h
+                el.replace_with(placeholder)
+            else:
+                shared_parts[h] = h_html
+
+    for sel in soup.find_all("select"):
+        s_html = redact(re.sub(r"\s{2,}", " ", str(sel)))
+        h = hashlib.sha256(s_html.encode("utf-8")).hexdigest()[:12]
+        if h in shared_parts:
+            placeholder = soup.new_tag("select")
+            placeholder["id"] = sel.get("id", "")
+            placeholder["name"] = sel.get("name", "")
+            placeholder["data-shared-ref"] = h
+            sel.replace_with(placeholder)
+        else:
+            shared_parts[h] = s_html
+
+    if is_detail:
+        # On detail pages, keep server buttons/tabs/seasons intact, collapse only large related carousels (>8 cards)
+        for container in soup.find_all(True):
+            kids = [c for c in container.find_all(recursive=False) if getattr(c, "name", None)]
+            if len(kids) > 10:
+                sigs = [(k.name, tuple(sorted(k.get("class") or []))) for k in kids]
+                dom = max(set(sigs), key=sigs.count)
+                # Don't collapse option lists or episode rows if < 25; collapse huge grids (>12)
+                if sigs.count(dom) > 12:
+                    matching = [k for k, s in zip(kids, sigs) if s == dom]
+                    for k in matching[3:-1]:
                         k.decompose()
-                        removed += 1
-                if removed:
-                    note = clone.new_tag("span")
-                    note.string = f"<!-- +{removed} more cards -->"
-                    container.append(note)
-    return redact(re.sub(r"\s{2,}", " ", str(clone)))
+                    m = soup.new_tag("div")
+                    m.string = f"[... {len(matching) - 4} more {dom[0]} omitted ...]"
+                    matching[-1].insert_before(m)
+    else:
+        collapse_repeated_siblings(soup, keep_first=3, keep_last=1)
 
-
-def summarize_catalog(zf: zipfile.ZipFile, filename: str):
-    raw = zf.read(filename).decode("utf-8", "replace")
-    saved_m = re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600])
-    soup = clean_soup(raw)
-    title = soup.title.get_text(strip=True) if soup.title else ""
-    inline_scripts = []
-    ext_scripts = []
-    for sc in soup.find_all("script"):
-        src = sc.get("src")
-        if src:
-            ext_scripts.append(src)
-        else:
-            txt = sc.get_text().strip()
-            if txt:
-                inline_scripts.append(redact(txt))
-    # All distinct hrefs grouped or sampled
-    all_links = []
-    seen_href = set()
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if href not in seen_href and not href.startswith(("#", "javascript:")):
-            seen_href.add(href)
-            all_links.append([a.get_text(" ", strip=True)[:60], href])
-    selects = [
-        {
-            "name": s.get("name"),
-            "id": s.get("id"),
-            "cls": s.get("class"),
-            "opts": [[o.get("value"), o.get_text(strip=True)] for o in s.find_all("option")][:50],
-        }
-        for s in soup.find_all("select")
-    ]
+    body_html = redact(re.sub(r"\s{2,}", " ", str(soup.body or soup)))
     return {
         "file": filename,
         "saved_url": saved_m.group(1) if saved_m else "",
+        "canonical": canonical,
         "title": title,
         "ext_scripts": ext_scripts,
-        "inline_scripts": inline_scripts,
-        "selects": selects,
-        "sample_links": all_links[:90],
-        "compact_body": compact_body_for_catalog(soup),
-    }
-
-
-def summarize_detail(zf: zipfile.ZipFile, filename: str, compact_cards: bool = False):
-    raw = zf.read(filename).decode("utf-8", "replace")
-    saved_m = re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600])
-    soup = clean_soup(raw)
-    title = soup.title.get_text(strip=True) if soup.title else ""
-    inline_scripts = []
-    ext_scripts = []
-    for sc in soup.find_all("script"):
-        src = sc.get("src")
-        if src:
-            ext_scripts.append(src)
-        else:
-            txt = sc.get_text().strip()
-            if txt:
-                inline_scripts.append(redact(txt))
-    iframes = [dict(fr.attrs) for fr in soup.find_all("iframe")]
-    body_html = compact_body_for_catalog(soup) if compact_cards else redact(re.sub(r"\s{2,}", " ", str(soup.body or soup)))
-    return {
-        "file": filename,
-        "saved_url": saved_m.group(1) if saved_m else "",
-        "title": title,
-        "ext_scripts": ext_scripts,
-        "inline_scripts": inline_scripts,
-        "iframes": iframes,
+        "inline_hashes": inline_hashes,
+        "iframes": [dict(fr.attrs) for fr in soup.find_all("iframe")],
         "body": body_html,
     }
 
@@ -188,43 +185,46 @@ def summarize_detail(zf: zipfile.ZipFile, filename: str, compact_cards: bool = F
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--download", action="store_true")
-    ap.add_argument("--part", type=int, default=0)
+    ap.add_argument("--part", type=int, required=True)
     args = ap.parse_args()
 
     if args.download:
         download_zip()
-        return
 
     with zipfile.ZipFile(ZIP_PATH) as zf:
         all_names = [i.filename for i in zf.infolist() if not i.is_dir()]
         htmls = [n for n in all_names if n.endswith(".html") and "_files/" not in n]
         inner_htmls = [n for n in all_names if "_files/" in n and n.endswith(".html") and "saved_resource" not in n]
+        script_bank = {}
+        shared_parts = {}
 
         if args.part == 1:
             movie_pages = [
                 n for n in sorted(htmls)
                 if any(k in n for k in ("/movies/", "/estrenos/", "/populares/", "/sagas/", "/ultimas agregadas/", "/peliculas "))
             ]
-            emit_chunks("PJP1", [summarize_catalog(zf, n) for n in movie_pages])
+            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in movie_pages]
+            emit_chunks("PJP1", {"pages": pages, "scripts": script_bank, "shared": shared_parts})
 
         elif args.part == 2:
             series_pages = [
                 n for n in sorted(htmls)
                 if "/series" in n or "ultimos episodios" in n or "ultimas series" in n
             ]
-            emit_chunks("PJP2", [summarize_catalog(zf, n) for n in series_pages])
+            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in series_pages]
+            emit_chunks("PJP2", {"pages": pages, "scripts": script_bank, "shared": shared_parts})
 
         elif args.part == 3:
             detail_pages = [n for n in sorted(htmls) if "pelicula detalle" in n or "serie detalle" in n]
             player_pages = [n for n in sorted(inner_htmls) if "movie.html" in n or "serie.html" in n]
-            out = [summarize_detail(zf, n, compact_cards=True) for n in detail_pages] + [
-                summarize_detail(zf, n, compact_cards=False) for n in player_pages
+            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=True) for n in detail_pages] + [
+                extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in player_pages
             ]
-            emit_chunks("PJP3", out)
+            emit_chunks("PJP3", {"pages": pages, "scripts": script_bank, "shared": shared_parts})
 
         elif args.part == 4:
             js_dump = {}
-            skip_prefixes = ("lottie-player", "jquery.min", "hls.js", "jwplayer", "vast.js", "ima-ad-player", "cast_", "www-widgetapi", "vce701823")
+            skip_prefixes = ("lottie-player", "jquery.min", "hls.js", "jwplayer", "vast.js", "ima-ad-player", "cast_", "www-widgetapi", "vce701823", "index-v2")
             for n in sorted(all_names):
                 base = n.rsplit("/", 1)[-1]
                 if any(base.startswith(p) for p in skip_prefixes):
@@ -235,18 +235,45 @@ def main():
                     if sha in js_dump:
                         continue
                     txt = redact(raw.decode("utf-8", "replace"))
-                    if base.startswith("index-v2"):
-                        urls = sorted(set(re.findall(r"https?://[^\s\"'<>\\)]+", txt)))[:80]
-                        paths = sorted(set(re.findall(r"['\"](/[a-zA-Z0-9_./?=&%-]{3,80})['\"]", txt)))[:120]
-                        js_dump[sha] = {"file": n, "size": len(txt), "urls": urls, "paths": paths, "head": txt[:2500], "tail": txt[-2500:]}
-                    elif "embed-" in base:
+                    if "embed-" in base:
                         soup = clean_soup(txt)
-                        scripts = [sc.get_text().strip() for sc in soup.find_all("script") if sc.get_text().strip()]
+                        scripts = [redact(sc.get_text().strip()) for sc in soup.find_all("script") if sc.get_text().strip()]
                         ext = [sc.get("src") for sc in soup.find_all("script") if sc.get("src")]
-                        js_dump[sha] = {"file": n, "size": len(txt), "title": soup.title.get_text(strip=True) if soup.title else "", "ext": ext, "scripts": scripts, "body": str(soup.body or "")[:6000]}
+                        js_dump[sha] = {
+                            "file": n,
+                            "size": len(txt),
+                            "title": soup.title.get_text(strip=True) if soup.title else "",
+                            "ext": ext,
+                            "scripts": scripts,
+                            "body": redact(re.sub(r"\s{2,}", " ", str(soup.body or ""))),
+                        }
                     else:
                         js_dump[sha] = {"file": n, "size": len(txt), "text": txt}
             emit_chunks("PJP4", js_dump)
+
+        elif args.part == 5:
+            out = {}
+            for n in sorted(all_names):
+                base = n.rsplit("/", 1)[-1]
+                if base.startswith("index-v2") or base in ("f.txt", "saved_resource.html", "comments.html"):
+                    raw = zf.read(n)
+                    sha = hashlib.sha256(raw).hexdigest()[:12]
+                    if sha in out:
+                        continue
+                    txt = redact(raw.decode("utf-8", "replace"))
+                    urls = sorted(set(re.findall(r"https?://[^\s\"'<>\\)]+", txt)))[:100]
+                    paths = sorted(set(re.findall(r"['\"](/[a-zA-Z0-9_./?=&%-]{3,100})['\"]", txt)))[:120]
+                    keywords = sorted(set(re.findall(r"[a-zA-Z0-9_$.]*(?:m3u8|master|playlist|source|file|decrypt|token|cipher|aes|key|api|embed|vimeus|juanita)[a-zA-Z0-9_$.]*", txt, re.I)))[:120]
+                    out[sha] = {
+                        "file": n,
+                        "size": len(txt),
+                        "urls": urls,
+                        "paths": paths,
+                        "keywords": keywords,
+                        "head": txt[:6000],
+                        "tail": txt[-4000:] if len(txt) > 6000 else "",
+                    }
+            emit_chunks("PJP5", out)
 
 
 if __name__ == "__main__":
