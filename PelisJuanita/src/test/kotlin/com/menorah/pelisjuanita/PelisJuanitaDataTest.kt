@@ -212,6 +212,35 @@ class PelisJuanitaDataTest {
         assertEquals(PelisJuanitaItemKind.Movie, busquedaCat.items[1].kind)
         assertEquals(2021, busquedaCat.items[1].year)
         assertEquals("https://image.tmdb.org/t/p/w500/gucci123.jpg", busquedaCat.items[1].posterUrl)
+
+        // movies.php / apiSeries.php double-slashed TMDB poster URLs + bare //filename.jpg + malformed rejections
+        val doubleSlashHtml = """
+            <div class="grid-container">
+              <div class="grid-item">
+                <a href="https://pelisjuanita.com/movies/pelicula/the-skin-crawler-murders">
+                  <img class="img-cover" src="https://image.tmdb.org/t/p/w300//1UYm1w6shyYyqFGsry2JMaq56K2.jpg" alt="The Skin Crawler Murders"/>
+                  <h2>The Skin Crawler Murders</h2>
+                </a>
+              </div>
+              <div class="grid-item">
+                <a href="https://pelisjuanita.com/series/ver-serie/la-casa-alegre">
+                  <img class="img-cover" src="https://image.tmdb.org/t/p/w200//abc123456.jpg" alt="La casa alegre"/>
+                  <h2>La casa alegre</h2>
+                </a>
+              </div>
+            </div>
+        """.trimIndent()
+        val doubleSlashCat = PelisJuanitaMarkup.parseCatalogHtml(doubleSlashHtml, currentPage = 1)
+        assertEquals(2, doubleSlashCat.items.size)
+        assertEquals("https://image.tmdb.org/t/p/w300/1UYm1w6shyYyqFGsry2JMaq56K2.jpg", doubleSlashCat.items[0].posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w200/abc123456.jpg", doubleSlashCat.items[1].posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w500/1UYm1w6shyYyqFGsry2JMaq56K2.jpg", PelisJuanitaMarkup.resolvePosterUrl("//1UYm1w6shyYyqFGsry2JMaq56K2.jpg"))
+        assertNull(PelisJuanitaMarkup.resolveBackdropUrl("https://image.tmdb.org/t/p/original//"))
+        assertNull(PelisJuanitaMarkup.resolvePosterUrl("https://image.tmdb.org/t/p/w500//null"))
+        assertEquals(
+            "https://pelisjuanita.com/movies/movieInfo.php?title=slug%20con%20espacio&p=12",
+            PelisJuanitaMarkup.buildMovieInfoUrl("slug con espacio", 12L),
+        )
     }
 
     @Test
@@ -496,11 +525,18 @@ class PelisJuanitaDataTest {
 
         // Stream row fallback outside .box-download + cargarServidor typo variant + protocol-relative URL
         val altStreams = PelisJuanitaMarkup.parseStreamSourcesHtml(
-            """<a class="row-download" data-idioma="subtitulada" data-tipo="stream" onclick="cargarServidor('//bysesukior.com/e/abc123')"><span>Byse</span><span>HD</span></a>""",
+            """
+            <a class="row-download" data-idioma="subtitulada" data-tipo="stream" onclick="cargarServidor('//bysesukior.com/e/abc123')"><span>Byse</span><span>HD</span></a>
+            <a class="row-download" data-idioma="latino" data-tipo="ayuda" data-url="https://pelisjuanita.com/ayuda.mp4"><span>Ayuda</span><span>HD</span></a>
+            <a class="row-download" data-idioma="latino" data-tipo="tutorial" data-url="https://pelisjuanita.com/tutorial.mp4"><span>Tutorial</span><span>HD</span></a>
+            <a class="row-download" data-idioma="latino" data-src="https://vidara.to/e/HnuAfGnH5Z97l"><span>Vidara</span><span>FULLHD</span></a>
+            """.trimIndent(),
         )
-        assertEquals(1, altStreams.size)
+        assertEquals(2, altStreams.size)
         assertEquals("Subtitulado", altStreams[0].languageLabel)
         assertEquals("https://bysesukior.com/e/abc123", altStreams[0].url)
+        assertEquals("Vidara", altStreams[1].serverName)
+        assertEquals("https://vidara.to/e/HnuAfGnH5Z97l", altStreams[1].url)
 
         // Byse deterministic PoW check against verified vector
         val vecHash = PelisJuanitaBysePow.hashNonce("5dd6af337978c416cc2cf9a6af73daad:2892".toByteArray(StandardCharsets.UTF_8))

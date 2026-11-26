@@ -543,7 +543,7 @@ internal object PelisJuanitaWebTransport {
                                 (!pageText.contains("<script", ignoreCase = true) &&
                                     !pageText.contains("<form", ignoreCase = true) &&
                                     org.jsoup.Jsoup.parse(pageText).text().isBlank())
-                            if (!isAjax && (httpStatus == 403 || httpStatus == 503) && isEmptyDom) {
+                            if ((httpStatus == 403 || httpStatus == 503) && isEmptyDom) {
                                 finish(Result.success(PelisJuanitaWebResponse(httpStatus, pageUrl, "")))
                                 return@evaluateJavascript
                             }
@@ -563,16 +563,18 @@ internal object PelisJuanitaWebTransport {
                                     pageUrl
                                 }
                                 val quotedTarget = JSONObject.quote(fetchTarget)
+                                val abortBoilerplate = "const ac=typeof AbortController!=='undefined'?new AbortController():null;const tid=ac?setTimeout(()=>ac.abort(),18000):0;"
+                                val signalOpt = "signal:ac?ac.signal:undefined,"
                                 val script = if (form != null) {
                                     val encoded = form.entries.joinToString("&") { (k, v) ->
                                         "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
                                     }
                                     val quotedBody = JSONObject.quote(encoded)
-                                    """window.__pjFetchResult=null;fetch($quotedTarget,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body:$quotedBody}).then(async r=>{const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
+                                    """window.__pjFetchResult=null;$abortBoilerplate fetch($quotedTarget,{method:'POST',credentials:'same-origin',$signalOpt headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body:$quotedBody}).then(async r=>{if(tid)clearTimeout(tid);const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{if(tid)clearTimeout(tid);window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
                                 } else if (isAjax) {
-                                    """window.__pjFetchResult=null;fetch($quotedTarget,{credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}}).then(async r=>{const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
+                                    """window.__pjFetchResult=null;$abortBoilerplate fetch($quotedTarget,{credentials:'same-origin',$signalOpt headers:{'X-Requested-With':'XMLHttpRequest'}}).then(async r=>{if(tid)clearTimeout(tid);const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{if(tid)clearTimeout(tid);window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
                                 } else {
-                                    """window.__pjFetchResult=null;fetch($quotedTarget,{credentials:'same-origin'}).then(async r=>{const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
+                                    """window.__pjFetchResult=null;$abortBoilerplate fetch($quotedTarget,{credentials:'same-origin',$signalOpt}).then(async r=>{if(tid)clearTimeout(tid);const t=await r.text();window.__pjFetchResult=JSON.stringify({status:r.status,url:r.url,text:t.slice(0,${MAX_BODY_CHARS + 1})});}).catch(()=>{if(tid)clearTimeout(tid);window.__pjFetchResult=JSON.stringify({status:0,url:location.href,text:''});});"""
                                 }
                                 view.evaluateJavascript(script, null)
                                 handler.postDelayed(poll, 250L)

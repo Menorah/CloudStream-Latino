@@ -319,7 +319,7 @@ class PelisJuanitaVimeusExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit,
     ) {
         val headers = mapOf(
-            "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
         )
@@ -405,7 +405,7 @@ open class PelisJuanitaVimeosExtractor : ExtractorApi() {
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             val headers = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
@@ -423,7 +423,7 @@ open class PelisJuanitaVimeosExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to parsed.origin,
                 "Referer" to "${parsed.origin}/",
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
 
             var emitted = false
@@ -489,7 +489,7 @@ open class PelisJuanitaFastserverMoviesExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit,
     ) {
         val headers = mapOf(
-            "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
         )
@@ -502,7 +502,7 @@ open class PelisJuanitaFastserverMoviesExtractor : ExtractorApi() {
         val streamHeaders = mapOf(
             "Origin" to origin,
             "Referer" to "$origin/",
-            "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
         )
         if (streamUrl.contains(".m3u8", ignoreCase = true)) {
             val links = withTimeoutOrNull(5_000L) {
@@ -559,40 +559,30 @@ open class PelisJuanitaSavefilesExtractor : LuluStream() {
         }.getOrDefault(url.substringAfterLast("/").removeSuffix(".html").substringAfterLast('-'))
         if (fileCode.isBlank()) return
 
-        val postOrigin = if (url.contains("lulustream.", ignoreCase = true)) {
-            "https://lplaygo.com"
-        } else {
-            runCatching { PelisJuanitaVidHideParser.originOf(url) }.getOrDefault(mainUrl)
-        }
+        val origOrigin = runCatching { PelisJuanitaVidHideParser.originOf(url) }.getOrDefault(mainUrl)
+        val postOrigins = buildList {
+            if (url.contains("lulustream.", ignoreCase = true) || url.contains("lplaygo.", ignoreCase = true)) {
+                add("https://lplaygo.com")
+                add("https://lulustream.com")
+            }
+            if (!contains(origOrigin)) add(origOrigin)
+        }.distinct()
         val headers = mapOf(
-            "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
         )
-        val postRes = runCatching {
-            app.post(
-                "$postOrigin/dl",
-                referer = url,
-                headers = headers,
-                data = mapOf(
-                    "op" to "embed",
-                    "file_code" to fileCode,
-                    "auto" to "1",
-                    "referer" to (referer ?: "${PelisJuanitaMarkup.MAIN_URL}/"),
-                ),
-                timeout = 12L,
-            )
-        }.getOrNull() ?: return
+        val effReferer = referer?.takeIf { it.isNotBlank() } ?: "${PelisJuanitaMarkup.MAIN_URL}/"
 
-        val parsed = PelisJuanitaVidHideParser.parse(postRes.text, postRes.url)
-        if (parsed.streams.isNotEmpty()) {
+        suspend fun emitParsed(parsed: PelisJuanitaParsedEmbed): Boolean {
+            if (parsed.streams.isEmpty()) return false
             for (sub in parsed.subtitles) {
                 subtitleCallback(newSubtitleFile(sub.label, sub.url))
             }
             val streamHeaders = mapOf(
                 "Origin" to parsed.origin,
                 "Referer" to "${parsed.origin}/",
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
             for (stream in parsed.streams) {
                 if (stream.url.contains(".m3u8", ignoreCase = true)) {
@@ -603,7 +593,7 @@ open class PelisJuanitaSavefilesExtractor : LuluStream() {
                     }.orEmpty()
                     if (links.isNotEmpty()) {
                         links.forEach(callback)
-                        return
+                        return true
                     }
                     callback(
                         newExtractorLink(name, name, stream.url, ExtractorLinkType.M3U8) {
@@ -612,7 +602,7 @@ open class PelisJuanitaSavefilesExtractor : LuluStream() {
                             this.quality = Qualities.Unknown.value
                         },
                     )
-                    return
+                    return true
                 }
                 callback(
                     newExtractorLink(name, name, stream.url, INFER_TYPE) {
@@ -621,16 +611,58 @@ open class PelisJuanitaSavefilesExtractor : LuluStream() {
                         this.quality = Qualities.Unknown.value
                     },
                 )
-                return
+                return true
+            }
+            return false
+        }
+
+        var lastPostText: String? = null
+        var lastPostUrl: String = url
+        for (postOrigin in postOrigins) {
+            val postRes = runCatching {
+                app.post(
+                    "$postOrigin/dl",
+                    referer = url,
+                    headers = headers,
+                    data = mapOf(
+                        "op" to "embed",
+                        "file_code" to fileCode,
+                        "auto" to "1",
+                        "referer" to effReferer,
+                    ),
+                    timeout = 8L,
+                )
+            }.getOrNull() ?: continue
+            lastPostText = postRes.text
+            lastPostUrl = postRes.url
+            val parsed = PelisJuanitaVidHideParser.parse(postRes.text, postRes.url)
+            if (emitParsed(parsed)) return
+        }
+
+        if (!lastPostText.isNullOrBlank()) {
+            val doc = Jsoup.parse(lastPostText, lastPostUrl)
+            val scriptData = doc.selectFirst("script:containsData(vplayer)")?.data()
+                ?: doc.select("script").firstOrNull { it.data().contains("sources:") || it.data().contains("jwplayer(") }?.data()
+            if (!scriptData.isNullOrBlank()) {
+                var emitted = false
+                JwPlayerHelper.extractStreamLinks(
+                    scriptData,
+                    name,
+                    mainUrl,
+                    { emitted = true; callback(it) },
+                    subtitleCallback,
+                )
+                if (emitted) return
             }
         }
 
-        val doc = Jsoup.parse(postRes.text, postRes.url)
-        val scriptData = doc.selectFirst("script:containsData(vplayer)")?.data()
-            ?: doc.select("script").firstOrNull { it.data().contains("sources:") || it.data().contains("jwplayer(") }?.data()
-        if (!scriptData.isNullOrBlank()) {
-            JwPlayerHelper.extractStreamLinks(scriptData, name, mainUrl, callback, subtitleCallback)
+        val getRes = runCatching { app.get(url, referer = effReferer, headers = headers, timeout = 8L) }.getOrNull()
+        if (getRes != null && getRes.isSuccessful) {
+            val parsedGet = PelisJuanitaVidHideParser.parse(getRes.text, getRes.url)
+            if (emitParsed(parsedGet)) return
         }
+
+        runCatching { super.getUrl(url, referer, subtitleCallback, callback) }
     }
 }
 
@@ -923,10 +955,10 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                 if (!forceRefresh && rechecked != null && (System.currentTimeMillis() - rechecked.attestedAtMs) < ATTEST_TTL_MS) {
                     return@withLock rechecked
                 }
-                val cookies = rechecked?.cookies?.toMutableMap() ?: linkedMapOf()
-                val keyPair = rechecked?.keyPair ?: PelisJuanitaByseCrypto.ecKeyPairP256()
+                val cookies = if (forceRefresh) linkedMapOf() else rechecked?.cookies?.toMutableMap() ?: linkedMapOf()
+                val keyPair = if (forceRefresh) PelisJuanitaByseCrypto.ecKeyPairP256() else rechecked?.keyPair ?: PelisJuanitaByseCrypto.ecKeyPairP256()
                 val baseHeaders = mapOf(
-                    "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                    "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                     "Accept" to "application/json, */*",
                     "Origin" to origin,
                     "Referer" to referer,
@@ -949,8 +981,8 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                 val signature = PelisJuanitaByseCrypto.signChallengeNonce(nonce, keyPair)
                 val pubJwk = PelisJuanitaByseCrypto.toJwkPublicKey(keyPair.public as ECPublicKey)
                 val attestPayload = linkedMapOf<String, Any?>(
-                    "viewer_id" to rechecked?.fingerprint?.get("viewer_id"),
-                    "device_id" to rechecked?.fingerprint?.get("device_id"),
+                    "viewer_id" to if (forceRefresh) null else rechecked?.fingerprint?.get("viewer_id"),
+                    "device_id" to if (forceRefresh) null else rechecked?.fingerprint?.get("device_id"),
                     "challenge_id" to challengeId,
                     "nonce" to nonce,
                     "signature" to signature,
@@ -1011,7 +1043,7 @@ open class PelisJuanitaByseExtractor : ByseSX() {
 
         if (code.isNotBlank()) {
             val baseHeaders = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "*/*",
             )
             val detailsRes = runCatching {
@@ -1037,14 +1069,17 @@ open class PelisJuanitaByseExtractor : ByseSX() {
 
             for ((targetOrigin, targetCode, targetRef) in targetPairs) {
                 val effRef = targetRef.ifBlank { "$targetOrigin/" }
+                val wasCached = originStates[targetOrigin]?.let {
+                    (System.currentTimeMillis() - it.attestedAtMs) < ATTEST_TTL_MS
+                } == true
                 val state = getOrCreateAttestedState(targetOrigin, effRef) ?: continue
 
-                suspend fun requestPlayback(isEmbedMode: Boolean): PelisJuanitaBysePlaybackData? {
+                suspend fun requestPlayback(activeState: AttestedOriginState, isEmbedMode: Boolean): PelisJuanitaBysePlaybackData? {
                     val prefix = if (isEmbedMode) "embed/" else ""
                     val embedParent = referer?.takeIf { it.isNotBlank() } ?: "${PelisJuanitaMarkup.MAIN_URL}/"
                     val embedParentOrigin = runCatching { PelisJuanitaVidHideParser.originOf(embedParent) }.getOrDefault(PelisJuanitaMarkup.MAIN_URL)
                     val pbHeaders = linkedMapOf(
-                        "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                        "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                         "Accept" to "application/json, */*",
                         "Origin" to targetOrigin,
                         "Referer" to effRef,
@@ -1056,25 +1091,25 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                         }
                     }
 
-                    val bodyMap = mapOf("fingerprint" to state.fingerprint)
+                    val bodyMap = mapOf("fingerprint" to activeState.fingerprint)
                     var pbRes = app.post(
                         "$targetOrigin/api/videos/$targetCode/${prefix}playback",
                         headers = pbHeaders,
-                        cookies = state.cookies,
+                        cookies = activeState.cookies,
                         requestBody = jsonBody(bodyMap),
                         timeout = 12L,
                     )
-                    state.cookies.putAll(pbRes.cookies)
+                    activeState.cookies.putAll(pbRes.cookies)
 
                     if (pbRes.code == 428 || pbRes.text.contains("captcha_required", ignoreCase = true)) {
                         val capRes = app.post(
                             "$targetOrigin/api/videos/$targetCode/${prefix}captcha",
                             headers = pbHeaders,
-                            cookies = state.cookies,
+                            cookies = activeState.cookies,
                             requestBody = jsonBody(bodyMap),
                             timeout = 12L,
                         )
-                        state.cookies.putAll(capRes.cookies)
+                        activeState.cookies.putAll(capRes.cookies)
                         if (!capRes.isSuccessful) return null
 
                         val capNode = runCatching { PelisJuanitaMarkup.jsonMapper.readTree(capRes.text) }.getOrNull() ?: return null
@@ -1087,16 +1122,16 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                         val verifyPayload = mapOf(
                             "pow_token" to powToken,
                             "solution" to solution,
-                            "fingerprint" to state.fingerprint,
+                            "fingerprint" to activeState.fingerprint,
                         )
                         val verRes = app.post(
                             "$targetOrigin/api/videos/$targetCode/${prefix}captcha/verify",
                             headers = pbHeaders,
-                            cookies = state.cookies,
+                            cookies = activeState.cookies,
                             requestBody = jsonBody(verifyPayload),
                             timeout = 12L,
                         )
-                        state.cookies.putAll(verRes.cookies)
+                        activeState.cookies.putAll(verRes.cookies)
                         if (!verRes.isSuccessful) return null
 
                         val captchaToken = runCatching {
@@ -1106,11 +1141,11 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                         pbRes = app.post(
                             "$targetOrigin/api/videos/$targetCode/${prefix}playback",
                             headers = pbHeaders + ("X-Captcha-Token" to captchaToken),
-                            cookies = state.cookies,
+                            cookies = activeState.cookies,
                             requestBody = jsonBody(bodyMap),
                             timeout = 12L,
                         )
-                        state.cookies.putAll(pbRes.cookies)
+                        activeState.cookies.putAll(pbRes.cookies)
                     }
 
                     if (!pbRes.isSuccessful) return null
@@ -1126,8 +1161,16 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                 }
 
                 // Prefer watch-mode /playback (avoids embed domain allowlist 403), then fall back to /embed/playback for private embeds.
-                val decrypted = runCatching { requestPlayback(isEmbedMode = false) }.getOrNull()
-                    ?: runCatching { requestPlayback(isEmbedMode = true) }.getOrNull()
+                var decrypted = runCatching { requestPlayback(state, isEmbedMode = false) }.getOrNull()
+                    ?: runCatching { requestPlayback(state, isEmbedMode = true) }.getOrNull()
+                if (decrypted == null && wasCached) {
+                    originStates.remove(targetOrigin, state)
+                    val refreshed = getOrCreateAttestedState(targetOrigin, effRef, forceRefresh = true)
+                    if (refreshed != null) {
+                        decrypted = runCatching { requestPlayback(refreshed, isEmbedMode = false) }.getOrNull()
+                            ?: runCatching { requestPlayback(refreshed, isEmbedMode = true) }.getOrNull()
+                    }
+                }
 
                 if (decrypted != null && decrypted.sources.isNotEmpty()) {
                     for (sub in decrypted.tracks) {
@@ -1136,7 +1179,7 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                     val streamHeaders = mapOf(
                         "Origin" to targetOrigin,
                         "Referer" to "$targetOrigin/",
-                        "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                        "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                     )
                     var emittedAny = false
                     for (src in decrypted.sources) {
@@ -1269,14 +1312,14 @@ open class PelisJuanitaMixDropTopExtractor : ExtractorApi() {
             }
             val effReferer = referer?.takeIf { it.isNotBlank() } ?: "${PelisJuanitaMarkup.MAIN_URL}/"
             val headers = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
 
             for (candidate in candidateUrls) {
                 val res = try {
-                    app.get(candidate, referer = effReferer, headers = headers, timeout = 10L)
+                    app.get(candidate, referer = effReferer, headers = headers, timeout = 6L)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -1311,7 +1354,7 @@ open class PelisJuanitaMixDropTopExtractor : ExtractorApi() {
                         this.referer = "$resolvedOrigin/"
                         this.headers = mapOf(
                             "Referer" to "$resolvedOrigin/",
-                            "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                            "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                         )
                         this.quality = Qualities.Unknown.value
                     },
@@ -1346,8 +1389,125 @@ class PelisJuanitaMixDropPsExtractor : PelisJuanitaMixDropTopExtractor() {
     override val mainUrl = "https://mixdrop.ps"
 }
 
-class PelisJuanitaOisauhExtractor : Vidara() {
+class PelisJuanitaOisauhExtractor : PelisJuanitaVidaraExtractor() {
     override val mainUrl = "https://oisauh.com"
+}
+
+open class PelisJuanitaVidaraExtractor : ExtractorApi() {
+    override val name = "Vidara"
+    override val mainUrl = "https://vidara.to"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        extract(url, referer, name, subtitleCallback, callback)
+    }
+
+    companion object {
+        private val MIRROR_ORIGINS = listOf("https://vidara.to", "https://oisauh.com")
+        private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+
+        suspend fun extract(
+            url: String,
+            referer: String?,
+            sourceName: String = "Vidara",
+            subtitleCallback: (SubtitleFile) -> Unit,
+            callback: (ExtractorLink) -> Unit,
+        ): Boolean {
+            val fileCode = runCatching {
+                URI(url).rawPath.orEmpty().trimEnd('/').substringAfterLast('/').substringBefore('?')
+            }.getOrDefault(url.substringAfterLast('/').substringBefore('?'))
+            if (fileCode.isBlank()) return false
+
+            val urlOrigin = runCatching { PelisJuanitaVidHideParser.originOf(url) }.getOrNull()
+            val candidateOrigins = buildList {
+                if (!urlOrigin.isNullOrBlank()) add(urlOrigin)
+                MIRROR_ORIGINS.forEach { if (!it.equals(urlOrigin, ignoreCase = true)) add(it) }
+            }.distinct()
+
+            val payload = PelisJuanitaMarkup.jsonMapper.writeValueAsString(
+                mapOf("filecode" to fileCode, "device" to "desktop"),
+            )
+            val baseHeaders = mapOf(
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "Accept" to "application/json, text/plain, */*",
+            )
+
+            for (origin in candidateOrigins) {
+                val res = try {
+                    app.post(
+                        "$origin/api/stream",
+                        referer = url,
+                        headers = baseHeaders + ("Origin" to origin),
+                        requestBody = payload.toRequestBody(JSON_MEDIA),
+                        timeout = 8L,
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                if (!res.isSuccessful) continue
+
+                val root = runCatching { PelisJuanitaMarkup.jsonMapper.readTree(res.text) }.getOrNull() ?: continue
+                val streamUrl = root.get("streaming_url")?.asText()?.trim()
+                    ?.takeIf { it.startsWith("http", ignoreCase = true) }
+                    ?: continue
+
+                val subs = root.get("subtitles")
+                if (subs != null && subs.isArray) {
+                    for (sub in subs) {
+                        val subUrl = sub.get("file_path")?.asText()?.trim()
+                            ?: sub.get("url")?.asText()?.trim()
+                            ?: sub.get("file")?.asText()?.trim()
+                            ?: continue
+                        val subLang = sub.get("language")?.asText()?.trim()
+                            ?: sub.get("label")?.asText()?.trim()
+                            ?: "Subtítulos"
+                        if (subUrl.startsWith("http", ignoreCase = true)) {
+                            subtitleCallback(newSubtitleFile(subLang, subUrl))
+                        }
+                    }
+                }
+
+                val streamHeaders = mapOf(
+                    "Origin" to origin,
+                    "Referer" to "$origin/",
+                    "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                )
+                val links = withTimeoutOrNull(4_500L) {
+                    runCatching {
+                        M3u8Helper.generateM3u8(sourceName, streamUrl, "$origin/", headers = streamHeaders)
+                    }.getOrElse { emptyList() }
+                }.orEmpty()
+                if (links.isNotEmpty()) {
+                    links.forEach(callback)
+                } else {
+                    callback(
+                        newExtractorLink(sourceName, sourceName, streamUrl, ExtractorLinkType.M3U8) {
+                            this.referer = "$origin/"
+                            this.headers = streamHeaders
+                            this.quality = Qualities.Unknown.value
+                        },
+                    )
+                }
+                return true
+            }
+
+            var fallbackOk = false
+            runCatching {
+                Vidara().getUrl(url, referer, subtitleCallback) { link ->
+                    fallbackOk = true
+                    callback(link)
+                }
+            }
+            return fallbackOk
+        }
+    }
 }
 
 internal object PelisJuanitaCrypto {
@@ -1838,7 +1998,7 @@ class PelisJuanitaVoeExtractor : ExtractorApi() {
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             val baseHeaders = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
@@ -1925,7 +2085,7 @@ class PelisJuanitaVoeExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to origin,
                 "Referer" to "$origin/",
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
             var emitted = false
 
@@ -2034,7 +2194,10 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             "https://streamwish.site",
             "https://playerwish.com",
         )
-        private val JS_ASSET_REGEX = Regex("""src=["'](/assets/[^"']+\.js)["']""")
+        private val JS_ASSET_REGEX = Regex("""src=["']((?:https?://[^"']+|/?assets/[^"']+)\.js)["']""")
+
+        private fun isVsembedUrl(url: String): Boolean =
+            runCatching { URI(url).host?.contains("vsembed", ignoreCase = true) == true }.getOrDefault(false)
 
         suspend fun extract(
             url: String,
@@ -2044,19 +2207,19 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             val baseHeaders = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
             val effReferer = referer?.takeIf { it.isNotBlank() } ?: "${PelisJuanitaMarkup.MAIN_URL}/"
-            var res = app.get(url, referer = effReferer, headers = baseHeaders, timeout = 10L)
+            var res = app.get(url, referer = effReferer, headers = baseHeaders, timeout = 8L)
 
             val unpacked = PelisJuanitaVidHideParser.parse(res.text, res.url)
             if (unpacked.streams.isNotEmpty() && emitParsedStreams(unpacked, sourceName, subtitleCallback, callback)) {
                 return true
             }
 
-            if (!res.url.contains("vsembed.com", ignoreCase = true) &&
+            if (!isVsembedUrl(res.url) &&
                 (res.text.contains("main.js", ignoreCase = true) ||
                     res.text.contains("Loading...", ignoreCase = true) ||
                     !res.text.contains("jwplayer", ignoreCase = true))
@@ -2067,10 +2230,10 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
                 if (fileCode.isNotEmpty()) {
                     for (mirror in REDIRECT_HOSTS) {
                         val hopped = runCatching {
-                            app.get("$mirror/e/$fileCode", referer = res.url, headers = baseHeaders, timeout = 10L)
+                            app.get("$mirror/e/$fileCode", referer = res.url, headers = baseHeaders, timeout = 5L)
                         }.getOrNull() ?: continue
                         res = hopped
-                        if (res.url.contains("vsembed.com", ignoreCase = true)) break
+                        if (isVsembedUrl(res.url)) break
                         val mirrorParsed = PelisJuanitaVidHideParser.parse(res.text, res.url)
                         if (mirrorParsed.streams.isNotEmpty()) {
                             return emitParsedStreams(mirrorParsed, sourceName, subtitleCallback, callback)
@@ -2079,7 +2242,7 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
                 }
             }
 
-            if (res.url.contains("vsembed.com", ignoreCase = true)) {
+            if (isVsembedUrl(res.url)) {
                 return extractFromVsembed(res.url, res.text, sourceName, subtitleCallback, callback)
             }
 
@@ -2105,7 +2268,7 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
                     origin,
                     { jwFound = true; callback(it) },
                     subtitleCallback,
-                    mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT),
+                    mapOf("Origin" to origin, "Referer" to "$origin/", "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT),
                 )
                 if (jwFound) return true
             }
@@ -2126,7 +2289,7 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             if (shortCode.isEmpty()) return false
 
             val apiHeaders = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "application/json, text/plain, */*",
                 "Referer" to pageUrl,
             )
@@ -2134,7 +2297,7 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             var keyChars = PelisJuanitaVsembedCrypto.DEFAULT_KEY_CHARS
             var saltChars = PelisJuanitaVsembedCrypto.DEFAULT_SALT_CHARS
             var encParam = PelisJuanitaVsembedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
-            var trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 10L)
+            var trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 8L)
             var decryptedJson = trackRes.headers["x-tracking"]?.let {
                 PelisJuanitaVsembedCrypto.decryptHex(it, host, keyChars, saltChars)
             }
@@ -2142,8 +2305,9 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             if (decryptedJson == null) {
                 val assetPath = JS_ASSET_REGEX.find(pageHtml)?.groupValues?.getOrNull(1)
                 if (assetPath != null) {
+                    val assetUrl = runCatching { uri.resolve(assetPath).toString() }.getOrDefault("$origin$assetPath")
                     val bundleText = runCatching {
-                        app.get("$origin$assetPath", referer = pageUrl, headers = apiHeaders, timeout = 10L).text
+                        app.get(assetUrl, referer = pageUrl, headers = apiHeaders, timeout = 8L).text
                     }.getOrNull()
                     if (bundleText != null) {
                         val parsedKeys = parseCharArray(bundleText, "keyChars")
@@ -2152,7 +2316,7 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
                             keyChars = parsedKeys
                             saltChars = parsedSalts
                             encParam = PelisJuanitaVsembedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
-                            trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 10L)
+                            trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 8L)
                             decryptedJson = trackRes.headers["x-tracking"]?.let {
                                 PelisJuanitaVsembedCrypto.decryptHex(it, host, keyChars, saltChars)
                             }
@@ -2169,12 +2333,16 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to origin,
                 "Referer" to "$origin/",
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
 
             var emitted = false
-            for (candidate in listOfNotNull(hlsUrl, tiktokUrl).distinct()) {
-                val generated = withTimeoutOrNull(4_500L) {
+            val candidateTimeouts = listOfNotNull(
+                hlsUrl?.let { it to 3_000L },
+                tiktokUrl?.let { it to 4_000L },
+            ).distinctBy { it.first }
+            for ((candidate, timeoutMs) in candidateTimeouts) {
+                val generated = withTimeoutOrNull(timeoutMs) {
                     runCatching {
                         M3u8Helper.generateM3u8(sourceName, candidate, "$origin/", headers = streamHeaders)
                     }.getOrElse { emptyList() }
@@ -2234,7 +2402,7 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to parsed.origin,
                 "Referer" to "${parsed.origin}/",
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
             for (sub in parsed.subtitles) subtitleCallback(newSubtitleFile(sub.label, sub.url))
             var emitted = false
@@ -2347,7 +2515,7 @@ open class PelisJuanitaVidHideExtractor : ExtractorApi() {
             }
 
             val reqHeaders = mapOf(
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
@@ -2384,7 +2552,7 @@ open class PelisJuanitaVidHideExtractor : ExtractorApi() {
                 val streamHeaders = mapOf(
                     "Origin" to attempt.origin,
                     "Referer" to "${attempt.origin}/",
-                    "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                    "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 )
                 val preferredFallback = attempt.streams.firstOrNull { it.key != "hls3" } ?: attempt.streams.first()
                 if (firstFallback == null) firstFallback = attempt to preferredFallback
@@ -2406,7 +2574,7 @@ open class PelisJuanitaVidHideExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to fallbackResult.origin,
                 "Referer" to "${fallbackResult.origin}/",
-                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+                "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
             callback(
                 newExtractorLink(sourceName, sourceName, fallbackStream.url, ExtractorLinkType.M3U8) {

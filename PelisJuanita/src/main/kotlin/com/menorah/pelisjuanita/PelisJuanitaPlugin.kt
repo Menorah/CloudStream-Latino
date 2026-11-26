@@ -37,6 +37,7 @@ class PelisJuanitaPlugin : Plugin() {
         registerExtractorAPI(PelisJuanitaMixDropCoExtractor())
         registerExtractorAPI(PelisJuanitaMixDropPsExtractor())
         registerExtractorAPI(PelisJuanitaOisauhExtractor())
+        registerExtractorAPI(PelisJuanitaVidaraExtractor())
         registerExtractorAPI(PelisJuanitaVoeExtractor())
         registerExtractorAPI(PelisJuanitaHglinkExtractor())
         registerExtractorAPI(PelisJuanitaMedixiruExtractor())
