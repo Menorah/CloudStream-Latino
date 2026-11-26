@@ -15,6 +15,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
 import java.util.Collections
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class Cuevana3vProvider : MainAPI() {
@@ -25,11 +27,11 @@ class Cuevana3vProvider : MainAPI() {
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    override val getMainPageTimeoutMs: Long? = 60_000L
-    override val searchTimeoutMs: Long? = 25_000L
-    override val quickSearchTimeoutMs: Long? = 20_000L
-    override val loadTimeoutMs: Long? = 35_000L
-    override val loadLinksTimeoutMs: Long? = 55_000L
+    override val getMainPageTimeoutMs: Long? = 75_000L
+    override val searchTimeoutMs: Long? = 30_000L
+    override val quickSearchTimeoutMs: Long? = 25_000L
+    override val loadTimeoutMs: Long? = 45_000L
+    override val loadLinksTimeoutMs: Long? = 60_000L
 
     override val mainPage = mainPageOf(
         "/episodios/recientes" to "Últimos Episodios",
@@ -44,19 +46,19 @@ class Cuevana3vProvider : MainAPI() {
         "/peliculas?genero=ciencia-ficcion" to "Ciencia Ficción",
         "/peliculas?genero=comedia" to "Comedia",
         "/peliculas?genero=crimen" to "Crimen",
-        "/peliculas?genero=documental" to "Documental",
         "/peliculas?genero=drama" to "Drama",
-        "/peliculas?genero=familia" to "Familia",
-        "/peliculas?genero=belica" to "Bélica",
         "/peliculas?anio=2026" to "Estrenos 2026",
-        "/peliculas?anio=2025" to "Películas 2025",
     )
+
+    private data class CachedHtml(val text: String, val storedAtMs: Long)
 
     private val tungConfigRef = AtomicReference(Cuevana3vMarkup.defaultTungConfig)
     private val tungConfigMutex = Mutex()
     private val tungRefreshedOnce = AtomicReference(false)
-    private val siteGate = Semaphore(6)
-    private val seasonGate = Semaphore(4)
+    private val htmlCache = ConcurrentHashMap<String, CachedHtml>()
+    private val nextRequestAllowedAtMs = AtomicLong(0L)
+    private val siteGate = Semaphore(3)
+    private val seasonGate = Semaphore(3)
     private val linkGate = Semaphore(4)
 
     private val siteHeaders = mapOf(
@@ -66,25 +68,70 @@ class Cuevana3vProvider : MainAPI() {
         "Referer" to "$mainUrl/",
     )
 
-    private suspend fun getHtml(url: String, referer: String = "$mainUrl/", timeoutSec: Long = 18L): String? {
-        for (attempt in 0..2) {
-            val result = try {
+    private suspend fun getHtml(
+        url: String,
+        referer: String = "$mainUrl/",
+        timeoutSec: Long = 18L,
+        useCache: Boolean = true,
+    ): String? {
+        val now = System.currentTimeMillis()
+        if (useCache) {
+            val cached = htmlCache[url]
+            if (cached != null && now - cached.storedAtMs < 120_000L) {
+                return cached.text
+            }
+        }
+
+        for (attempt in 0..3) {
+            val waitUntil = nextRequestAllowedAtMs.get()
+            val delayMs = waitUntil - System.currentTimeMillis()
+            if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+
+            var retryWaitMs = 0L
+            val html = try {
                 siteGate.withPermit {
+                    val cooldown = nextRequestAllowedAtMs.get() - System.currentTimeMillis()
+                    if (cooldown > 0) kotlinx.coroutines.delay(cooldown)
+                    nextRequestAllowedAtMs.updateAndGet { prev ->
+                        maxOf(prev, System.currentTimeMillis() + 90L)
+                    }
                     val res = app.get(
                         url,
                         referer = referer,
                         headers = siteHeaders,
                         timeout = timeoutSec,
                     )
-                    if (res.isSuccessful) res.text else null
+                    when {
+                        res.isSuccessful -> res.text
+                        res.code == 429 || res.code in 500..599 -> {
+                            val retryHeaderSec = res.headers["Retry-After"]?.trim()?.toLongOrNull()
+                            retryWaitMs = ((retryHeaderSec?.times(1000L)) ?: (1400L * (attempt + 1)))
+                                .coerceIn(1000L, 6000L)
+                            nextRequestAllowedAtMs.updateAndGet { prev ->
+                                maxOf(prev, System.currentTimeMillis() + retryWaitMs)
+                            }
+                            null
+                        }
+                        else -> null
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
+                retryWaitMs = 600L * (attempt + 1)
                 null
             }
-            if (result != null) return result
-            if (attempt < 2) kotlinx.coroutines.delay(350L * (attempt + 1))
+
+            if (html != null) {
+                if (useCache) {
+                    if (htmlCache.size > 96) htmlCache.clear()
+                    htmlCache[url] = CachedHtml(html, System.currentTimeMillis())
+                }
+                return html
+            }
+            if (attempt < 3) {
+                kotlinx.coroutines.delay(if (retryWaitMs > 0) retryWaitMs else 700L * (attempt + 1))
+            }
         }
         return null
     }
