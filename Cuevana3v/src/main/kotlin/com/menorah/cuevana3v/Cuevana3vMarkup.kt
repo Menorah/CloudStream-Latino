@@ -664,6 +664,8 @@ internal object Cuevana3vMarkup {
 
     fun normalizeServerName(rawText: String): String {
         val clean = rawText
+            .replace(Regex("""^\s*Servidor\b""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""Reproducir\s*$""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\bServidor\b""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\bReproducir\b""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\s+"""), " ")

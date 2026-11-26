@@ -215,7 +215,7 @@ class Cuevana3vMarkupTest {
                 <li class="tab-video-item">
                   <span class="tab-item-name">Latino Calidad · HD</span>
                   <ul>
-                    <li data-server="https://tungtungsahur.cuevana3v.pro/?token=1ABC">Servidor Hyper Reproducir</li>
+                    <li data-server="https://tungtungsahur.cuevana3v.pro/?token=1ABC"><span>Servidor Hyper</span><span>Reproducir</span></li>
                     <li data-server="https://tungtungsahur.cuevana3v.pro/?token=3XYZ">Servidor Nebula Reproducir</li>
                   </ul>
                 </li>
