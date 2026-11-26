@@ -1,4 +1,4 @@
-name: Sonda Hosts PelisJuanita Diag
+name: Sonda Byse y StreamWish JS Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probar hosts y reverse-engineer Byse/Dood/StreamWish/MixDrop
+      - name: Inspeccionar JS de Byse (n1mwq.org) y StreamWish main.js
         shell: python3 {0}
         run: |
-          import json, re, urllib.request, urllib.error, http.cookiejar
+          import json, re, urllib.request, urllib.parse, http.cookiejar
 
           def emit(title, text):
               for i in range(0, len(text), 3500):
@@ -23,45 +23,48 @@ jobs:
           cj = http.cookiejar.CookieJar()
           opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
           ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          opener.addheaders = [('User-Agent', ua), ('Accept-Language', 'es-MX,es;q=0.9,en;q=0.8')]
 
           def fetch(url, referer='https://pelisjuanita.com/'):
               try:
                   req = urllib.request.Request(url, headers={'Referer': referer, 'User-Agent': ua})
                   r = opener.open(req, timeout=15)
-                  return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
+                  return r.status, r.geturl(), r.read().decode('utf-8', 'replace')
               except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), dict(e.headers), e.read().decode('utf-8', 'replace')
+                  return e.code, e.geturl(), e.read().decode('utf-8', 'replace')
               except Exception as e:
-                  return -1, url, {}, repr(e)
+                  return -1, url, repr(e)
 
-          # 1. Byse / n1mwq.org inspect JS bundle for playback endpoint!
-          c, u, h, b = fetch('https://bysesukior.com/api/videos/92rgcn88ka85/embed/details', 'https://bysesukior.com/e/92rgcn88ka85')
-          emit('byse_details', f'code={c} url={u}\n{b[:2000]}')
-          try:
-              frame_url = json.loads(b)['embed_frame_url']
-              c2, u2, h2, b2 = fetch(frame_url, 'https://bysesukior.com/e/92rgcn88ka85')
-              emit('byse_frame', f'code={c2} url={u2}\n{b2[:3000]}')
-              for js_path in re.findall(r'src=["\']([^"\']+\.js[^"\']*)["\']', b2):
-                  js_url = urllib.parse.urljoin(u2, js_path)
-                  c3, u3, h3, b3 = fetch(js_url, u2)
-                  hits = []
-                  for m in re.finditer(r'.{0,120}(?:playback|embed|details|key_parts|payload|sources|fetch\(|axios).{0,120}', b3):
-                      s = m.group(0)
-                      if 'playback' in s or 'embed' in s or 'key_parts' in s or 'decrypt' in s or '/api/' in s:
-                          hits.append(s)
-                  emit('byse_js', f'js={js_url} code={c3} len={len(b3)}\nhits:\n' + '\n---\n'.join(hits[:25]))
-          except Exception as e:
-              emit('byse_err', repr(e))
+          # 1. Inspect n1mwq.org JS for playback / details / fe4 / ev5 / api
+          c, u, b = fetch('https://n1mwq.org/assets/index-DocunfmE.js', 'https://n1mwq.org/ev5/92rgcn88ka85')
+          hits = []
+          for pat in [r'/api/[^"\'`\s]{1,80}', r'embed_frame_url', r'key_parts', r'decrypt', r'x-embed-parent', r'playback', r'ev5', r'fe4']:
+              for m in re.finditer(pat, b):
+                  start = max(0, m.start() - 180)
+                  end = min(len(b), m.end() + 220)
+                  hits.append(f'[{pat}] {b[start:end]}')
+          emit('byse_api_hits', '\n---\n'.join(hits[:25]))
 
-          # 2. Dood / Playmogo / StreamWish / MixDrop / Morencius
-          for name, url in [
-              ('playmogo', 'https://playmogo.com/e/kmq8ibge16z1'),
-              ('doodstream', 'https://doodstream.com/e/8dl5bxs3pzrv'),
-              ('streamwish', 'https://streamwish.to/e/k9u77dklzfob'),
-              ('mixdrop', 'https://mixdrop.top/e/q11gg30obxxogvn'),
-              ('morencius', 'https://morencius.com/embed/036yf8jywyhr'),
-              ('waaw', 'https://waaw.to/f/ALdJ0Jeeqk66'),
+          # Also test GET playback on current embed_frame_url (n1mwq.org/ev5/92rgcn88ka85)!
+          c_d, u_d, b_d = fetch('https://bysesukior.com/api/videos/92rgcn88ka85/embed/details', 'https://bysesukior.com/e/92rgcn88ka85')
+          frame_url = json.loads(b_d)['embed_frame_url']
+          pb_url = urllib.parse.urljoin(frame_url, '/api/videos/92rgcn88ka85/embed/playback')
+          for hdr_name, hdrs in [
+              ('with_xembed', {'Referer': frame_url, 'x-embed-parent': 'https://bysesukior.com/e/92rgcn88ka85', 'User-Agent': ua, 'Accept': '*/*'}),
+              ('no_xembed', {'Referer': frame_url, 'User-Agent': ua, 'Accept': '*/*'}),
           ]:
-              c, u, h, b = fetch(url)
-              emit(f'host_{name}', f'code={c} url={u} len={len(b)}\n{b[:3000]}')
+              try:
+                  req = urllib.request.Request(pb_url, headers=hdrs)
+                  r = opener.open(req, timeout=15)
+                  emit(f'byse_pb_{hdr_name}', f'code={r.status} body={r.read().decode("utf-8","replace")[:800]}')
+              except urllib.error.HTTPError as e:
+                  emit(f'byse_pb_{hdr_name}', f'code={e.code} body={e.read().decode("utf-8","replace")[:800]}')
+
+          # 2. StreamWish main.js + medixiru hop for k9u77dklzfob
+          c_sw, u_sw, b_sw = fetch('https://streamwish.to/main.js?v=1.1.9', 'https://streamwish.to/e/k9u77dklzfob')
+          emit('streamwish_mainjs', f'code={c_sw}\n{b_sw[:3500]}')
+          c_mx, u_mx, b_mx = fetch('https://medixiru.com/e/k9u77dklzfob', 'https://streamwish.to/e/k9u77dklzfob')
+          emit('streamwish_medixiru', f'code={c_mx} url={u_mx} len={len(b_mx)}\n{b_mx[:2000]}')
+
+          # 3. Morencius tail (script blocks)
+          c_mo, u_mo, b_mo = fetch('https://morencius.com/embed/036yf8jywyhr', 'https://pelisjuanita.com/')
+          emit('morencius_tail', b_mo[-3500:])
