@@ -16,9 +16,9 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 
 
 def redact(s: str) -> str:
-    s = re.sub(r"[A-Za-z]:\\Users\\[^\\\"'\s]+", r"C:\Users\REDACTED", s)
-    s = re.sub(r"/(?:Users|home)/[^/\"'\s]+", "/Users/REDACTED", s)
-    s = re.sub(r"(?i)(PHPSESSID|cf_clearance)\s*=\s*[^;\"'\s&]+", r"\1=REDACTED", s)
+    s = re.sub(r"[A-Za-z]:\\Users\\[^\\\"'\s]+", lambda _: r"C:\Users\REDACTED", s)
+    s = re.sub(r"/(?:Users|home)/[^/\"'\s]+", lambda _: "/Users/REDACTED", s)
+    s = re.sub(r"(?i)(PHPSESSID|cf_clearance)\s*=\s*[^;\"'\s&]+", lambda m: f"{m.group(1)}=REDACTED", s)
     return s
 
 
