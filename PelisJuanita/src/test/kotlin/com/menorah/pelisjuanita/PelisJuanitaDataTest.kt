@@ -355,12 +355,12 @@ class PelisJuanitaDataTest {
         // Packed JS emulating vimeos.net unquoted keys + dummy empty.srt track
         val vimeosPacked = """
             <script>
-            eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}('0("1").2({3:[{4:"5://6.7/8/9.a?t=1"}],b:[{4:"/c/d.e",f:"g",h:"i"},{4:"5://6.7/j/k.l",f:"m",h:"i"}]});',23,23,'jwplayer|vplayer|setup|sources|file|https|cdn|vimeos|hls|master|m3u8|tracks|srt|empty|srt|label|Upload captions|kind|captions|subs|es|vtt|Español'.split('|')))
+            eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}('0("1").2({3:[{4:"5://6.7/8/9.a?t=99"}],b:[{4:"/c/d.e",f:"g",h:"i"},{4:"5://6.7/j/k.l",f:"m",h:"i"}]});',23,23,'jwplayer|vplayer|setup|sources|file|https|cdn|vimeos|hls|master|m3u8|tracks|srt|empty|srt|label|Upload captions|kind|captions|subs|es|vtt|Español'.split('|')))
             </script>
         """.trimIndent()
         val vimeosParsed = PelisJuanitaVidHideParser.parse(vimeosPacked, "https://vimeos.net/embed-abc123.html")
         assertEquals(1, vimeosParsed.streams.size)
-        assertEquals("https://cdn.vimeos/hls/master.m3u8?t=1", vimeosParsed.streams[0].url)
+        assertEquals("https://cdn.vimeos/hls/master.m3u8?t=99", vimeosParsed.streams[0].url)
         assertEquals(1, vimeosParsed.subtitles.size)
         assertEquals("Español", vimeosParsed.subtitles[0].label)
         assertEquals("https://cdn.vimeos/subs/es.vtt", vimeosParsed.subtitles[0].url)

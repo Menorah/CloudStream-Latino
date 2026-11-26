@@ -185,8 +185,9 @@ class PelisJuanitaLiveTest {
         for ((label, embedUrl) in hostSamples) {
             val links = mutableListOf<ExtractorLink>()
             val subs = mutableListOf<SubtitleFile>()
-            runCatching {
+            try {
                 provider.loadLinks(embedUrl, false, { subs.add(it) }, { links.add(it) })
+            } catch (_: Exception) {
             }
             if (links.isNotEmpty()) {
                 workingHosts++

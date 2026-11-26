@@ -9,7 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Collections
@@ -70,6 +72,7 @@ class PelisJuanitaProvider(
 
     private val htmlCache = ConcurrentHashMap<String, CachedText>()
     private val publicCatalogCache = ConcurrentHashMap<Int, CachedSearchPage>()
+    private val publicCatalogMutex = Mutex()
     private val seriesIdCache = ConcurrentHashMap<String, Long>()
     private val siteGate = Semaphore(4)
     private val seasonGate = Semaphore(4)
@@ -171,14 +174,18 @@ class PelisJuanitaProvider(
 
     private suspend fun fetchPublicCatalogPage(page: Int): PelisJuanitaSearchResultPage? {
         val safePage = page.coerceAtLeast(1)
-        val cached = publicCatalogCache[safePage]
-        if (cached != null && System.currentTimeMillis() - cached.storedAtMs < 60_000L) {
-            return cached.page
+        publicCatalogCache[safePage]?.let { cached ->
+            if (System.currentTimeMillis() - cached.storedAtMs < 60_000L) return cached.page
         }
-        val raw = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl("%", safePage)) ?: return null
-        val parsed = PelisJuanitaMarkup.parseSearchJson(raw) ?: return null
-        publicCatalogCache[safePage] = CachedSearchPage(parsed, System.currentTimeMillis())
-        return parsed
+        return publicCatalogMutex.withLock {
+            publicCatalogCache[safePage]?.let { cached ->
+                if (System.currentTimeMillis() - cached.storedAtMs < 60_000L) return@withLock cached.page
+            }
+            val raw = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl("%", safePage)) ?: return@withLock null
+            val parsed = PelisJuanitaMarkup.parseSearchJson(raw) ?: return@withLock null
+            publicCatalogCache[safePage] = CachedSearchPage(parsed, System.currentTimeMillis())
+            parsed
+        }
     }
 
     private suspend fun lookupPublicRecord(slug: String): PelisJuanitaSearchRecord? {
@@ -257,16 +264,7 @@ class PelisJuanitaProvider(
         val publicPage = fetchPublicCatalogPage(page) ?: return null
         val wantSeries = !req.isMovies
         val filtered = if (wantSeries) {
-            val direct = publicPage.items.filter { it.kind == PelisJuanitaItemKind.Series }
-            if (direct.isNotEmpty()) {
-                direct
-            } else if (page == 1) {
-                (2..4).flatMap { extra ->
-                    fetchPublicCatalogPage(extra)?.items?.filter { it.kind == PelisJuanitaItemKind.Series }.orEmpty()
-                }.distinctBy { it.url }
-            } else {
-                emptyList()
-            }
+            fetchPublicSeriesItems(page, publicPage)
         } else {
             val movies = publicPage.items.filter { it.kind == PelisJuanitaItemKind.Movie }
             movies.ifEmpty { publicPage.items }
@@ -278,8 +276,33 @@ class PelisJuanitaProvider(
                 list = filtered.map(::toSearchResponse),
                 isHorizontalImages = request.horizontalImages,
             ),
-            hasNext = publicPage.hasNext,
+            hasNext = if (wantSeries) filtered.isNotEmpty() else publicPage.hasNext,
         )
+    }
+
+    private suspend fun fetchPublicSeriesItems(
+        requestedPage: Int,
+        firstPage: PelisJuanitaSearchResultPage,
+    ): List<PelisJuanitaSearchRecord> {
+        val direct = firstPage.items.filter { it.kind == PelisJuanitaItemKind.Series }
+        if (direct.isNotEmpty()) return direct
+
+        val total = firstPage.totalPages
+        if (total <= 1) return emptyList()
+
+        // buscar.php returns ~20k movies before ~7.6k series; jump into the series slice once and cache it.
+        val probePages = listOf(
+            ((total * 3) / 4 + requestedPage - 1).coerceIn(1, total),
+            (total - requestedPage + 1).coerceIn(1, total),
+            ((total / 2) + requestedPage - 1).coerceIn(1, total),
+            (requestedPage + 10).coerceIn(1, total),
+        ).distinct()
+
+        for (p in probePages) {
+            val candidate = fetchPublicCatalogPage(p)?.items?.filter { it.kind == PelisJuanitaItemKind.Series }.orEmpty()
+            if (candidate.isNotEmpty()) return candidate
+        }
+        return emptyList()
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
