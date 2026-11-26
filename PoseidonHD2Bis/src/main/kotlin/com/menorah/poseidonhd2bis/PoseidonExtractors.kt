@@ -684,7 +684,7 @@ internal object PoseidonVidHideParser {
     private val TRACKS_REGEX = Regex("""(?s)["']?tracks["']?\s*:\s*(\[[^\]]*\])""")
     private val WORD_REGEX = Regex("""\b[0-9a-zA-Z]+\b""")
     private val MEDIA_URL_REGEX = Regex(
-        """(?i)["']((?:https?:)?//[^\s"'<>]+|/[A-Za-z0-9_./~%-]+\.(?:m3u8|txt|mp4)(?:\?[^\s"'<>]*)?)["']""",
+        """(?i)["']((?:(?:https?:)?//[^\s"'<>]+|/[A-Za-z0-9_./~%-]+)\.(?:m3u8|txt|mp4)(?:\?[^\s"'<>]*)?)["']""",
     )
 
     fun normalizeEmbedUrl(url: String): String = when {
@@ -1076,13 +1076,15 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
 
             // Branch 1: Classic packed / JWPlayer embed directly returned
             val unpacked = PoseidonVidHideParser.parse(res.text, res.url)
-            if (unpacked.streams.isNotEmpty()) {
-                return emitParsedStreams(unpacked, sourceName, subtitleCallback, callback)
+            if (unpacked.streams.isNotEmpty() && emitParsedStreams(unpacked, sourceName, subtitleCallback, callback)) {
+                return true
             }
 
             // Branch 2: streamwish.to / mirror returning Loading... + /main.js redirector -> hop via medixiru.com to vsembed.com
             if (!res.url.contains("vsembed.com", ignoreCase = true) &&
-                (res.text.contains("main.js", ignoreCase = true) || res.text.contains("Loading...", ignoreCase = true))
+                (res.text.contains("main.js", ignoreCase = true) ||
+                    res.text.contains("Loading...", ignoreCase = true) ||
+                    !res.text.contains("jwplayer", ignoreCase = true))
             ) {
                 val fileCode = runCatching {
                     URI(url).rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
@@ -1194,16 +1196,17 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             val root = runCatching { PoseidonHD2BisData.jsonMapper.readTree(jsonText) }.getOrNull() ?: return false
             val streamNode = root.get("stream") ?: root
             val hlsUrl = streamNode.get("hls")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
+            val tiktokUrl = streamNode.get("tiktok")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
             val streamHeaders = mapOf(
                 "Origin" to origin,
                 "Referer" to "$origin/",
             )
 
             var emitted = false
-            if (hlsUrl != null) {
+            for (candidate in listOfNotNull(hlsUrl, tiktokUrl).distinct()) {
                 val generated = withTimeoutOrNull(4_500L) {
                     runCatching {
-                        M3u8Helper.generateM3u8(sourceName, hlsUrl, "$origin/", headers = streamHeaders)
+                        M3u8Helper.generateM3u8(sourceName, candidate, "$origin/", headers = streamHeaders)
                     }.getOrElse { emptyList() }
                 }.orEmpty()
                 if (generated.isNotEmpty()) {
@@ -1211,9 +1214,14 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                         callback(it)
                         emitted = true
                     }
-                } else {
+                    break
+                }
+            }
+            if (!emitted) {
+                val directFallback = hlsUrl ?: tiktokUrl
+                if (directFallback != null) {
                     callback(
-                        newExtractorLink(sourceName, sourceName, hlsUrl, ExtractorLinkType.M3U8) {
+                        newExtractorLink(sourceName, sourceName, directFallback, ExtractorLinkType.M3U8) {
                             this.referer = "$origin/"
                             this.headers = streamHeaders
                             this.quality = Qualities.Unknown.value

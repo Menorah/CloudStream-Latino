@@ -318,4 +318,24 @@ class PoseidonHD2BisDataTest {
         assertEquals("https://callistanise.com/stream/seg.m3u8", parsed.streams[1].url)
         assertEquals("hls3", parsed.streams[2].key)
     }
+
+    @Test
+    fun `PoseidonVidHideParser rejects non-media script URLs and keeps m3u8 regex fallback`() {
+        val redirectorHtml = """
+            <html><head><title>Loading...</title></head><body>
+            <script>window.location.href='https://medixiru.com/e/abc123';</script>
+            <script src="https://cdn.example.org/main.js"></script>
+            </body></html>
+        """.trimIndent()
+        val parsedRedirector = PoseidonVidHideParser.parse(redirectorHtml, "https://streamwish.to/e/abc123")
+        assertTrue(parsedRedirector.streams.isEmpty())
+
+        val mediaHtml = """
+            <html><body><script>
+            var cfg = { file: "https://cdn.example.org/hls/master.m3u8?t=1" };
+            </script></body></html>
+        """.trimIndent()
+        val parsedMedia = PoseidonVidHideParser.parse(mediaHtml, "https://callistanise.com/v/abc123")
+        assertEquals(listOf("https://cdn.example.org/hls/master.m3u8?t=1"), parsedMedia.streams.map { it.url })
+    }
 }
