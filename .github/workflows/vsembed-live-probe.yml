@@ -7,9 +7,9 @@ on:
 permissions:
   contents: read
 jobs:
-  chrome_and_android_api33_probe:
+  android_api33_webview_live:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -22,125 +22,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Capturar streams reales con Chrome Xvfb y validar /pl vs /pli vs /plc
-        run: |
-          python3 -m pip install -q playwright
-          python3 -m playwright install chromium || true
-          xvfb-run -a python3 - <<'PY'
-          import http.cookiejar, json, re, time, urllib.parse, urllib.request
-          from playwright.sync_api import sync_playwright
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          TARGETS = [
-              ("BigGirls_1477963", "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"),
-              ("SkinCrawler_1843139", "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"),
-          ]
-
-          def emit(title, txt):
-              clean = str(txt).replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
-              print(f"::notice title={title}::{clean[:3400]}")
-
-          op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-          def ufetch(url, ref=None):
-              h = {"User-Agent": UA}
-              if ref: h["Referer"] = ref
-              with op.open(urllib.request.Request(url, headers=h), timeout=15) as r:
-                  return r.read().decode("utf-8", "replace"), r.geturl()
-
-          landings = []
-          for label, url in TARGETS:
-              b1, u1 = ufetch(url, "https://pelisjuanita.com/")
-              api_rel = re.search(r'data-api="([^"]+)"', b1).group(1).replace("&amp;", "&")
-              b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
-              landing = json.loads(b2)["src"]
-              landings.append((label, landing))
-              if label.startswith("BigGirls"):
-                  b3, u3 = ufetch(landing, "https://vsembed.su/")
-                  cfg = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3).group(1))
-                  b4, u4 = ufetch(urllib.parse.urljoin(u3, cfg["playerUrl"]), u3)
-                  m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', b4)
-                  p_js, _ = ufetch(urllib.parse.urljoin(u4, m_pj.group(1)), u4)
-                  i_st = p_js.find("function start(")
-                  emit("PJS_START_FN", p_js[max(0, i_st-50):i_st+3200] if i_st != -1 else "NO_START")
-                  # Refresh landing for BigGirls so it isn't pre-consumed
-                  b1r, u1r = ufetch(url, "https://pelisjuanita.com/")
-                  apir = re.search(r'data-api="([^"]+)"', b1r).group(1).replace("&amp;", "&")
-                  b2r, _ = ufetch(urllib.parse.urljoin(u1r, apir), u1r)
-                  landings[-1] = (label, json.loads(b2r)["src"])
-
-          captured = {}
-          with sync_playwright() as p:
-              try:
-                  browser = p.chromium.launch(channel="chrome", headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
-              except Exception:
-                  browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
-              ctx = browser.new_context(viewport={"width": 1280, "height": 720})
-              for label, landing in landings:
-                  page = ctx.new_page()
-                  page.route(re.compile(r"disable-devtool", re.I), lambda r: r.abort())
-                  found = {"stream": "", "headers": {}, "verify": ""}
-                  def on_req(req):
-                      u = req.url
-                      low = u.lower()
-                      if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
-                          found["stream"] = u
-                          found["headers"] = dict(req.headers)
-                  def on_resp(resp):
-                      if "verify.php" in resp.url:
-                          try: found["verify"] = resp.text()[:200]
-                          except Exception: pass
-                  page.on("request", on_req)
-                  page.on("response", on_resp)
-                  page.goto(landing, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
-
-                  for _ in range(45):
-                      if found["stream"]: break
-                      for fr in page.frames:
-                          if "/embed/movie/" in fr.url and "/embed/player/" not in fr.url:
-                              try:
-                                  bp = fr.locator("#bigPlay")
-                                  if bp.count() > 0 and bp.is_visible():
-                                      bp.click()
-                              except Exception:
-                                  pass
-                      time.sleep(0.8)
-
-                  info = {"label": label, "stream": found["stream"], "headers": found["headers"], "verify": found["verify"]}
-                  if found["stream"]:
-                      hdrs = {k: v for k, v in found["headers"].items() if k.lower() in ("origin", "referer", "user-agent")}
-                      for mode in ["orig", "pli", "plc"]:
-                          tu = found["stream"] if mode == "orig" else re.sub(r'/pl(i|c)?/', f'/{mode}/', found["stream"], count=1)
-                          try:
-                              with urllib.request.urlopen(urllib.request.Request(tu, headers=hdrs), timeout=15) as r:
-                                  body = r.read().decode("utf-8", "replace")
-                                  lines = [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.startswith("#")]
-                                  info[f"{mode}_master"] = {"code": r.status, "has_tok": "token=" in body, "lines": len(lines), "first": lines[0][:120] if lines else body[:120]}
-                                  if lines:
-                                      cu = urllib.parse.urljoin(tu, lines[0])
-                                      try:
-                                          with urllib.request.urlopen(urllib.request.Request(cu, headers=hdrs), timeout=15) as rc:
-                                              cb = rc.read().decode("utf-8", "replace")
-                                              cl = [ln.strip() for ln in cb.splitlines() if ln.strip() and not ln.startswith("#")]
-                                              info[f"{mode}_child"] = {"code": rc.status, "has_tok": "token=" in cb, "first_seg": cl[0][:120] if cl else cb[:120]}
-                                              if cl:
-                                                  su = urllib.parse.urljoin(cu, cl[0])
-                                                  try:
-                                                      with urllib.request.urlopen(urllib.request.Request(su, headers=hdrs), timeout=15) as rs:
-                                                          info[f"{mode}_seg"] = {"code": rs.status, "len": len(rs.read(128))}
-                                                  except urllib.error.HTTPError as se:
-                                                      info[f"{mode}_seg"] = {"code": se.code}
-                                      except urllib.error.HTTPError as ce:
-                                          info[f"{mode}_child"] = {"code": ce.code}
-                          except urllib.error.HTTPError as e:
-                              info[f"{mode}_master"] = {"code": e.code}
-                  captured[label] = info
-                  emit(f"CHROME_{label}", json.dumps(info, ensure_ascii=False))
-                  page.close()
-              browser.close()
-          open("/tmp/chrome_captured.json", "w").write(json.dumps(captured))
-          PY
-
-      - name: Preparar script de sonda en Android API 33 (Media3 + WebView)
+      - name: Preparar sonda exclusiva de WebView API 33 + Media3
         run: |
           cat > /tmp/run_vsembed_probe.sh <<'SH'
           #!/usr/bin/env bash
@@ -163,9 +45,7 @@ jobs:
           import com.lagradost.cloudstream3.app
           import kotlinx.coroutines.*
           import okhttp3.Request
-          import org.json.JSONObject
           import java.io.BufferedReader
-          import java.io.File
           import java.io.InputStreamReader
           import java.net.InetAddress
           import java.net.ServerSocket
@@ -189,67 +69,16 @@ jobs:
                           delay(3000)
                           val defaultWvUa = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull().orEmpty()
                           Log.i(TAG, "ANDROID_WV_DEFAULT_UA=$defaultWvUa")
-                          withTimeout(360_000) {
-                              // 1) Media3 tests from Chrome-captured stream on same IP
-                              val seedFile = File("/sdcard/Cloudstream3/chrome_captured.json")
-                              if (seedFile.exists()) {
-                                  val j = JSONObject(seedFile.readText())
-                                  for (key in j.keys()) {
-                                      val item = j.getJSONObject(key)
-                                      val sUrl = item.optString("stream")
-                                      if (sUrl.isBlank()) {
-                                          Log.i(TAG, "NO_STREAM_FROM_CHROME $key")
-                                          continue
-                                      }
-                                      val hdrObj = item.optJSONObject("headers")
-                                      val origin = hdrObj?.optString("origin")?.ifBlank { null } ?: "https://stellarconductornexus.com"
-                                      val ua = hdrObj?.optString("user-agent")?.ifBlank { null } ?: USER_AGENT
-                                      val playHeaders = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to ua)
-
-                                      val plRes = runCatching { play(context, sUrl, playHeaders, waitMs = 1500) }
-                                      Log.i(TAG, "SEED_MEDIA3 $key mode=orig_pl ok=${plRes.isSuccess} err=${plRes.exceptionOrNull()?.message}")
-
-                                      val pliUrl = sUrl.replaceFirst("/pl/", "/pli/")
-                                      val pliRes = runCatching { play(context, pliUrl, playHeaders, waitMs = 1500) }
-                                      Log.i(TAG, "SEED_MEDIA3 $key mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
-
-                                      val plcUrl = sUrl.replaceFirst("/pl/", "/plc/")
-                                      val plcRes = runCatching { play(context, plcUrl, playHeaders, waitMs = 1500) }
-                                      Log.i(TAG, "SEED_MEDIA3 $key mode=plc ok=${plcRes.isSuccess} err=${plcRes.exceptionOrNull()?.message}")
-
-                                      val proxyRes = runCatching { playViaLocalProxy(context, sUrl, playHeaders) }
-                                      Log.i(TAG, "SEED_MEDIA3 $key mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
-
-                                      if (key.startsWith("BigGirls") && (pliRes.isSuccess || proxyRes.isSuccess)) {
-                                          val testUrl = if (pliRes.isSuccess) pliUrl else sUrl
-                                          delay(65_000)
-                                          val afterRes = withContext(Dispatchers.IO) {
-                                              runCatching {
-                                                  val req = Request.Builder().url(testUrl)
-                                                      .header("Origin", origin)
-                                                      .header("Referer", "$origin/")
-                                                      .header("User-Agent", ua)
-                                                      .build()
-                                                  app.baseClient.newCall(req).execute().use { r ->
-                                                      "code=${r.code} len=${r.body?.string()?.length ?: -1}"
-                                                  }
-                                              }.getOrElse { it.message ?: "err" }
-                                          }
-                                          Log.i(TAG, "AFTER_65S $key -> $afterRes")
-                                      }
-                                  }
-                              } else {
-                                  Log.i(TAG, "NO_CHROME_CAPTURE_FILE")
-                              }
-
-                              // 2) Live Android WebView API 33 capture test (with and without Desktop UA)
+                          withTimeout(240_000) {
                               val r1 = captureWithWebView(context, "WV_BigGirls_DefaultUA", BIG_GIRLS_URL, customUa = null)
                               Log.i(TAG, "WV_CAPTURE ${r1.label} stream=${r1.streamUrl} verify=${r1.verifyJson} hops=${r1.hops} state=${r1.domState}")
                               if (r1.streamUrl.isNotBlank()) {
                                   val origin = r1.origin.ifBlank { "https://stellarconductornexus.com" }
                                   val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to (r1.ua.ifBlank { defaultWvUa }))
-                                  val pRes = runCatching { playViaLocalProxy(context, r1.streamUrl, hdrs) }
-                                  Log.i(TAG, "WV_LIVE_MEDIA3 ${r1.label} local_proxy ok=${pRes.isSuccess} err=${pRes.exceptionOrNull()?.message}")
+                                  val pliRes = runCatching { play(context, r1.streamUrl.replaceFirst("/pl/", "/pli/"), hdrs, 1500) }
+                                  Log.i(TAG, "WV_MEDIA3 ${r1.label} mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
+                                  val proxyRes = runCatching { playViaLocalProxy(context, r1.streamUrl, hdrs) }
+                                  Log.i(TAG, "WV_MEDIA3 ${r1.label} mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
                               }
 
                               val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -258,8 +87,10 @@ jobs:
                               if (r2.streamUrl.isNotBlank()) {
                                   val origin = r2.origin.ifBlank { "https://stellarconductornexus.com" }
                                   val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to desktopUa)
-                                  val pRes = runCatching { playViaLocalProxy(context, r2.streamUrl, hdrs) }
-                                  Log.i(TAG, "WV_LIVE_MEDIA3 ${r2.label} local_proxy ok=${pRes.isSuccess} err=${pRes.exceptionOrNull()?.message}")
+                                  val pliRes = runCatching { play(context, r2.streamUrl.replaceFirst("/pl/", "/pli/"), hdrs, 1500) }
+                                  Log.i(TAG, "WV_MEDIA3 ${r2.label} mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
+                                  val proxyRes = runCatching { playViaLocalProxy(context, r2.streamUrl, hdrs) }
+                                  Log.i(TAG, "WV_MEDIA3 ${r2.label} mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
                               }
 
                               Log.i(TAG, "PASS_VSEMBED_PROBE")
@@ -324,7 +155,7 @@ jobs:
                                   hops.add("STREAM:${u.take(90)}")
                               }
                           }
-                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh")) {
+                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("wasm.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh")) {
                               if (hops.size < 30) hops.add("REQ:${u.take(75)}")
                               if (low.contains("verify.php")) verifyHits = "called"
                           }
@@ -520,26 +351,36 @@ jobs:
           adb shell pm grant "$package" android.permission.WRITE_EXTERNAL_STORAGE || true
           adb shell appops set "$package" MANAGE_EXTERNAL_STORAGE allow || true
           adb shell mkdir -p /sdcard/Cloudstream3/plugins
-          if [ -f /tmp/chrome_captured.json ]; then
-            adb push /tmp/chrome_captured.json /sdcard/Cloudstream3/chrome_captured.json
-          fi
           adb push PelisJuanita/build/PelisJuanita.cs3 /sdcard/Cloudstream3/plugins/PelisJuanita.cs3
-          adb shell ls -la /sdcard/Cloudstream3/ /sdcard/Cloudstream3/plugins/
           adb logcat -c
           adb shell monkey -p "$package" 1
-          for i in $(seq 1 80); do
+          for i in $(seq 1 65); do
             sleep 5
             log=$(adb logcat -d -s VsembedProbe:* '*:S')
             if echo "$log" | grep -q 'PASS_VSEMBED_PROBE\|FAIL_VSEMBED_PROBE'; then
-              echo "$log" | head -n 45 | while IFS= read -r ln; do
-                clean=$(printf '%s' "$ln" | sed 's/%/%25/g; s/\r//g')
-                echo "::notice title=VSEMBED_LOG::$clean"
-              done
+              python3 - "$log" <<'PY'
+          import sys
+          txt = sys.argv[1]
+          lines = [ln for ln in txt.splitlines() if "VsembedProbe" in ln]
+          chunk = ""
+          idx = 0
+          for ln in lines:
+              if len(chunk) + len(ln) + 1 > 3000:
+                  c = chunk.replace('%','%25').replace('\n','%0A').replace('\r','%0D')
+                  print(f"::notice title=VSEMBED_ALL_{idx}::{c}")
+                  chunk = ln
+                  idx += 1
+              else:
+                  chunk = (chunk + "\n" + ln) if chunk else ln
+          if chunk:
+              c = chunk.replace('%','%25').replace('\n','%0A').replace('\r','%0D')
+              print(f"::notice title=VSEMBED_ALL_{idx}::{c}")
+          PY
               if echo "$log" | grep -q 'FAIL_VSEMBED_PROBE'; then exit 1; fi
               exit 0
             fi
           done
-          adb logcat -d -s VsembedProbe:* AndroidRuntime:E PluginManager:* '*:S' | tail -40 | while IFS= read -r ln; do
+          adb logcat -d -s VsembedProbe:* AndroidRuntime:E PluginManager:* '*:S' | tail -25 | while IFS= read -r ln; do
             clean=$(printf '%s' "$ln" | sed 's/%/%25/g; s/\r//g')
             echo "::notice title=VSEMBED_TIMEOUT::$clean"
           done
@@ -547,7 +388,7 @@ jobs:
           SH
           chmod +x /tmp/run_vsembed_probe.sh
 
-      - name: Probar Media3 y Android WebView en CloudStream APK (API 33)
+      - name: Probar WebView API 33 + Media3 en CloudStream APK
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
