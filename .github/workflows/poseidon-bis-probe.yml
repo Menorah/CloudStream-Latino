@@ -9,5 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test VOE ALTCHA v2 solver live and read vsembed R/T functions
+      - name: Test vsembed AES-CBC decryption and live stream segments
         run: python3 scripts/poseidon_bis_probe.py

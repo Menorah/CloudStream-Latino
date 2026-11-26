@@ -1,9 +1,9 @@
-import base64
 import hashlib
 import http.cookiejar
 import json
+import math
 import re
-import struct
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -20,7 +20,7 @@ def make_opener():
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
 
-def fetch(op, url, ref="https://www.poseidonhd2.co/", data=None, headers=None):
+def fetch(op, url, ref="https://vsembed.com/", headers=None):
     hdrs = {
         "User-Agent": UA,
         "Accept": "*/*",
@@ -29,7 +29,7 @@ def fetch(op, url, ref="https://www.poseidonhd2.co/", data=None, headers=None):
     }
     if headers:
         hdrs.update(headers)
-    req = urllib.request.Request(url, data=data, headers=hdrs)
+    req = urllib.request.Request(url, headers=hdrs)
     try:
         with op.open(req, timeout=20) as resp:
             return resp.status, resp.geturl(), dict(resp.headers), resp.read()
@@ -47,99 +47,112 @@ def notice(tag, obj):
 
 op = make_opener()
 
-# 1. Read exact slices of vsembed JS around T=, R=, Oa(, and string table Tt=
-_, _, _, vhr = fetch(op, "https://vsembed.com/jer74", "https://streamwish.to/")
+# 1. Decode exact Tt() mapping from vsembed.com bundle + test simpleCrypto AES-CBC in Node!
+_, _, _, vhr = fetch(op, "https://vsembed.com/jer74", ref="https://streamwish.to/")
 vh = vhr.decode("utf-8", "replace")
 js_path = re.search(r'src="(/assets/[^"]+\.js)"', vh).group(1)
-_, _, _, vjsr = fetch(op, "https://vsembed.com" + js_path, "https://vsembed.com/jer74")
+_, _, _, vjsr = fetch(op, "https://vsembed.com" + js_path, ref="https://vsembed.com/jer74")
 vjs = vjsr.decode("utf-8", "replace")
 
-p_T = vjs.find("T=async")
-p_R = vjs.find("R=async")
-p_tt = vjs.find("function Tt()")
-notice("vsembed_T_R", vjs[p_T: p_T + 3400])
-notice("vsembed_R_more", vjs[p_R: p_R + 2500] if p_R >= 0 else vjs[vjs.find("Ra(")-1200: vjs.find("Ra(")+800])
-notice("vsembed_Tt", vjs[max(0, p_tt - 1500): p_tt + 1200])
+p_tt = vjs.find("(function(e,t){const n=dn")
+tt_snippet = vjs[p_tt: vjs.find("(async function(){", p_tt)]
 
-# 2. Read altcha.min.js payload snippet right after btoa(JSON.stringify({challenge:
-_, _, _, ar = fetch(op, "https://caseyseemavoid.com/js/altcha.min.js", "https://caseyseemavoid.com/")
-ajs = ar.decode("utf-8", "replace")
-p_btoa = ajs.find("btoa(JSON.stringify({challenge:")
-notice("altcha_v2_payload_exact", ajs[p_btoa - 100: p_btoa + 1200])
+node_test = r"""
+const crypto = require('crypto');
+""" + tt_snippet + r"""
+const idxs = [399, 437, 462, 470, 482, 501, 506, 543, 579, 586, 598, 617, 622, 633];
+const map = {};
+for (const i of idxs) map[i] = dn(i);
 
-# 3. Also test solving ALTCHA v2 directly against caseyseemavoid.com/e/sm8v06z32ntn!
-op2 = make_opener()
-_, fu1, _, raw1 = fetch(op2, "https://voe.sx/e/sm8v06z32ntn", ref="https://player.poseidonhd2.co/")
-rm = re.search(r"window\.location\.href\s*=\s*'([^']+)'", raw1.decode("utf-8", "replace"))
-target = rm.group(1) if rm else fu1
-_, fu2, _, raw2 = fetch(op2, target, ref="https://voe.sx/")
-h2 = raw2.decode("utf-8", "replace")
-tok = re.search(r'name="_token"\s+value="([^"]+)"', h2).group(1)
-chl_url = re.search(r'challenge="([^"]+)"', h2).group(1)
-act_url = re.search(r'method="POST"\s+action="([^"]+)"', h2).group(1)
-_, _, _, craw = fetch(op2, chl_url, ref=fu2, headers={"Accept": "application/json, */*"})
-cj = json.loads(craw.decode("utf-8", "replace"))
-params = cj["parameters"]
-salt_buf = bytes.fromhex(params["salt"])
-nonce_buf = bytes.fromhex(params["nonce"])
-cost = int(params["cost"])
-klen = int(params["keyLength"])
-prefix_hex = params["keyPrefix"]
-prefix_bytes = bytes.fromhex(prefix_hex) if len(prefix_hex) % 2 == 0 else None
-
-t0 = time.time()
-counter = 0
-derived_hex = ""
-while counter < 5000:
-    pw = nonce_buf + struct.pack(">I", counter)
-    dk = hashlib.pbkdf2_hmac("sha256", pw, salt_buf, cost, klen)
-    if (prefix_bytes and dk.startswith(prefix_bytes)) or (not prefix_bytes and dk.hex().startswith(prefix_hex)):
-        derived_hex = dk.hex()
-        break
-    counter += 1
-elapsed_ms = int((time.time() - t0) * 1000)
-
-# Test payload format from altcha_v2_payload_exact (try standard v2 structure)
-payload_obj = {
-    "challenge": cj,
-    "solution": {
-        "counter": counter,
-        "derivedKey": derived_hex,
-        "time": elapsed_ms,
-    },
+// Implement Ai (simpleCrypto) exactly as seen in vsembed_crypto
+function genKey() {
+  const chars = ["\u{1D54A}","\u{1D53C}","\u{1D540}","\u{1D681}","\u{1D53C}","\u{1D54B}","\u{1D4D6}","\u{1D4D4}","\u{1D4E8}","\u{1D7D9}","\u{1D7DA}","\u{1D7DB}"];
+  // Wait: verify from vsembed bundle instead of guessing characters!
 }
-b64 = base64.b64encode(json.dumps(payload_obj, separators=(",", ":")).encode()).decode()
-body = urllib.parse.urlencode({"_token": tok, "access": "0", "altcha": b64}).encode()
-pst, pfu, _, praw = fetch(
-    op2,
-    act_url,
-    ref=fu2,
-    data=body,
-    headers={"Content-Type": "application/x-www-form-urlencoded", "Origin": "/".join(fu2.split("/")[:3])},
-)
-ptxt = praw.decode("utf-8", "replace")
-mjson = re.search(r'<script[^>]*type=["\']application/json["\'][^>]*>(.*?)</script>', ptxt, re.S)
-voe_out = {"counter": counter, "ms": elapsed_ms, "pst": pst, "pfu": pfu, "len": len(ptxt), "has_json": bool(mjson), "title": (re.search(r"<title>(.*?)</title>", ptxt, re.S) or [None, ""])[1].strip()}
-if mjson:
-    enc = mjson.group(1).strip().split('["', 1)[-1].rsplit('"]', 1)[0]
-    s = "".join(chr((ord(c)-65+13)%26+65) if 'A'<=c<='Z' else (chr((ord(c)-97+13)%26+97) if 'a'<=c<='z' else c) for c in enc)
-    for pat in ["@$", "^^", "~@", "%?", "*~", "!!", "#&"]:
-        s = s.replace(pat, "_")
-    s = s.replace("_", "")
-    b1 = base64.b64decode(s + "=" * ((4 - len(s) % 4) % 4)).decode("latin1")
-    b2 = "".join(chr(ord(c) - 3) for c in b1)[::-1]
-    dec = json.loads(base64.b64decode(b2 + "=" * ((4 - len(b2) % 4) % 4)).decode("utf-8"))
-    voe_out["dec_keys"] = list(dec.keys())
-    if dec.get("source"):
-        mst, mfu, _, mraw = fetch(op2, dec["source"], ref=pfu)
-        mlines = [l.strip() for l in mraw.decode("utf-8", "replace").splitlines() if l.strip() and not l.startswith("#")]
-        voe_out["m3u8_st"] = mst
-        if mlines:
-            sub = urllib.parse.urljoin(mfu, mlines[0])
-            sst, sfu, _, sraw = fetch(op2, sub, ref=pfu)
-            slines = [l.strip() for l in sraw.decode("utf-8", "replace").splitlines() if l.strip() and not l.startswith("#")]
-            if slines:
-                tg = urllib.parse.urljoin(sfu, slines[0])
-                gst, _, gh, gr = fetch(op2, tg, ref=pfu)
-                voe_out["seg"] = {"st": gst, "len": len(gr), "hex": gr[:12].hex(), "ct": gh.get("Content-Type")}
-notice("voe_v2_solved", voe_out)
+console.log(JSON.stringify(map));
+"""
+open("/tmp/vs_tt.js", "w").write(node_test)
+dec_map = subprocess.check_output(["node", "/tmp/vs_tt.js"], text=True).strip()
+notice("vsembed_dn_map", dec_map)
+
+# Extract exact keyChars & saltChars from vjs using Node directly on simpleCrypto snippet
+p_ai = vjs.find("class Ai{")
+p_ai_end = vjs.find("typeof window", p_ai)
+ai_code = vjs[p_ai:p_ai_end]
+node_crypto = r"""
+const crypto = require('crypto');
+const code = process.argv[1];
+const keyCharsMatch = code.match(/this\.keyChars=(\[[^\]]+\])/);
+const saltCharsMatch = code.match(/this\.saltChars=(\[[^\]]+\])/);
+const keyChars = eval(keyCharsMatch[1]);
+const saltChars = eval(saltCharsMatch[1]);
+function genKey() {
+  let t = "";
+  keyChars.forEach(r => t += r.codePointAt(0).toString(16));
+  const n = Math.floor(Date.now() / 864e5);
+  t += n.toString(16);
+  return t.slice(0, 32).padEnd(32, "0");
+}
+function genIV(host) {
+  let n = "";
+  saltChars.forEach(r => n += r.codePointAt(0).toString(16));
+  if (host) {
+    n += Buffer.from(host, 'utf8').toString('hex');
+  }
+  return n.length > 32 ? n.slice(0, 32) : n.padEnd(32, "0");
+}
+function enc(plain, host) {
+  const k = Buffer.from(genKey(), 'hex');
+  const iv = Buffer.from(genIV(host), 'hex');
+  const c = crypto.createCipheriv('aes-128-cbc', k, iv);
+  return Buffer.concat([c.update(plain, 'utf8'), c.final()]).toString('hex');
+}
+function dec(hexStr, host) {
+  const k = Buffer.from(genKey(), 'hex');
+  const iv = Buffer.from(genIV(host), 'hex');
+  const d = crypto.createDecipheriv('aes-128-cbc', k, iv);
+  return Buffer.concat([d.update(Buffer.from(hexStr, 'hex')), d.final()]).toString('utf8');
+}
+const mode = process.argv[2];
+if (mode === 'enc') {
+  console.log(JSON.stringify({ keyHex: genKey(), ivHex: genIV(process.argv[4]), encHex: enc(process.argv[3], process.argv[4]), keyChars, saltChars }));
+} else if (mode === 'dec') {
+  console.log(dec(process.argv[3], process.argv[4]));
+}
+"""
+open("/tmp/vs_aes.js", "w").write(node_crypto)
+
+for vid in ["jer74", "6168w"]:
+    res_enc = json.loads(subprocess.check_output(["node", "/tmp/vs_aes.js", "enc", ai_code, vid, "vsembed.com"], text=True))
+    # Call /api/stream?s=<vid>&ld=1 and /api/stream/tracking?c=<encHex>&ld=1
+    st_s, _, hdrs_s, body_s = fetch(op, f"https://vsembed.com/api/stream?s={vid}&ld=1", ref=f"https://vsembed.com/{vid}")
+    st_t, _, hdrs_t, body_t = fetch(op, f"https://vsembed.com/api/stream/tracking?c={res_enc['encHex']}&ld=1", ref=f"https://vsembed.com/{vid}", headers={"Accept": "application/json, text/plain, */*"})
+    hdrs_low = {k.lower(): v for k, v in hdrs_t.items()}
+    xtrk = hdrs_low.get("x-tracking")
+    dec_json = None
+    seg_check = None
+    if xtrk:
+        dec_str = subprocess.check_output(["node", "/tmp/vs_aes.js", "dec", ai_code, xtrk, "vsembed.com"], text=True).strip()
+        dec_json = json.loads(dec_str)
+        # Try downloading master m3u8 and first segment!
+        hls_url = dec_json.get("hls") or (dec_json.get("sources") or [{}])[0].get("file")
+        if hls_url:
+            mst, mfu, _, mr = fetch(op, hls_url, ref="https://vsembed.com/", headers={"Origin": "https://vsembed.com"})
+            mtxt = mr.decode("utf-8", "replace")
+            mlines = [l.strip() for l in mtxt.splitlines() if l.strip() and not l.startswith("#")]
+            if mlines:
+                nxt = urllib.parse.urljoin(mfu, mlines[0])
+                sst, sfu, _, sr = fetch(op, nxt, ref="https://vsembed.com/", headers={"Origin": "https://vsembed.com"})
+                slines = [l.strip() for l in sr.decode("utf-8", "replace").splitlines() if l.strip() and not l.startswith("#")]
+                if slines:
+                    tg = urllib.parse.urljoin(sfu, slines[0])
+                    gst, _, gh, gr = fetch(op, tg, ref="https://vsembed.com/", headers={"Origin": "https://vsembed.com"})
+                    seg_check = {"mst": mst, "sst": sst, "gst": gst, "len": len(gr), "hex": gr[:12].hex(), "ct": gh.get("Content-Type")}
+    notice(f"vsembed_live_{vid}", {
+        "keyHex": res_enc["keyHex"], "ivHex": res_enc["ivHex"],
+        "keyCodePts": [ord(c) for c in res_enc["keyChars"]],
+        "saltCodePts": [ord(c) for c in res_enc["saltChars"]],
+        "st_s": st_s, "body_s": body_s.decode("utf-8", "replace")[:350],
+        "st_t": st_t, "has_xtrk": bool(xtrk),
+        "dec_json": dec_json, "seg_check": seg_check,
+    })
