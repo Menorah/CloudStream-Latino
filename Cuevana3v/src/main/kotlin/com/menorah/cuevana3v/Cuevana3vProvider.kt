@@ -222,7 +222,7 @@ class Cuevana3vProvider : MainAPI() {
         }
     }
 
-    private fun labelExtractorLink(langLabel: String, serverFallbackName: String, link: ExtractorLink): ExtractorLink {
+    private suspend fun labelExtractorLink(langLabel: String, serverFallbackName: String, link: ExtractorLink): ExtractorLink {
         val baseName = link.name.ifBlank { serverFallbackName }
         val taggedName = if (baseName.startsWith("[")) baseName else "[$langLabel] $baseName"
         if (link is DrmExtractorLink) {
