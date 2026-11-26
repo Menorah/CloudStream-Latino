@@ -119,16 +119,17 @@ object PlaybackProbe {
                     Log.i("CSPlaybackProbe", "PASS coil posters=${posterChecks.size}")
 
                     val targets = listOf(
-                        "latest ep (${firstEpCardUrl.substringAfter("/serie/")})" to epParentLoad.episodes.last().data,
-                        "dexter s2e4" to dexterLoad.episodes.last().data,
-                        "movie hunger" to hungerLoad.dataUrl,
-                        "movie matrix" to matrixLoad.dataUrl,
+                        Triple("latest ep (${firstEpCardUrl.substringAfter("/serie/")})", epParentLoad.episodes.last().data, null),
+                        Triple("dexter s2e4", dexterLoad.episodes.last().data, null),
+                        Triple("movie hunger (Hyper)", hungerLoad.dataUrl, "Hyper"),
+                        Triple("movie hunger (Nebula)", hungerLoad.dataUrl, "Nebula"),
+                        Triple("movie matrix", matrixLoad.dataUrl, null),
                     )
 
                     val errors = mutableListOf<String>()
-                    for ((label, data) in targets) {
+                    for ((label, data, requiredServer) in targets) {
                         try {
-                            testPlayback(context, provider, label, data)
+                            testPlayback(context, provider, label, data, requiredServer)
                         } catch (e: TimeoutCancellationException) {
                             errors.add("$label: timeout")
                         } catch (e: CancellationException) {
@@ -151,14 +152,22 @@ object PlaybackProbe {
         provider: Cuevana3vProvider,
         label: String,
         data: String,
+        requiredServer: String? = null,
     ) {
         val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
         val ok = withContext(Dispatchers.IO) { provider.loadLinks(data, false, {}, { links.add(it) }) }
         val found = synchronized(links) { links.toList() }
         Log.i("CSPlaybackProbe", "$label extracted=${found.size} labels=${found.map { it.name }}")
         check(ok && found.isNotEmpty()) { "$label produced no links" }
+        val candidates = if (requiredServer != null) {
+            found.filter { it.name.contains(requiredServer, ignoreCase = true) }.also {
+                check(it.isNotEmpty()) { "$label missing required server $requiredServer in ${found.map { l -> l.name }}" }
+            }
+        } else {
+            found
+        }
         val errors = mutableListOf<String>()
-        for (link in found.take(6)) {
+        for (link in candidates.take(6)) {
             try {
                 play(context, link)
                 Log.i("CSPlaybackProbe", "PASS $label (${link.name}) frame and playback")

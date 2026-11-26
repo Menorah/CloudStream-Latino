@@ -47,6 +47,12 @@ class Cuevana3vProvider : MainAPI() {
         "/peliculas?genero=comedia" to "Comedia",
         "/peliculas?genero=crimen" to "Crimen",
         "/peliculas?genero=drama" to "Drama",
+        "/peliculas?genero=familia" to "Familia",
+        "/peliculas?genero=fantasia" to "Fantasía",
+        "/peliculas?genero=misterio" to "Misterio",
+        "/peliculas?genero=romance" to "Romance",
+        "/peliculas?genero=suspenso" to "Suspenso",
+        "/peliculas?genero=terror" to "Terror",
         "/peliculas?anio=2026" to "Estrenos 2026",
     )
 
