@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Extraer dt_contenedor y JS de busqueda.zip
+      - name: Extraer pagination y script_hits de busqueda.zip
         shell: python3 {0}
         run: |
           import io, re, urllib.request, http.cookiejar, zipfile
@@ -32,29 +32,16 @@ jobs:
               low = info.filename.lower()
               if low.endswith('.html') or low.endswith('.htm'):
                   raw = zf.read(info.filename).decode('utf-8', 'replace')
-                  # Strip head, style, header
-                  idx = raw.find('id="dt_contenedor"')
-                  if idx < 0:
-                      idx = raw.find('</header>')
-                  snippet = raw[max(0, idx):]
-                  # Stop before chat-window / emoji-picker
-                  end_idx = snippet.find('id="chat-container"')
-                  if end_idx > 0:
-                      snippet = snippet[:end_idx]
-                  emit('body_search', snippet)
-                  # Also check inline scripts at the bottom
+                  # Extract tail after grid-container items
+                  pag_idx = raw.find('class="pagination"')
+                  if pag_idx > 0:
+                      emit('pag_html', raw[pag_idx-200:pag_idx+2500])
                   for m_i, m in enumerate(re.finditer(r'(?s)<script\b[^>]*>(.*?)</script>', raw)):
                       sc = m.group(1).strip()
-                      if sc and ('cargar' in sc or 'search' in sc or 'buscar' in sc or 'pelicula' in sc or 'serie' in sc or 'fetch' in sc):
+                      if sc and any(w in sc.lower() for w in ['cargar', 'search', 'buscar', 'pelicula', 'serie', 'fetch', 'movieinfo', 'serieinfo']):
                           emit(f'inline_{m_i}', sc[:6000])
               elif low.endswith('script.js.download'):
                   sc = zf.read(info.filename).decode('utf-8', 'replace')
-                  for i, line in enumerate(sc.splitlines(), 1):
-                      pass
-                  # Emit sections mentioning buscar, search, cargarPeliculas, cargarSeries
                   lines = sc.splitlines()
-                  hits = []
-                  for idx_l, l in enumerate(lines):
-                      if any(w in l.lower() for w in ['cargarseries', 'cargarpeliculas', 'search', 'buscar', 's=', 'ver-serie', 'pelicula']):
-                          hits.append(f'{idx_l+1}: {l}')
+                  hits = [f'{i+1}: {l}' for i, l in enumerate(lines) if any(w in l.lower() for w in ['cargarseries', 'cargarpeliculas', 'search', 'buscar', 's=', 'ver-serie', 'pelicula', 'movieinfo', 'serieinfo', 'data-url', 'idioma', 'subt'])]
                   emit('script_hits', '\n'.join(hits))
