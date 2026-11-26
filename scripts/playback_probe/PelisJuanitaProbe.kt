@@ -85,6 +85,18 @@ object PlaybackProbe {
                         ?: error("latest movie load failed for ${latestMovie.url}")
                     check(!movieLoad.posterUrl.isNullOrBlank()) { "missing movie poster" }
 
+                    // Empty-backdrop regression check on The Skin Crawler Murders (img_fondo="", img_frente present)
+                    val skinCrawlerLoad = runCatching {
+                        provider.load("${PelisJuanitaMarkup.MAIN_URL}/movies/pelicula/the-skin-crawler-murders") as? MovieLoadResponse
+                    }.getOrNull()
+                    if (skinCrawlerLoad != null) {
+                        check(!skinCrawlerLoad.posterUrl.isNullOrBlank()) { "missing skin-crawler poster" }
+                        check(!skinCrawlerLoad.backgroundPosterUrl.isNullOrBlank()) {
+                            "expected backdrop fallback when img_fondo is empty for the-skin-crawler-murders"
+                        }
+                        verifyCoilImage(context, "skin-crawler-bg", skinCrawlerLoad.backgroundPosterUrl, skinCrawlerLoad.posterHeaders)
+                    }
+
                     var gateOk = false
                     try {
                         provider.loadLinks(movieLoad.dataUrl, false, {}, {})
@@ -122,14 +134,17 @@ object PlaybackProbe {
                         "FastserverSerie" to "https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1",
                         "Earnvids" to "https://callistanise.com/v/lg0w6ezhvyd8",
                         "StreamWish" to "https://hglink.to/e/u8jqwoe4cnpt",
+                        "Byse" to "https://bysesukior.com/e/92rgcn88ka85",
+                        "MixDrop" to "https://mixdrop.top/e/q11gg30obxxogvn",
                         "Voe" to "https://voe.sx/e/ltvamjdzsvxv",
                         "Savefiles" to "https://savefiles.com/e/lpkobe2ki65z",
                         "Lulustream" to "https://lulustream.com/e/zxfcz3pz68ds",
                         "Vidara" to "https://vidara.to/e/HnuAfGnH5Z97l",
-                        "Byse" to "https://bysesukior.com/e/92rgcn88ka85",
+                        "StreamWishVsembed" to "https://streamwish.to/e/k9u77dklzfob",
                     )
 
                     val passedServers = mutableListOf<String>()
+                    val passedKeys = mutableSetOf<String>()
                     val failedServers = mutableListOf<String>()
                     for ((srv, embedUrl) in serverProbes) {
                         val batch = Collections.synchronizedList(mutableListOf<ExtractorLink>())
@@ -150,20 +165,26 @@ object PlaybackProbe {
                             try {
                                 play(context, link)
                                 played = true
+                                passedKeys.add(srv)
                                 passedServers.add("$srv(${link.name})")
                                 Log.i("CSPlaybackProbe", "PASS server $srv via ${link.name} frame")
                                 break
-                            } catch (e: CancellationException) {
-                                throw e
                             } catch (t: Throwable) {
-                                errs.add("${link.name}: ${t.javaClass.simpleName}:${t.message?.take(100)}")
+                                if (t is CancellationException && t !is TimeoutCancellationException) throw t
+                                errs.add("${link.name}[${link.url.take(60)}]: ${t.javaClass.simpleName}:${t.message?.take(100)}")
                             }
                         }
                         if (!played) failedServers.add("$srv -> $errs")
                     }
                     Log.i("CSPlaybackProbe", "server coverage passed=$passedServers failed=$failedServers")
-                    check(passedServers.size >= 3) {
-                        "expected >= 3 distinct PelisJuanita servers playing in Media3, got passed=$passedServers failed=$failedServers"
+                    check(passedServers.size >= 5) {
+                        "expected >= 5 distinct PelisJuanita servers playing in Media3, got passed=$passedServers failed=$failedServers"
+                    }
+                    check("Byse" in passedKeys) {
+                        "expected Byse to decrypt and play in Media3, failed=$failedServers"
+                    }
+                    check("StreamWish" in passedKeys || "StreamWishVsembed" in passedKeys) {
+                        "expected StreamWish/vsembed to decrypt and play in Media3, failed=$failedServers"
                     }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
@@ -310,10 +331,26 @@ object PlaybackProbe {
                           </a>
                         </div></div></body></html>
                         """.trimIndent()
+                    } else if (u.contains("title=no-backdrop-sub")) {
+                        """
+                        <html><body><div id="dt_contenedor">
+                          <div class="Image"><img id="cpt" src="https://image.tmdb.org/t/p/original"/></div>
+                          <div class="titleInfo">
+                            <div class="columna imagen"><img src="https://image.tmdb.org/t/p/w500/huc4u7fcxJ849qzg7Vf881FdMXJ.jpg"/></div>
+                            <h1>Sin Fondo Sub</h1><p class="sinopsis">Película con img_fondo vacío.</p>
+                          </div>
+                          <a class="row-download" data-idioma="subtitulada" data-tipo="stream" data-url="https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden">
+                            <span>Fastserver</span><span>HD</span>
+                          </a>
+                        </div></body></html>
+                        """.trimIndent()
                     } else {
                         """<html><body><form><input name="empresa_hp"></form></body></html>"""
                     }
                 }
+                u.contains("/movies/pelicula/no-backdrop-sub") -> """
+                    <html><body><div id="dt_contenedor"></div></body></html>
+                """.trimIndent()
                 else -> "<html><body><div id=\"dt_contenedor\"></div></body></html>"
             }
             WebResourceResponse("text/html", "UTF-8", 200, "OK", emptyMap(), ByteArrayInputStream(html.toByteArray(StandardCharsets.UTF_8)))
@@ -348,6 +385,22 @@ object PlaybackProbe {
             verifiedProvider.loadLinks(movieResp.dataUrl, false, {}, { extractedLinks.add(it) })
         }
         check(okLinks && extractedLinks.isNotEmpty()) { "expected verified movie loadLinks to extract playable links" }
+
+        // Empty backdrop + subtitulada-only stream row regression inside verified session
+        val noBgResp = withContext(Dispatchers.IO) {
+            verifiedProvider.load("${PelisJuanitaMarkup.MAIN_URL}/movies/pelicula/no-backdrop-sub")
+        } as? MovieLoadResponse ?: error("no-backdrop-sub load returned null")
+        check(noBgResp.posterUrl == "https://image.tmdb.org/t/p/w500/huc4u7fcxJ849qzg7Vf881FdMXJ.jpg")
+        check(noBgResp.backgroundPosterUrl == noBgResp.posterUrl) {
+            "expected backdrop fallback to posterUrl when img_fondo/cpt is empty, got ${noBgResp.backgroundPosterUrl}"
+        }
+        val subLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        val okSub = withContext(Dispatchers.IO) {
+            verifiedProvider.loadLinks(noBgResp.dataUrl, false, {}, { subLinks.add(it) })
+        }
+        check(okSub && subLinks.any { it.name.contains("Subtitulado", ignoreCase = true) }) {
+            "expected subtitulada stream link, got $subLinks"
+        }
 
         clearWebViewCookies()
     }

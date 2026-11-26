@@ -75,6 +75,10 @@ class PelisJuanitaDataTest {
         assertEquals(mapOf("page" to "2"), ep2.postForm)
 
         assertEquals("https://pelisjuanita.com/tv/app/buscar.php?q=%25&pagina=3", PelisJuanitaMarkup.buildSearchApiUrl("%", 3))
+        assertEquals("Foo Bar s 2026", PelisJuanitaMarkup.normalizeSearchQuery("  Foo & Bar's   2026 "))
+        assertEquals("https://pelisjuanita.com/movies/search?s=casa+de+papel", PelisJuanitaMarkup.buildSearchPageUrl("casa & de'papel", 1))
+        assertEquals("https://pelisjuanita.com/series/page/2/search?s=casa", PelisJuanitaMarkup.buildSearchPageUrl("casa", 2))
+        assertEquals("https://pelisjuanita.com/movies/apiSeries.php?s=casa+libre&page=3", PelisJuanitaMarkup.buildUnifiedSearchAjaxUrl("casa & libre", 3))
         assertEquals("https://pelisjuanita.com/movies/pelicula/madden", PelisJuanitaMarkup.buildMovieShellUrl("madden"))
         assertEquals("https://pelisjuanita.com/movies/movieInfo.php?title=culpa-nuestra&p=", PelisJuanitaMarkup.buildMovieInfoUrl("culpa-nuestra"))
         assertEquals("https://pelisjuanita.com/movies/movieInfo.php?title=madden&p=55775", PelisJuanitaMarkup.buildMovieInfoUrl("madden", 55775L))
@@ -108,6 +112,10 @@ class PelisJuanitaDataTest {
         assertNull(PelisJuanitaMarkup.resolvePosterUrl("https://pelisjuanita.com/logo-share.png"))
         assertNull(PelisJuanitaMarkup.resolvePosterUrl("/no-actor.jpg"))
         assertNull(PelisJuanitaMarkup.resolveBackdropUrl(""))
+        assertNull(PelisJuanitaMarkup.resolveBackdropUrl("https://image.tmdb.org/t/p/original"))
+        assertNull(PelisJuanitaMarkup.resolveBackdropUrl("https://image.tmdb.org/t/p/w1280/"))
+        assertNull(PelisJuanitaMarkup.resolveBackdropUrl("https://image.tmdb.org/t/p/w500/null"))
+        assertNull(PelisJuanitaMarkup.resolveBackdropUrl("https://pelisjuanita.com/movies/"))
     }
 
     @Test
@@ -168,6 +176,42 @@ class PelisJuanitaDataTest {
         assertEquals(PelisJuanitaItemKind.Episode, epCat.items[0].kind)
         assertEquals("The Ba***ds of Bollywood 1x03", epCat.items[0].title)
         assertEquals("https://pelisjuanita.com/series/ver-serie/the-bads-of-bollywood/01x03", epCat.items[0].url)
+
+        // busqueda.zip mixed search results HTML (.seriesTag, .fecha, /series/page/N/search?s=..., messy img quote)
+        val busquedaHtml = """
+            <div class="grid-container">
+              <div class="grid-item">
+                <a href="https://pelisjuanita.com/series/ver-serie/la-casa-del-dragon">
+                  <div class="seriesTag">serie</div>
+                  <div class="fecha">2022</div>
+                  <img class="img-cover" '="" src="https://image.tmdb.org/t/p/w500/hotd123.jpg" alt="La Casa del Dragón"/>
+                  <h2>La Casa del Dragón</h2>
+                </a>
+              </div>
+              <div class="grid-item">
+                <a href="https://pelisjuanita.com/movies/pelicula/la-casa-gucci">
+                  <div class="fecha">2021</div>
+                  <img class="img-cover" '="" src="/gucci123.jpg" alt="La casa Gucci"/>
+                  <h2>La casa Gucci</h2>
+                </a>
+              </div>
+            </div>
+            <div class="pagination">
+              <span>Página 1 de 5</span>
+              <a href="https://pelisjuanita.com/series/page/2/search?s=casa">2</a>
+              <a href="https://pelisjuanita.com/series/page/5/search?s=casa">5</a>
+            </div>
+        """.trimIndent()
+        val busquedaCat = PelisJuanitaMarkup.parseCatalogHtml(busquedaHtml, currentPage = 1)
+        assertEquals(5, busquedaCat.totalPages)
+        assertTrue(busquedaCat.hasNext)
+        assertEquals(2, busquedaCat.items.size)
+        assertEquals(PelisJuanitaItemKind.Series, busquedaCat.items[0].kind)
+        assertEquals(2022, busquedaCat.items[0].year)
+        assertEquals("https://image.tmdb.org/t/p/w500/hotd123.jpg", busquedaCat.items[0].posterUrl)
+        assertEquals(PelisJuanitaItemKind.Movie, busquedaCat.items[1].kind)
+        assertEquals(2021, busquedaCat.items[1].year)
+        assertEquals("https://image.tmdb.org/t/p/w500/gucci123.jpg", busquedaCat.items[1].posterUrl)
     }
 
     @Test
@@ -445,8 +489,38 @@ class PelisJuanitaDataTest {
         )
 
         assertEquals(32, PelisJuanitaVsembedCrypto.encryptHex("12345", "vsembed.com").length)
+        assertEquals("1f5101f5dd1f5111f6aa1f6e126a1767", PelisJuanitaVsembedCrypto.generateIvHex("vsembed.com"))
+        assertTrue(PelisJuanitaVsembedCrypto.generateKeyHex().startsWith("1d54a1d53c1d56e1d6811d53c1d68"))
+        val roundtripCipher = PelisJuanitaVsembedCrypto.encryptHex("cjvk", "vsembed.com")
+        assertEquals("cjvk", PelisJuanitaVsembedCrypto.decryptHex(roundtripCipher, "vsembed.com"))
 
-        // Byse AES-256-GCM playback decryption check
+        // Stream row fallback outside .box-download + cargarServidor typo variant + protocol-relative URL
+        val altStreams = PelisJuanitaMarkup.parseStreamSourcesHtml(
+            """<a class="row-download" data-idioma="subtitulada" data-tipo="stream" onclick="cargarServidor('//bysesukior.com/e/abc123')"><span>Byse</span><span>HD</span></a>""",
+        )
+        assertEquals(1, altStreams.size)
+        assertEquals("Subtitulado", altStreams[0].languageLabel)
+        assertEquals("https://bysesukior.com/e/abc123", altStreams[0].url)
+
+        // Byse deterministic PoW check against verified vector
+        val vecHash = PelisJuanitaBysePow.hashNonce("5dd6af337978c416cc2cf9a6af73daad:2892".toByteArray(StandardCharsets.UTF_8))
+        assertEquals(0x000a2171, vecHash[0])
+        assertEquals(0xc54bc68f.toInt(), vecHash[1])
+        assertEquals(12, PelisJuanitaBysePow.countLeadingZeroBits(vecHash))
+        val powSolved = PelisJuanitaBysePow.solveBlocking("5dd6af337978c416cc2cf9a6af73daad", 12)
+        assertNotNull(powSolved)
+
+        // Byse ECDSA P-256 challenge signing + JWK verification
+        val kp = PelisJuanitaByseCrypto.ecKeyPairP256()
+        val jwk = PelisJuanitaByseCrypto.toJwkPublicKey(kp.public as java.security.interfaces.ECPublicKey)
+        assertEquals("EC", jwk["kty"])
+        assertEquals("P-256", jwk["crv"])
+        assertEquals(32, PelisJuanitaCrypto.decodeBase64Flexible(jwk["x"]!!).size)
+        assertEquals(32, PelisJuanitaCrypto.decodeBase64Flexible(jwk["y"]!!).size)
+        val sigP1363 = PelisJuanitaCrypto.decodeBase64Flexible(PelisJuanitaByseCrypto.signChallengeNonce("nonce-123", kp))
+        assertEquals(64, sigP1363.size)
+
+        // Byse AES-256-GCM playback decryption check (both legacy 2-part and version-indexed 30-part keys)
         val byseKey1 = ByteArray(16) { it.toByte() }
         val byseKey2 = ByteArray(16) { (it + 16).toByte() }
         val byseIv = ByteArray(12) { (it + 1).toByte() }
@@ -456,12 +530,21 @@ class PelisJuanitaDataTest {
             SecretKeySpec(byseKey1 + byseKey2, "AES"),
             javax.crypto.spec.GCMParameterSpec(128, byseIv),
         )
-        val plain = """{"sources":[{"url":"https://edge.bysesukior.com/hls/stream.m3u8"}]}""".toByteArray(StandardCharsets.UTF_8)
+        val plain = """{"sources":[{"url":"https://edge.bysesukior.com/hls/stream.m3u8","height":1080,"bitrate_kbps":2400}],"tracks":[{"url":"https://edge.bysesukior.com/subs/es.vtt","label":"Español"}]}""".toByteArray(StandardCharsets.UTF_8)
         val enc = cipher.doFinal(plain)
         fun b64Url(b: ByteArray) = PelisJuanitaCrypto.encodeBase64(b).replace('+', '-').replace('/', '_').trimEnd('=')
         assertEquals(
             "https://edge.bysesukior.com/hls/stream.m3u8",
             PelisJuanitaByseCrypto.decryptPlayback(b64Url(byseIv), b64Url(enc), listOf(b64Url(byseKey1), b64Url(byseKey2))),
         )
+        val thirtyParts = MutableList(30) { idx -> b64Url(ByteArray(16) { (idx + 70).toByte() }) }
+        // version = "16" selects indices [16-1=15] and [30-16=14]
+        thirtyParts[15] = b64Url(byseKey1)
+        thirtyParts[14] = b64Url(byseKey2)
+        val verDetails = PelisJuanitaByseCrypto.decryptPlaybackDetails(b64Url(byseIv), b64Url(enc), thirtyParts, version = "16")
+        assertNotNull(verDetails)
+        assertEquals("https://edge.bysesukior.com/hls/stream.m3u8", verDetails!!.sources[0].url)
+        assertEquals(1, verDetails.tracks.size)
+        assertEquals("Español", verDetails.tracks[0].label)
     }
 }

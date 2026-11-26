@@ -389,12 +389,12 @@ class PelisJuanitaProvider(
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val trimmed = query.trim()
+        val trimmed = PelisJuanitaMarkup.normalizeSearchQuery(query)
         if (trimmed.isEmpty()) return null
 
         val rawJson = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl(trimmed, page))
         val jsonPage = rawJson?.let { PelisJuanitaMarkup.parseSearchJson(it) }
-        if (jsonPage != null) {
+        if (jsonPage != null && (jsonPage.items.isNotEmpty() || !sessionStore.read().hasPhpSession())) {
             cachePublicRecords(jsonPage.items)
             return newSearchResponseList(
                 list = jsonPage.items.map(::toSearchResponse),
@@ -402,8 +402,36 @@ class PelisJuanitaProvider(
             )
         }
 
-        // Fallback to authenticated HTML search if buscar.php is temporarily unavailable
+        // Fallback to authenticated HTML search if buscar.php is unavailable or returned empty
         if (sessionStore.read().hasPhpSession()) {
+            val unifiedAjax = fetchSite(
+                PelisJuanitaMarkup.buildUnifiedSearchAjaxUrl(trimmed, page),
+                "$mainUrl/movies/",
+                isAjax = true,
+            )
+            val unifiedParsed = if (!unifiedAjax.gated && unifiedAjax.text.isNotBlank()) {
+                PelisJuanitaMarkup.parseCatalogHtml(unifiedAjax.text, page)
+            } else {
+                null
+            }
+            if (unifiedParsed != null && unifiedParsed.items.isNotEmpty()) {
+                return newSearchResponseList(unifiedParsed.items.map(::toSearchResponse), hasNext = unifiedParsed.hasNext)
+            }
+
+            val searchPageRes = fetchSite(
+                PelisJuanitaMarkup.buildSearchPageUrl(trimmed, page),
+                "$mainUrl/movies/",
+                isAjax = false,
+            )
+            val searchPageParsed = if (!searchPageRes.gated && searchPageRes.text.isNotBlank()) {
+                PelisJuanitaMarkup.parseCatalogHtml(searchPageRes.text, page)
+            } else {
+                null
+            }
+            if (searchPageParsed != null && searchPageParsed.items.isNotEmpty()) {
+                return newSearchResponseList(searchPageParsed.items.map(::toSearchResponse), hasNext = searchPageParsed.hasNext)
+            }
+
             val (mRes, sRes) = coroutineScope {
                 val m = async {
                     fetchSite(PelisJuanitaMarkup.buildMovieSearchAjaxUrl(trimmed, page), "$mainUrl/movies/", isAjax = true)
@@ -419,9 +447,14 @@ class PelisJuanitaProvider(
             }.distinctBy { it.url }
             val hasMore = (mRes.text.isNotBlank() && PelisJuanitaMarkup.parseCatalogHtml(mRes.text, page).hasNext) ||
                 (sRes.text.isNotBlank() && PelisJuanitaMarkup.parseCatalogHtml(sRes.text, page).hasNext)
-            return newSearchResponseList(cards.map(::toSearchResponse), hasNext = hasMore)
+            if (cards.isNotEmpty() || jsonPage == null) {
+                return newSearchResponseList(cards.map(::toSearchResponse), hasNext = hasMore)
+            }
         }
 
+        if (jsonPage != null) {
+            return newSearchResponseList(emptyList(), hasNext = false)
+        }
         return null
     }
 
@@ -588,8 +621,9 @@ class PelisJuanitaProvider(
             }
 
             return newTvSeriesLoadResponse(detail.title, parentUrl, TvType.TvSeries, sortedEpisodes) {
-                this.posterUrl = detail.posterUrl
-                this.backgroundPosterUrl = detail.backdropUrl
+                val resolvedPoster = detail.posterUrl ?: publicRec?.posterUrl
+                this.posterUrl = resolvedPoster
+                this.backgroundPosterUrl = detail.backdropUrl ?: publicRec?.backdropUrl ?: resolvedPoster
                 this.plot = detail.synopsis
                 this.year = detail.year
                 this.duration = detail.durationMinutes
@@ -621,9 +655,15 @@ class PelisJuanitaProvider(
             val detail = PelisJuanitaMarkup.parseMovieDetailHtml(movieRes.text, target.publicUrl)
                 ?: movieShell?.text?.takeIf { it.isNotBlank() }?.let { PelisJuanitaMarkup.parseMovieDetailHtml(it, target.publicUrl) }
             if (detail != null) {
+                val fallbackRec = if (detail.backdropUrl == null || detail.posterUrl == null) {
+                    lookupPublicRecord(target.slug)
+                } else {
+                    null
+                }
+                val resolvedPoster = detail.posterUrl ?: fallbackRec?.posterUrl
                 return newMovieLoadResponse(detail.title, target.publicUrl, TvType.Movie, target.publicUrl) {
-                    this.posterUrl = detail.posterUrl
-                    this.backgroundPosterUrl = detail.backdropUrl
+                    this.posterUrl = resolvedPoster
+                    this.backgroundPosterUrl = detail.backdropUrl ?: fallbackRec?.backdropUrl ?: resolvedPoster
                     this.plot = detail.synopsis
                     this.year = detail.year
                     this.duration = detail.durationMinutes
@@ -645,7 +685,7 @@ class PelisJuanitaProvider(
             ?: throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
         return newMovieLoadResponse(rec.title, target.publicUrl, TvType.Movie, target.publicUrl) {
             this.posterUrl = rec.posterUrl
-            this.backgroundPosterUrl = rec.backdropUrl
+            this.backgroundPosterUrl = rec.backdropUrl ?: rec.posterUrl
             this.plot = rec.synopsis
             this.year = rec.year
             this.score = Score.from10(rec.rating)
@@ -707,9 +747,23 @@ class PelisJuanitaProvider(
 
         var rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(infoRes.text)
         if (rawSources.isEmpty() && !target.isSeries) {
-            val (movieId, movieShell) = resolveMovieIdAndShell(target.slug, fetchShellIfMissing = true)
+            val movieShell = fetchSite(
+                url = PelisJuanitaMarkup.buildMovieShellUrl(target.slug),
+                referer = "$mainUrl/movies/",
+                isAjax = false,
+                useCache = false,
+            )
+            if (movieShell.gated) {
+                throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
+            }
+            val shellId = PelisJuanitaMarkup.extractMovieIdFromShell(movieShell.text)
+                ?: movieIdCache[target.slug]
+                ?: lookupPublicRecord(target.slug)?.id
+            if (shellId != null && shellId > 0) {
+                movieIdCache[target.slug] = shellId
+            }
             infoRes = fetchSite(
-                url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug, movieId),
+                url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug, shellId),
                 referer = target.publicUrl,
                 isAjax = true,
                 useCache = false,
@@ -718,7 +772,7 @@ class PelisJuanitaProvider(
                 throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
             }
             rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(infoRes.text)
-            if (rawSources.isEmpty() && movieShell != null && movieShell.text.isNotBlank()) {
+            if (rawSources.isEmpty() && movieShell.text.isNotBlank()) {
                 rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(movieShell.text)
             }
         }
@@ -742,7 +796,6 @@ class PelisJuanitaProvider(
         )
 
         val orderedSources = rawSources
-            .filterNot { it.serverName.equals("waaw", ignoreCase = true) || it.url.contains("waaw.to", ignoreCase = true) }
             .distinctBy { it.url }
             .sortedWith(
                 compareBy(
@@ -797,21 +850,35 @@ class PelisJuanitaProvider(
                         PelisJuanitaFastserverMoviesExtractor().getUrl(source.url, referer, subtitleCallback, sink)
                     }
                 }
-                lowerSrv == "voe" || lowerUrl.contains("voe.") -> {
+                lowerSrv == "voe" || lowerUrl.contains("voe.") || lowerUrl.contains("caseyseemavoid") -> {
                     PelisJuanitaVoeExtractor.extract(source.url, referer, "Voe", subtitleCallback, sink)
                 }
                 lowerSrv == "earnvids" ||
                     lowerUrl.contains("morencius") ||
                     lowerUrl.contains("callistanise") ||
                     lowerUrl.contains("minochinos") ||
-                    lowerUrl.contains("vidhide") -> {
+                    lowerUrl.contains("movearnpre") ||
+                    lowerUrl.contains("dingtezuni") ||
+                    lowerUrl.contains("mivalyo") ||
+                    lowerUrl.contains("taylorplayer") ||
+                    lowerUrl.contains("vidhide") ||
+                    lowerUrl.contains("filelions") ||
+                    lowerUrl.contains("peytonepre") ||
+                    lowerUrl.contains("smoothpre") ||
+                    lowerUrl.contains("dhtpre") ||
+                    lowerUrl.contains("ryderjet") -> {
                     PelisJuanitaVidHideExtractor.extract(source.url, referer, "Earnvids", subtitleCallback, sink)
                 }
                 lowerSrv == "streamwish" ||
                     lowerUrl.contains("streamwish") ||
                     lowerUrl.contains("hglink") ||
                     lowerUrl.contains("medixiru") ||
-                    lowerUrl.contains("vsembed") -> {
+                    lowerUrl.contains("vsembed") ||
+                    lowerUrl.contains("flaswish") ||
+                    lowerUrl.contains("hlswish") ||
+                    lowerUrl.contains("playerwish") ||
+                    lowerUrl.contains("strwish") ||
+                    lowerUrl.contains("dhcplay") -> {
                     PelisJuanitaStreamWishExtractor.extract(source.url, referer, "StreamWish", subtitleCallback, sink)
                 }
                 lowerSrv == "savefiles" || lowerUrl.contains("savefiles.") -> {
@@ -821,15 +888,18 @@ class PelisJuanitaProvider(
                     PelisJuanitaLplaygoExtractor().getUrl(source.url, referer, subtitleCallback, sink)
                     if (collected.isEmpty()) loadExtractor(source.url, referer, subtitleCallback, sink)
                 }
-                lowerSrv == "byse" || lowerUrl.contains("bysesukior") -> {
+                lowerSrv == "byse" || lowerUrl.contains("byse") || lowerUrl.contains("n1mwq.org") -> {
                     PelisJuanitaByseExtractor().getUrl(source.url, referer, subtitleCallback, sink)
                     if (collected.isEmpty()) loadExtractor(source.url, referer, subtitleCallback, sink)
                 }
-                lowerUrl.contains("mixdrop.top") || lowerUrl.contains("mxdrop.click") -> {
-                    loadExtractor(source.url, referer, subtitleCallback, sink)
+                lowerSrv == "mixdrop" || lowerUrl.contains("mixdrop") || lowerUrl.contains("mxdrop") -> {
+                    PelisJuanitaMixDropTopExtractor.extract(source.url, referer, "MixDrop", subtitleCallback, sink)
                     if (collected.isEmpty()) {
-                        PelisJuanitaMixDropTopExtractor().getUrl(source.url, referer, subtitleCallback, sink)
+                        loadExtractor(source.url, referer, subtitleCallback, sink)
                     }
+                }
+                lowerUrl.contains("oisauh") -> {
+                    PelisJuanitaOisauhExtractor().getUrl(source.url, referer, subtitleCallback, sink)
                 }
                 else -> {
                     loadExtractor(source.url, referer, subtitleCallback, sink)

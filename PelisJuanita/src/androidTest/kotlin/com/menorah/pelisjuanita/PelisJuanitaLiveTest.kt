@@ -113,6 +113,11 @@ class PelisJuanitaLiveTest {
         )
         assertEquals(1, bareSeasonEps.size)
         assertEquals(32, PelisJuanitaVsembedCrypto.encryptHex("6168w", "vsembed.com").length)
+        assertEquals("1f5101f5dd1f5111f6aa1f6e126a1767", PelisJuanitaVsembedCrypto.generateIvHex("vsembed.com"))
+        val byseKp = PelisJuanitaByseCrypto.ecKeyPairP256()
+        val byseSig = PelisJuanitaCrypto.decodeBase64Flexible(PelisJuanitaByseCrypto.signChallengeNonce("android-nonce", byseKp))
+        assertEquals(64, byseSig.size)
+        assertNotNull(PelisJuanitaBysePow.solveBlocking("5dd6af337978c416cc2cf9a6af73daad", 12))
         assertTrue(PelisJuanitaSessionHelper.looksLikeVerificationGate(302, "https://pelisjuanita.com/inicio.php", ""))
         assertTrue(PelisJuanitaSessionHelper.shouldTryWebTransport(403, "${PelisJuanitaMarkup.MAIN_URL}/movies/", "", null))
     }
@@ -157,6 +162,14 @@ class PelisJuanitaLiveTest {
         assertNotNull("Matrix search parsed", parsedMatrix)
         assertTrue("Expected Matrix search results", parsedMatrix!!.items.isNotEmpty())
 
+        val rawSkinCrawler = getText(PelisJuanitaMarkup.buildSearchApiUrl("skin crawler", 1))
+        val parsedSkinCrawler = PelisJuanitaMarkup.parseSearchJson(rawSkinCrawler)
+        val skinRec = parsedSkinCrawler?.items?.firstOrNull { it.slug == "the-skin-crawler-murders" }
+        if (skinRec != null) {
+            assertNotNull("Expected poster for the-skin-crawler-murders", skinRec.posterUrl)
+            checkImageReachable(skinRec.backdropUrl ?: skinRec.posterUrl!!)
+        }
+
         // 2. TMDB poster + backdrop image reachability & Bitmap decoding
         val firstMovieRec = parsedPage1.items.firstOrNull { it.kind == PelisJuanitaItemKind.Movie && !it.posterUrl.isNullOrBlank() }
             ?: parsedPage1.items.first()
@@ -193,12 +206,13 @@ class PelisJuanitaLiveTest {
             fun inspectGate(view: WebView, attempt: Int) {
                 if (done.get()) return
                 view.evaluateJavascript(
-                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form')||!!window._cf_chl_opt||document.body.innerText.indexOf('Cloudflare')>=0,title:document.title})",
+                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form')||!!window._cf_chl_opt||(document.body&&document.body.innerText.indexOf('Cloudflare')>=0),title:document.title})",
                 ) { res ->
                     val raw = res ?: ""
                     webViewCheck.set(raw)
                     val gotCaptcha = raw.contains("hasCaptcha\\\":true") || raw.contains("hasCaptcha\":true")
-                    if (gotCaptcha || attempt >= 6) {
+                    val gotCf = raw.contains("hasCf\\\":true") || raw.contains("hasCf\":true")
+                    if (gotCaptcha || (gotCf && attempt >= 2) || attempt >= 6) {
                         if (done.compareAndSet(false, true)) {
                             wv.destroy()
                             latch.countDown()
@@ -215,9 +229,12 @@ class PelisJuanitaLiveTest {
                     }
                 }
             }
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!done.get()) inspectGate(wv, 0)
+            }, 12_000L)
             wv.loadUrl("${PelisJuanitaMarkup.MAIN_URL}/inicio.php?redirect=%2Fmovies%2F")
         }
-        assertTrue("WebView loaded inicio.php in time", latch.await(35, TimeUnit.SECONDS))
+        assertTrue("WebView loaded inicio.php in time", latch.await(60, TimeUnit.SECONDS))
         val wvResult = webViewCheck.get()
         val hasGate = wvResult.contains("hasCaptcha\\\":true") ||
             wvResult.contains("hasCaptcha\":true") ||
@@ -263,6 +280,30 @@ class PelisJuanitaLiveTest {
             workingHosts++
         }
 
-        assertTrue("Expected >= 3 live video host parsers succeeding, got $workingHosts", workingHosts >= 3)
+        // Verify vsembed AES-CBC decryption with live endpoint
+        val vsembedEnc = PelisJuanitaVsembedCrypto.encryptHex("cjvk", "vsembed.com")
+        val vsembedRes = runCatching {
+            val req = Request.Builder()
+                .url("https://vsembed.com/api/stream/tracking?c=$vsembedEnc&ld=1")
+                .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
+                .header("Referer", "https://vsembed.com/cjvk")
+                .build()
+            http.newCall(req).execute().use { r -> r.header("x-tracking") }
+        }.getOrNull()
+        val vsembedDec = vsembedRes?.let { PelisJuanitaVsembedCrypto.decryptHex(it, "vsembed.com") }
+        if (vsembedDec != null && vsembedDec.contains("master", ignoreCase = true)) {
+            workingHosts++
+        }
+
+        // Verify MixDrop wurl unpacking across mirrors
+        val mixHtml = tryGetText("https://mxdrop.click/e/q11gg30obxxogvn") ?: tryGetText("https://mixdrop.top/e/q11gg30obxxogvn")
+        if (!mixHtml.isNullOrBlank()) {
+            val mixSources = PelisJuanitaVidHideParser.unpackAll(mixHtml) + mixHtml
+            if (mixSources.any { it.contains("wurl", ignoreCase = true) }) {
+                workingHosts++
+            }
+        }
+
+        assertTrue("Expected >= 4 live video host parsers succeeding, got $workingHosts", workingHosts >= 4)
     }
 }

@@ -160,7 +160,7 @@ internal object PelisJuanitaMarkup {
     private val EPISODE_PREFIX_REGEX = Regex("""^\s*\[\s*(\d+)\s*x\s*(\d+)\s*]\s*""", RegexOption.IGNORE_CASE)
     private val EPISODE_SPAN_NUM_REGEX = Regex("""^\s*(\d+)\s*x\s*(\d+)\s*$""", RegexOption.IGNORE_CASE)
     private val SEASON_ONCLICK_REGEX = Regex("""cargarEpisodiosDeTemporada\(\s*['"]?(\d+)['"]?\s*\)""")
-    private val CARGAR_SERVIDOR_REGEX = Regex("""cargarServior\(\s*['"]([^'"]+)['"]\s*\)""")
+    private val CARGAR_SERVIDOR_REGEX = Regex("""cargarServi(?:d)?or\(\s*['"]([^'"]+)['"]\s*\)""")
     private val CARGAR_TRAILER_REGEX = Regex("""cargarTrailer\(\s*['"]([^'"]+)['"]\s*\)""")
     private val PAGE_OF_REGEX = Regex("""Página\s+\d+\s+de\s+(\d+)""", RegexOption.IGNORE_CASE)
     private val PAGE_HREF_REGEX = Regex("""(?:/page/|[?&]page=)(\d+)""", RegexOption.IGNORE_CASE)
@@ -168,6 +168,7 @@ internal object PelisJuanitaMarkup {
     private val MOVIE_ID_REGEX = Regex("""CURRENT_MOVIE_ID\s*=\s*(\d+)""")
     private val MOVIE_INFO_P_REGEX = Regex("""movieInfo\.php\?[^"'<>]*?[?&]p=(\d+)""")
     private val TMDB_FILENAME_REGEX = Regex("""^/?([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
+    private val TMDB_FULL_PATH_REGEX = Regex("""^/t/p/[^/]+/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp)$""", RegexOption.IGNORE_CASE)
     private val SAVED_LOCAL_ASSETS_REGEX = Regex("""_files/([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
 
     fun isSiteUrl(url: String?): Boolean {
@@ -198,22 +199,34 @@ internal object PelisJuanitaMarkup {
             lower.contains("favicon.") ||
             lower.contains("no-actor.jpg") ||
             lower.endsWith("/default.png") ||
-            lower.endsWith("play.png")
+            lower.endsWith("play.png") ||
+            lower == "null" ||
+            lower == "undefined"
         ) {
             return null
         }
-        if (clean.startsWith("https://", ignoreCase = true)) return clean
-        if (clean.startsWith("http://", ignoreCase = true)) return "https://${clean.substringAfter("://")}"
-        if (clean.startsWith("//")) return "https:$clean"
-        TMDB_FILENAME_REGEX.matchEntire(clean)?.let { m ->
-            return "$tmdbBase/${m.groupValues[1]}"
+        val candidate = when {
+            clean.startsWith("https://", ignoreCase = true) -> clean
+            clean.startsWith("http://", ignoreCase = true) -> "https://${clean.substringAfter("://")}"
+            clean.startsWith("//") -> "https:$clean"
+            else -> {
+                TMDB_FILENAME_REGEX.matchEntire(clean)?.let { m ->
+                    return "$tmdbBase/${m.groupValues[1]}"
+                }
+                SAVED_LOCAL_ASSETS_REGEX.find(clean)?.let { m ->
+                    return "$tmdbBase/${m.groupValues[1]}"
+                }
+                runCatching { URI("$MAIN_URL/movies/").resolve(clean).toString() }.getOrNull() ?: return null
+            }
         }
-        SAVED_LOCAL_ASSETS_REGEX.find(clean)?.let { m ->
-            return "$tmdbBase/${m.groupValues[1]}"
+        val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
+        val host = uri.host?.lowercase().orEmpty()
+        val path = uri.rawPath.orEmpty()
+        if (path.isEmpty() || path.endsWith("/")) return null
+        if (host.endsWith("image.tmdb.org") && !TMDB_FULL_PATH_REGEX.matches(path)) {
+            return null
         }
-        return runCatching {
-            URI("$MAIN_URL/movies/").resolve(clean).toString()
-        }.getOrNull()
+        return candidate
     }
 
     fun parseTargetUrl(url: String): PelisJuanitaTargetUrl? {
@@ -275,19 +288,45 @@ internal object PelisJuanitaMarkup {
         )
     }
 
+    fun normalizeSearchQuery(query: String): String {
+        val trimmed = query.trim()
+        if (trimmed == "%") return "%"
+        return trimmed
+            .replace('&', ' ')
+            .replace('\'', ' ')
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
     fun buildSearchApiUrl(query: String, page: Int = 1): String {
         val safePage = page.coerceAtLeast(1)
-        val encoded = if (query == "%") "%25" else URLEncoder.encode(query, "UTF-8")
+        val norm = normalizeSearchQuery(query)
+        val encoded = if (norm == "%") "%25" else URLEncoder.encode(norm, "UTF-8")
         return "$MAIN_URL/tv/app/buscar.php?q=$encoded&pagina=$safePage"
     }
 
+    fun buildSearchPageUrl(query: String, page: Int = 1): String {
+        val safePage = page.coerceAtLeast(1)
+        val encoded = URLEncoder.encode(normalizeSearchQuery(query), "UTF-8")
+        return if (safePage <= 1) {
+            "$MAIN_URL/movies/search?s=$encoded"
+        } else {
+            "$MAIN_URL/series/page/$safePage/search?s=$encoded"
+        }
+    }
+
+    fun buildUnifiedSearchAjaxUrl(query: String, page: Int = 1): String {
+        val encoded = URLEncoder.encode(normalizeSearchQuery(query), "UTF-8")
+        return "$MAIN_URL/movies/apiSeries.php?s=$encoded&page=${page.coerceAtLeast(1)}"
+    }
+
     fun buildMovieSearchAjaxUrl(query: String, page: Int = 1): String {
-        val encoded = URLEncoder.encode(query, "UTF-8")
+        val encoded = URLEncoder.encode(normalizeSearchQuery(query), "UTF-8")
         return "$MAIN_URL/movies/movies.php?s=$encoded&page=${page.coerceAtLeast(1)}"
     }
 
     fun buildSeriesSearchAjaxUrl(query: String, page: Int = 1): String {
-        val encoded = URLEncoder.encode(query, "UTF-8")
+        val encoded = URLEncoder.encode(normalizeSearchQuery(query), "UTF-8")
         return "$MAIN_URL/series/apiSeries.php?s=$encoded&page=${page.coerceAtLeast(1)}"
     }
 
@@ -350,11 +389,16 @@ internal object PelisJuanitaMarkup {
                     ?: img?.attr("src"),
             )
             val year = anchor.selectFirst(".hover-info .right")?.text()?.let { extractYear(it) }
+                ?: anchor.selectFirst(".fecha")?.text()?.let { extractYear(it) }
             val rating = anchor.selectFirst(".hover-info .left")?.text()
                 ?.replace("★", "")
                 ?.trim()
                 ?.toDoubleOrNull()
-            val kind = if (target.isSeries) PelisJuanitaItemKind.Series else PelisJuanitaItemKind.Movie
+            val kind = if (target.isSeries || anchor.selectFirst(".seriesTag") != null) {
+                PelisJuanitaItemKind.Series
+            } else {
+                PelisJuanitaItemKind.Movie
+            }
             cards += PelisJuanitaCatalogCard(
                 title = rawTitle,
                 url = normalizedUrl,
@@ -634,7 +678,12 @@ internal object PelisJuanitaMarkup {
     private fun parseStreamSourcesFromDoc(doc: org.jsoup.nodes.Document): List<PelisJuanitaStreamSource> {
         val out = mutableListOf<PelisJuanitaStreamSource>()
         val seen = mutableSetOf<Pair<String, String>>()
-        val rows = doc.select(".box-download .row-download")
+        val rows = doc.select(".box-download .row-download").ifEmpty { doc.select(".row-download") }
+
+        fun normalizeStreamUrl(raw: String): String {
+            val trimmed = raw.trim()
+            return if (trimmed.startsWith("//")) "https:$trimmed" else trimmed
+        }
 
         fun collectRows(strictStreamType: Boolean) {
             for (row in rows) {
@@ -645,9 +694,11 @@ internal object PelisJuanitaMarkup {
                     if (tipo in setOf("descarga", "download", "descargas")) continue
                 }
 
-                val rawUrl = row.attr("data-url").trim().ifEmpty {
-                    CARGAR_SERVIDOR_REGEX.find(row.attr("onclick"))?.groupValues?.getOrNull(1).orEmpty().trim()
-                }
+                val rawUrl = normalizeStreamUrl(
+                    row.attr("data-url").trim().ifEmpty {
+                        CARGAR_SERVIDOR_REGEX.find(row.attr("onclick"))?.groupValues?.getOrNull(1).orEmpty().trim()
+                    },
+                )
                 if (!rawUrl.startsWith("http", ignoreCase = true)) continue
 
                 val lang = normalizeLanguageLabel(row.attr("data-idioma"))
@@ -671,7 +722,7 @@ internal object PelisJuanitaMarkup {
             collectRows(strictStreamType = false)
         }
 
-        val iframeSrc = doc.selectFirst("iframe#if-video")?.attr("src")?.trim().orEmpty()
+        val iframeSrc = normalizeStreamUrl(doc.selectFirst("iframe#if-video")?.attr("src").orEmpty())
         if (iframeSrc.startsWith("http", ignoreCase = true) && seen.none { it.second == iframeSrc }) {
             out += PelisJuanitaStreamSource(
                 serverName = guessServerName(iframeSrc),
@@ -754,15 +805,35 @@ internal object PelisJuanitaMarkup {
             lower.contains("vimeus.") -> "Vimeus"
             lower.contains("vimeos.") -> "Vimeos"
             lower.contains("fortamomar.") -> "Fastserver"
-            lower.contains("playmogo.") || lower.contains("dood") -> "Dood"
-            lower.contains("byse") -> "Byse"
-            lower.contains("voe.") -> "Voe"
+            lower.contains("playmogo.") || lower.contains("dood") || lower.contains("myvidplay") || lower.contains("d000d") || lower.contains("do0od") || lower.contains("ds2play") -> "Dood"
+            lower.contains("byse") || lower.contains("n1mwq.org") -> "Byse"
+            lower.contains("voe.") || lower.contains("caseyseemavoid") -> "Voe"
             lower.contains("lulu") || lower.contains("lplaygo") -> "Lulustream"
             lower.contains("mixdrop") || lower.contains("mxdrop") -> "Mixdrop"
-            lower.contains("vidara") -> "Vidara"
+            lower.contains("vidara") || lower.contains("oisauh") -> "Vidara"
             lower.contains("savefiles") -> "Savefiles"
-            lower.contains("morencius") || lower.contains("callistanise") || lower.contains("minochinos") -> "Earnvids"
-            lower.contains("streamwish") || lower.contains("hglink") -> "Streamwish"
+            lower.contains("morencius") ||
+                lower.contains("callistanise") ||
+                lower.contains("minochinos") ||
+                lower.contains("movearnpre") ||
+                lower.contains("dingtezuni") ||
+                lower.contains("mivalyo") ||
+                lower.contains("taylorplayer") ||
+                lower.contains("vidhide") ||
+                lower.contains("filelions") ||
+                lower.contains("smoothpre") ||
+                lower.contains("peytonepre") ||
+                lower.contains("dhtpre") ||
+                lower.contains("ryderjet") -> "Earnvids"
+            lower.contains("streamwish") ||
+                lower.contains("hglink") ||
+                lower.contains("medixiru") ||
+                lower.contains("vsembed") ||
+                lower.contains("flaswish") ||
+                lower.contains("hlswish") ||
+                lower.contains("playerwish") ||
+                lower.contains("strwish") ||
+                lower.contains("dhcplay") -> "Streamwish"
             else -> runCatching { URI(url).host?.removePrefix("www.") ?: "Servidor" }.getOrDefault("Servidor")
         }
     }
