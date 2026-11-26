@@ -24,7 +24,7 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | pelisplus-to.com | **Sin complemento viable** | Ídem. |
 | cuevana3me.info | **Sin complemento viable** | Ídem; la ruta `/ver.html` de episodios devuelve HTTP 500. |
 | 123pelispop.pro | **Sin complemento viable** | La ficha no expone ninguna fuente de vídeo (`data-url="#"`); solo registro y publicidad. |
-| pelisjuanita.com (`PelisJuanita`) | **Creado desde cero y verificado (v1)** | Portada (27 secciones), paginación, búsqueda y fichas públicas vía `/tv/app/buscar.php` + verificación interactiva del usuario en `Ajustes (⚙) -> PelisJuanita` (WebView sobre `inicio.php` sin automatizar CAPTCHA); portadas TMDB/Coil y reproducción Media3 verificada en 9 servidores (`Vimeus`, `Vimeos`, `Fastserver`, `Earnvids`, `StreamWish`, `Voe`, `Savefiles`, `Vidara`). |
+| pelisjuanita.com (`PelisJuanita`) | **Creado desde cero y verificado (v2)** | Portada (27 secciones), paginación, búsqueda y fichas públicas vía `/tv/app/buscar.php` + verificación interactiva del usuario en `Ajustes (⚙) -> PelisJuanita` (WebView sobre `inicio.php` sin automatizar CAPTCHA); v2 añade restauración de cookies tras limpieza global de `CookieManager`, respaldo `PelisJuanitaWebTransport` ante `403`/`503` vacíos de Cloudflare, carga completa de temporadas/episodios desde fragmentos de `serieInfo.php` (evitando `Próximamente`) y resolución `&p=<id>` en `movieInfo.php`. Portadas TMDB/Coil y reproducción Media3 verificadas en 9 servidores (`Vimeus`, `Vimeos`, `Fastserver`, `Earnvids`, `StreamWish`, `Voe`, `Savefiles`, `Vidara`). |
 | pelisenhd.org | **Sin complemento viable (abortado)** | Solo enlaces DDL `.rar`/`.zip` tras temporizador en `financialtrust.info` y Cloudflare Turnstile en `hdpastes.com`, sin vídeo embebido directo. |
 | Cinecalidad.org | **Verificado con Media3** | API JSON pública (`/wp-api/v1/`): películas, series, animes, novelas y WWE; película, película subtitulada, episodio de serie (10 temporadas / 232 episodios en `csi-miami-2002`) y anime reproducidos con CloudStream + Media3 (`Vimeos` y `Voe`). |
 
@@ -63,7 +63,7 @@ complemento que reproduzca estas obras desde las fuentes públicas**; publicar u
 Evidencia reproducible: `scripts/trap_family_probe.py` (rondas 1-3, runs 45297167223,
 45298286466, 45298720540).
 
-## PelisJuanita.com (v1) — creado desde cero y verificado con Media3
+## PelisJuanita.com (v2) — creado desde cero y verificado con Media3
 
 El sitio web (`https://pelisjuanita.com/`, PHP propio) protege `/movies/*`, `/series/*` y
 `/tv/` mediante un muro de verificación humana en `/inicio.php?redirect=...` (CAPTCHA
@@ -79,10 +79,16 @@ de imagen + casilla de términos + honeypot `empresa_hp`) que emite la cookie de
   - `PelisJuanitaPlugin.openSettings` abre un diálogo Android con `WebView` a pantalla
     completa (`PelisJuanitaVerificationDialog`) donde la propia persona resuelve el CAPTCHA
     de `/inicio.php`; al confirmar sesión activa (o desaparecer el muro en `/movies/`),
-    persiste `PHPSESSID`, cookies y `User-Agent` en `SharedPreferences` y activa el
-    catálogo HTML autenticado (incluidos `/movies/`, `/series/`, temporadas/episodios vía
-    `serieInfo.php` y `movieInfo.php`, con respaldo `PelisJuanitaWebTransport` si Cloudflare
-    presenta reto JavaScript).
+    persiste `PHPSESSID`, cookies (`pelisjuanita.com` y `www.pelisjuanita.com`) y `User-Agent`
+    en `SharedPreferences` y activa el catálogo HTML autenticado:
+    - Reinyecta automáticamente `PHPSESSID` y cookies en `CookieManager` desde `SharedPreferences`
+      antes de abrir `PelisJuanitaWebTransport` si otro complemento ejecutó `removeAllCookies`,
+      y activa el respaldo `WebView` también cuando OkHttp recibe `403`/`503` vacíos de Cloudflare.
+    - Resuelve todas las temporadas y episodios de `serieInfo.php` aunque `#ulTemporada` llegue
+      vacío en el primer fragmento y las peticiones por temporada devuelvan elementos sueltos
+      `<a class="episodio-item">` (evitando el estado erróneo `Próximamente`).
+    - Resuelve y conserva el parámetro obligatorio `&p=<id>` para `movieInfo.php` tanto desde
+      `/tv/app/buscar.php` como desde `/movies/pelicula/<slug>`.
 - **Extractores integrados y propios** (`PelisJuanitaExtractors.kt`):
   - **Vimeus → Vimeos** (resolución de `vimeus.net/e/...` hacia `vimeos.net`), **Fastserver**
     (`pelisplayer.fortamomar.workers.dev` / `seriesplayer.fortamomar.workers.dev`), **Earnvids**
@@ -92,9 +98,12 @@ de imagen + casilla de términos + honeypot `empresa_hp`) que emite la cookie de
     `bysejikuar.com` AES-256-GCM + `ByseSX`) y delegación nativa (`Vidara`, `MixDrop`, etc.).
 - **Verificación real en CloudStream pre-release + Coil 3.3.0 + Media3 ExoPlayer**:
   - Portada de 27 secciones sin vacíos (~1,4 s), paginación, metadatos no verificados con
-    aviso limpio hacia `Ajustes`, 9/9 portadas TMDB con Coil y decodificación real de
-    fotogramas en Media3 en 9 muestras de servidores (`Vimeus` película y serie, `Fastserver`
-    película y serie, `Earnvids`, `StreamWish`, `Voe`, `Savefiles` y `Vidara`).
+    aviso limpio hacia `Ajustes`, flujo completo autenticado en `WebView` (recuperación tras
+    limpiar `CookieManager`, serie multi-temporada con `#ulTemporada` vacío y película con
+    `&p=<id>` + extracción real en `Fastserver`), 10/10 portadas TMDB con Coil y
+    decodificación real de fotogramas en Media3 en 9 muestras de servidores (`Vimeus` película
+    y serie, `Fastserver` película y serie, `Earnvids`, `StreamWish`, `Voe`, `Savefiles` y
+    `Vidara`).
   - Los canales de TV en vivo con claves DRM quedan fuera del complemento.
 
 ## SoloLatino.net
