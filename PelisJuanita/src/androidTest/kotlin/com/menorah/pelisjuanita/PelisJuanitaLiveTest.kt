@@ -113,11 +113,17 @@ class PelisJuanitaLiveTest {
             parsedPage2.items.first().url != parsedPage1.items.first().url,
         )
 
-        val seriesSlicePage = (parsedPage1.totalPages * 3) / 4
-        val rawSeriesSlice = getText(PelisJuanitaMarkup.buildSearchApiUrl("%", seriesSlicePage))
-        val parsedSeriesSlice = PelisJuanitaMarkup.parseSearchJson(rawSeriesSlice)
-        assertNotNull("Series slice parsed", parsedSeriesSlice)
-        assertTrue("Expected series records in slice page $seriesSlicePage", parsedSeriesSlice!!.items.any { it.kind == PelisJuanitaItemKind.Series })
+        val seriesProbePages = listOf(
+            parsedPage1.totalPages,
+            (parsedPage1.totalPages * 5) / 6,
+            (parsedPage1.totalPages * 3) / 4,
+        ).distinct()
+        val seriesSliceFound = seriesProbePages.any { probePage ->
+            val rawSeriesSlice = getText(PelisJuanitaMarkup.buildSearchApiUrl("%", probePage))
+            val parsedSeriesSlice = PelisJuanitaMarkup.parseSearchJson(rawSeriesSlice)
+            parsedSeriesSlice != null && parsedSeriesSlice.items.any { it.kind == PelisJuanitaItemKind.Series }
+        }
+        assertTrue("Expected series records in slice pages $seriesProbePages", seriesSliceFound)
 
         val rawMatrix = getText(PelisJuanitaMarkup.buildSearchApiUrl("matrix", 1))
         val parsedMatrix = PelisJuanitaMarkup.parseSearchJson(rawMatrix)

@@ -290,11 +290,11 @@ class PelisJuanitaProvider(
         val total = firstPage.totalPages
         if (total <= 1) return emptyList()
 
-        // buscar.php returns ~20k movies before ~7.6k series; jump into the series slice once and cache it.
+        // buscar.php lists movies first (~75-85% of pages) and series toward the end; start from the tail.
         val probePages = listOf(
-            ((total * 3) / 4 + requestedPage - 1).coerceIn(1, total),
             (total - requestedPage + 1).coerceIn(1, total),
-            ((total / 2) + requestedPage - 1).coerceIn(1, total),
+            ((total * 5) / 6 + requestedPage - 1).coerceIn(1, total),
+            ((total * 3) / 4 + requestedPage - 1).coerceIn(1, total),
             (requestedPage + 10).coerceIn(1, total),
         ).distinct()
 
