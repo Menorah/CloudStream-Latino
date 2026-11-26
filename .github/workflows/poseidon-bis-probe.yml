@@ -1,0 +1,17 @@
+name: Probe PoseidonHD2 bis
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/poseidon-bis-probe.yml', 'scripts/poseidon_bis_probe.py']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe home and JS routes
+        run: python3 scripts/poseidon_bis_probe.py home
+      - name: Probe catalog, pagination and search routes
+        run: python3 scripts/poseidon_bis_probe.py catalog
+      - name: Probe movie, series and episode details
+        run: python3 scripts/poseidon_bis_probe.py details
