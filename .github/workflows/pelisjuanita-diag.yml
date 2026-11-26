@@ -1,4 +1,4 @@
-name: Sonda Hosts Protocolo Completo Diag
+name: Sonda Byse PoW Playback y StreamWish/vsembed/Dood Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,14 +10,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 1. Test Byse challenge->attest->playback & routes
+      - name: 1. Test full Byse PoW + POST playback + decrypt
         shell: python3 {0}
         run: |
-          import base64, hashlib, json, re, urllib.request, urllib.error, http.cookiejar
+          import base64, hashlib, json, re, struct, urllib.request, urllib.error, http.cookiejar
+          from urllib.parse import urlparse
+          from cryptography.hazmat.primitives.asymmetric import ec
+          from cryptography.hazmat.primitives import hashes
+          from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
           def emit(title, text):
               for i in range(0, len(text), 3500):
                   chunk = text[i:i+3500].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
                   print(f'::notice title={title}_{i//3500}::{chunk}')
+          def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+          def b64u_dec(s):
+              s = s.replace('-', '+').replace('_', '/')
+              return base64.b64decode(s + '=' * ((4 - len(s) % 4) % 4))
+
           ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
           def req(url, ref='https://n1mwq.org/', method='GET', hdrs=None, body=None, opener=None):
               try:
@@ -30,66 +41,128 @@ jobs:
               except Exception as e:
                   return -1, url, {}, repr(e)
 
-          # Check routes in index-DocunfmE.js
-          _, _, _, idx_js = req('https://n1mwq.org/assets/index-DocunfmE.js')
-          routes = re.findall(r'path:"[^"]{1,60}"[^}]{0,120}', idx_js)
-          emit('byse_routes', '\n'.join(routes[:35]))
+          # Port of pow-DEJGtdh2.js Er/gr/wr
+          def rotl32(x, n): return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
+          def quarter(t):
+              t[0]=(t[0]+t[1])&0xFFFFFFFF; t[3]=rotl32(t[3]^t[0],16)
+              t[2]=(t[2]+t[3])&0xFFFFFFFF; t[1]=rotl32(t[1]^t[2],12)
+              t[0]=(t[0]+t[1])&0xFFFFFFFF; t[3]=rotl32(t[3]^t[0],8)
+              t[2]=(t[2]+t[3])&0xFFFFFFFF; t[1]=rotl32(t[1]^t[2],7)
+          def gr(data):
+              e = [1779033703, 3144134277, 1013904242, 2773480762]
+              for b in data:
+                  e[0] = rotl32((e[0] + b) & 0xFFFFFFFF, 7)
+                  quarter(e)
+              for _ in range(8): quarter(e)
+              r = [0]*512
+              for i in range(512):
+                  quarter(e)
+                  r[i] = (e[0] ^ e[2]) & 0xFFFFFFFF
+              for _ in range(2):
+                  for s in range(512):
+                      a = r[s] & 511
+                      c = rotl32((r[s] + r[a]) & 0xFFFFFFFF, 13)
+                      c = (c ^ ((r[(s + 1) & 511] * 2654435761) & 0xFFFFFFFF)) & 0xFFFFFFFF
+                      r[s] = c
+                      e[0] = (e[0] ^ c) & 0xFFFFFFFF
+                      quarter(e)
+              n = [0]*8
+              for i in range(8):
+                  quarter(e)
+                  s = e[0]
+                  base = i * 64
+                  for c in range(64):
+                      d = r[base + c]
+                      s = rotl32((s + d) & 0xFFFFFFFF, 5)
+                      s = (s ^ ((d * 2246822519) & 0xFFFFFFFF)) & 0xFFFFFFFF
+                  n[i] = (s ^ e[2]) & 0xFFFFFFFF
+              return n
+          def wr(arr):
+              bits = 0
+              for v in arr:
+                  if v == 0: bits += 32
+                  else: return bits + (32 - v.bit_length())
+              return bits
+          def solve_pow(nonce, diff):
+              if diff <= 0: return '0'
+              prefix = (nonce + ':').encode('latin1')
+              s = 0
+              while True:
+                  d = gr(prefix + str(s).encode('latin1'))
+                  if wr(d) >= diff: return str(s)
+                  s += 1
 
-          # Check cryptography ECDSA P-256 attest -> playback
-          from cryptography.hazmat.primitives.asymmetric import ec
-          from cryptography.hazmat.primitives import hashes
-          from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+          _, _, _, det = req('https://bysesukior.com/api/videos/92rgcn88ka85/embed/details', 'https://bysesukior.com/e/92rgcn88ka85')
+          frame_url = json.loads(det)['embed_frame_url']
+          f_origin = f'{urlparse(frame_url).scheme}://{urlparse(frame_url).netloc}'
+          f_code = urlparse(frame_url).path.rstrip('/').split('/')[-1]
 
-          def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
-
+          op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
           priv = ec.generate_private_key(ec.SECP256R1())
           nums = priv.public_key().public_numbers()
           jwk = {'kty': 'EC', 'crv': 'P-256', 'x': b64u(nums.x.to_bytes(32, 'big')), 'y': b64u(nums.y.to_bytes(32, 'big'))}
 
-          # First get embed_frame_url from bysesukior.com
-          _, _, _, det = req('https://bysesukior.com/api/videos/92rgcn88ka85/embed/details', 'https://bysesukior.com/e/92rgcn88ka85')
-          frame_url = json.loads(det)['embed_frame_url']
-          from urllib.parse import urlparse
-          f_origin = f'{urlparse(frame_url).scheme}://{urlparse(frame_url).netloc}'
-          f_code = urlparse(frame_url).path.rstrip('/').split('/')[-1]
-
-          cj = http.cookiejar.CookieJar()
-          op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-          sc, _, _, ch_raw = req(f'{f_origin}/api/videos/access/challenge', frame_url, 'POST', {'Origin': f_origin}, b'', op)
+          _, _, _, ch_raw = req(f'{f_origin}/api/videos/access/challenge', frame_url, 'POST', {'Origin': f_origin}, b'', op)
           ch = json.loads(ch_raw)
-          der_sig = priv.sign(ch['nonce'].encode(), ec.ECDSA(hashes.SHA256()))
-          r_int, s_int = decode_dss_signature(der_sig)
-          raw_sig = r_int.to_bytes(32, 'big') + s_int.to_bytes(32, 'big')
+          r_int, s_int = decode_dss_signature(priv.sign(ch['nonce'].encode(), ec.ECDSA(hashes.SHA256())))
           att_body = json.dumps({
               'viewer_id': '', 'device_id': '', 'challenge_id': ch['challenge_id'], 'nonce': ch['nonce'],
-              'signature': b64u(raw_sig), 'public_key': jwk,
+              'signature': b64u(r_int.to_bytes(32, 'big') + s_int.to_bytes(32, 'big')), 'public_key': jwk,
               'client': {'user_agent': ua, 'platform': 'Linux armv8l', 'languages': ['es-MX'], 'timezone': 'America/Mexico_City'},
               'storage': {}, 'attributes': {'entropy': 'low'},
           }).encode()
-          sa, _, _, att_raw = req(f'{f_origin}/api/videos/access/attest', frame_url, 'POST', {'Origin': f_origin, 'Content-Type': 'application/json'}, att_body, op)
-          att = json.loads(att_raw) if sa == 200 else {}
-          fp = {'viewer_id': att.get('viewer_id',''), 'device_id': att.get('device_id',''), 'token': att.get('token',''), 'confidence': att.get('confidence','')}
+          _, _, _, att_raw = req(f'{f_origin}/api/videos/access/attest', frame_url, 'POST', {'Origin': f_origin, 'Content-Type': 'application/json'}, att_body, op)
+          att = json.loads(att_raw)
+          fp = {'viewer_id': att['viewer_id'], 'device_id': att['device_id'], 'token': att['token'], 'confidence': att['confidence']}
 
-          out = [f'frame_url={frame_url} chal={sc} att={sa}:{att_raw[:250]}']
-          for ep in ['embed/playback', 'playback', 'embed/details', 'details']:
-              for mth, bdy in [('GET', None), ('POST', json.dumps({'fingerprint': fp}).encode()), ('POST', json.dumps({'fingerprint': fp, 'viewer_id': fp['viewer_id']}).encode())]:
-                  if mth == 'POST' and bdy.endswith(b'viewer_id": ""}'): continue
-                  sp, _, _, pb_raw = req(
-                      f'{f_origin}/api/videos/{f_code}/{ep}',
-                      frame_url,
-                      mth,
+          # Now test both 'embed' and 'watch' captcha -> verify -> playback
+          out = []
+          for prefix in ['embed/', '']:
+              sc, _, _, cap_raw = req(
+                  f'{f_origin}/api/videos/{f_code}/{prefix}captcha',
+                  frame_url, 'POST',
+                  {'Origin': f_origin, 'Content-Type': 'application/json', 'X-Embed-Parent': 'https://bysesukior.com/', 'X-Embed-Origin': 'bysesukior.com', 'X-Embed-Referer': 'https://pelisjuanita.com/'},
+                  json.dumps({'fingerprint': fp}).encode(), op,
+              )
+              out.append(f'{prefix}captcha -> {sc} {cap_raw[:300]}')
+              if sc == 200:
+                  cap = json.loads(cap_raw)
+                  sol = solve_pow(cap['pow_nonce'], cap['pow_difficulty'])
+                  sv, _, _, ver_raw = req(
+                      f'{f_origin}/api/videos/{f_code}/{prefix}captcha/verify',
+                      frame_url, 'POST',
                       {'Origin': f_origin, 'Content-Type': 'application/json', 'X-Embed-Parent': 'https://bysesukior.com/', 'X-Embed-Origin': 'bysesukior.com', 'X-Embed-Referer': 'https://pelisjuanita.com/'},
-                      bdy,
-                      op,
+                      json.dumps({'pow_token': cap['pow_token'], 'solution': sol, 'fingerprint': fp}).encode(), op,
                   )
-                  out.append(f'{mth} {ep} -> {sp} {pb_raw[:350]}')
-          emit('byse_flow', '\n'.join(out))
+                  out.append(f'{prefix}verify(sol={sol}) -> {sv} {ver_raw[:300]}')
+                  if sv == 200:
+                      cap_tok = json.loads(ver_raw)['token']
+                      sp, _, _, pb_raw = req(
+                          f'{f_origin}/api/videos/{f_code}/{prefix}playback',
+                          frame_url, 'POST',
+                          {'Origin': f_origin, 'Content-Type': 'application/json', 'X-Captcha-Token': cap_tok, 'X-Embed-Parent': 'https://bysesukior.com/', 'X-Embed-Origin': 'bysesukior.com', 'X-Embed-Referer': 'https://pelisjuanita.com/'},
+                          json.dumps({'fingerprint': fp}).encode(), op,
+                      )
+                      out.append(f'{prefix}playback -> {sp} {pb_raw[:450]}')
+                      if sp == 200:
+                          pb = json.loads(pb_raw).get('playback', {})
+                          ver = str(pb.get('version', '')).strip()
+                          kps = pb.get('key_parts', [])
+                          if ver.isdigit() and 1 <= int(ver) <= 20:
+                              v = int(ver)
+                              sel = [kps[v - 1], kps[31 - v - 1]]
+                          else:
+                              sel = kps
+                          key = b''.join(b64u_dec(p) for p in sel)
+                          plain = AESGCM(key).decrypt(b64u_dec(pb['iv']), b64u_dec(pb['payload']), None).decode('utf-8-sig')
+                          out.append(f'{prefix}DECRYPTED -> {plain[:500]}')
+          emit('byse_e2e', '\n'.join(out))
 
-      - name: 2. Check StreamWish main.js (via node), vsembed tracking, Vidara, Morencius
+      - name: 2. Check vsembed JS crypto, streamwish.to/main.js targets, and dood mirrors
         shell: bash
         run: |
           python3 - <<'PY'
-          import json, re, urllib.request, urllib.error, subprocess
+          import json, re, subprocess, urllib.request, urllib.error
           def emit(title, text):
               for i in range(0, len(text), 3500):
                   chunk = text[i:i+3500].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
@@ -104,38 +177,50 @@ jobs:
               except Exception as e:
                   return -1, url, {}, repr(e)
 
-          # StreamWish main.js -> inspect string array by running decoder or regexes
-          sc, su, _, sb = get('https://streamwish.to/main.js?v=1.1.9', 'https://streamwish.to/e/k9u77dklzfob')
-          # Save main.js and extract all decoded strings in node safely
-          open('/tmp/sw_main.js', 'w').write(sb)
-          node_res = subprocess.run(['node', '-e', """
-            const fs = require('fs');
-            const code = fs.readFileSync('/tmp/sw_main.js', 'utf8');
-            // print function names and URL-like literals after running string rotation
-            const m = code.match(/^\\(function\\(_0x[0-9a-f]+,_0x[0-9a-f]+\\)\\{.*?\\}\\(_0x[0-9a-f]+,[^)]+\\)\\);function _0x[0-9a-f]+\\(.*?return _0x[0-9a-f]+;\\}\\(\\s*\\)\\}\\)/s);
-            console.log('len=', code.length, 'tail=', code.slice(-1500));
-          """], capture_output=True, text=True)
-          emit('sw_tail', node_res.stdout + '\nERR:' + node_res.stderr)
-
-          # Check vsembed.com/cjvk HTML and JS bundle
+          # Check vsembed JS crypto implementation around keyChars / tracking
           vc, vu, _, vb = get('https://medixiru.com/e/k9u77dklzfob', 'https://streamwish.to/')
           m = re.search(r'src="(/assets/[^"]+\.js)"', vb)
-          vjs_info = ''
           if m:
               _, _, _, vjs = get('https://vsembed.com' + m.group(1), vu)
-              k = re.search(r'keyChars=(\[[^\]]+\])', vjs)
-              s = re.search(r'saltChars=(\[[^\]]+\])', vjs)
-              tr = re.findall(r'.{0,60}(?:tracking|x-tracking|/api/stream).{0,80}', vjs)
-              vjs_info = f'key={k.group(1) if k else None} salt={s.group(1) if s else None} tr={tr[:5]}'
-          emit('vsembed_info', f'vc={vc} vu={vu} {vjs_info}')
+              idx = vjs.find('keyChars')
+              emit('vsembed_crypto', vjs[max(0, idx-300):idx+2200])
+              idx2 = vjs.find('x-tracking')
+              emit('vsembed_tracking', vjs[max(0, idx2-600):idx2+600])
 
-          # Check Vidara, Voe (from series), Savefiles, Morencius
-          for lbl, u in [
-              ('vidara', 'https://vidara.to/e/HnuAfGnH5Z97l'),
-              ('savefiles', 'https://savefiles.com/e/lpkobe2ki65z'),
-              ('voe_madden', 'https://voe.sx/e/ltvamjdzsvxv'),
-              ('morencius', 'https://morencius.com/embed/036yf8jywyhr'),
-          ]:
-              c, fu, _, b = get(u)
-              emit('host_' + lbl, f'{c} {fu} len={len(b)} head={b[:300]}')
+          # Decode streamwish.to/main.js safely in node by replacing document/window navigation with log
+          _, _, _, sw = get('https://streamwish.to/main.js?v=1.1.9', 'https://streamwish.to/e/k9u77dklzfob')
+          open('/tmp/sw.js', 'w').write(sw)
+          res = subprocess.run(['node', '-e', """
+            const fs = require('fs');
+            const sw = fs.readFileSync('/tmp/sw.js', 'utf8');
+            // Intercept string decoder calls or replace location/redirect in vm
+            const vm = require('vm');
+            const ctx = {
+              window: { location: { href: 'https://streamwish.to/e/k9u77dklzfob', pathname: '/e/k9u77dklzfob', search: '' }, top: null, self: null },
+              document: { referrer: 'https://pelisjuanita.com/', createElement: () => ({ style: {}, setAttribute: ()=>{}, appendChild: ()=>{} }), body: { appendChild: ()=>{} }, head: { appendChild: ()=>{} }, getElementsByTagName: () => [{}] },
+              navigator: { userAgent: 'Mozilla/5.0' },
+              location: { href: 'https://streamwish.to/e/k9u77dklzfob', pathname: '/e/k9u77dklzfob', search: '', replace: u => console.log('REPLACE:', u), assign: u => console.log('ASSIGN:', u) },
+              fetch: (u, o) => { console.log('FETCH:', u, o); return Promise.resolve({ ok: true, json: async ()=>({}) }); },
+              XMLHttpRequest: function() { return { open: (m,u) => console.log('XHR:', m, u), send: ()=>{}, setRequestHeader: ()=>{} }; },
+              setTimeout: (fn) => { try { fn(); } catch(e) {} },
+              setInterval: () => 0,
+              atob: s => Buffer.from(s, 'base64').toString('binary'),
+              btoa: s => Buffer.from(s, 'binary').toString('base64'),
+              console,
+            };
+            ctx.window.top = ctx.window; ctx.window.self = ctx.window;
+            ctx.window.location = ctx.location;
+            try { vm.runInNewContext(sw, ctx, { timeout: 1000 }); } catch (e) { console.log('VM_ERR:', e.message); }
+            console.log('LOC_HREF:', ctx.location.href);
+          """], capture_output=True, text=True)
+          emit('sw_vm', res.stdout + '\nERR:' + res.stderr)
+
+          # Check Dood mirrors for 8dl5bxs3pzrv
+          dood_out = []
+          for h in ['https://d000d.com', 'https://myvidplay.com', 'https://do0od.com', 'https://dood.li', 'https://ds2play.com', 'https://dood.la', 'https://doodstream.com']:
+              c, u, _, b = get(f'{h}/e/8dl5bxs3pzrv', 'https://pelisjuanita.com/')
+              has_md5 = 'pass_md5' in b
+              has_cf = 'turnstile' in b.lower() or 'cf-chl' in b.lower()
+              dood_out.append(f'{h} -> {c} {u} pass_md5={has_md5} turnstile={has_cf} len={len(b)}')
+          emit('dood_mirrors', '\n'.join(dood_out))
           PY
