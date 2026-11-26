@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Probe search JS and pagination
-        run: python3 scripts/poseidon_bis_probe.py search_js
-      - name: Inspect all cyberlocker hosts live
-        run: python3 scripts/poseidon_bis_probe.py inspect_all_hosts
+      - name: Deep probe hosts and m3u8/mp4 streams
+        run: python3 scripts/poseidon_bis_probe.py hosts_deep
+      - name: Probe recent movie cyberlockers and site JS chunks
+        run: python3 scripts/poseidon_bis_probe.py site_js_and_more
