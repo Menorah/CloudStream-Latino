@@ -206,12 +206,13 @@ class PelisJuanitaLiveTest {
             fun inspectGate(view: WebView, attempt: Int) {
                 if (done.get()) return
                 view.evaluateJavascript(
-                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form')||!!window._cf_chl_opt||document.body.innerText.indexOf('Cloudflare')>=0,title:document.title})",
+                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form')||!!window._cf_chl_opt||(document.body&&document.body.innerText.indexOf('Cloudflare')>=0),title:document.title})",
                 ) { res ->
                     val raw = res ?: ""
                     webViewCheck.set(raw)
                     val gotCaptcha = raw.contains("hasCaptcha\\\":true") || raw.contains("hasCaptcha\":true")
-                    if (gotCaptcha || attempt >= 6) {
+                    val gotCf = raw.contains("hasCf\\\":true") || raw.contains("hasCf\":true")
+                    if (gotCaptcha || (gotCf && attempt >= 2) || attempt >= 6) {
                         if (done.compareAndSet(false, true)) {
                             wv.destroy()
                             latch.countDown()
@@ -228,9 +229,12 @@ class PelisJuanitaLiveTest {
                     }
                 }
             }
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!done.get()) inspectGate(wv, 0)
+            }, 12_000L)
             wv.loadUrl("${PelisJuanitaMarkup.MAIN_URL}/inicio.php?redirect=%2Fmovies%2F")
         }
-        assertTrue("WebView loaded inicio.php in time", latch.await(35, TimeUnit.SECONDS))
+        assertTrue("WebView loaded inicio.php in time", latch.await(60, TimeUnit.SECONDS))
         val wvResult = webViewCheck.get()
         val hasGate = wvResult.contains("hasCaptcha\\\":true") ||
             wvResult.contains("hasCaptcha\":true") ||
