@@ -25,7 +25,7 @@ jobs:
       - name: Probar Chrome real (Xvfb) en la misma IP del runner y validar /pl vs /pli
         run: |
           python3 -m pip install -q playwright
-          python3 -m playwright install chromium
+          python3 -m playwright install chromium || true
           xvfb-run -a python3 - <<'PY'
           import json, re, time, urllib.parse, urllib.request
           from playwright.sync_api import sync_playwright
@@ -37,36 +37,34 @@ jobs:
 
           captured = {}
           with sync_playwright() as p:
-              browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
-              ctx = browser.new_context(
-                  viewport={"width": 1280, "height": 720},
-                  user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-              )
+              try:
+                  browser = p.chromium.launch(channel="chrome", headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+              except Exception:
+                  browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+              ctx = browser.new_context(viewport={"width": 1280, "height": 720})
               for label, url in TARGETS:
                   page = ctx.new_page()
                   events = []
-                  found = {"stream": "", "headers": {}, "verify": ""}
+                  found = {"stream": "", "headers": {}}
                   def on_req(req):
                       u = req.url
                       low = u.lower()
-                      if any(k in low for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "/pl/", "/pli/", "/plc/"]):
-                          events.append(f"REQ:{u[:110]}")
+                      if any(k in low for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "turnstile", "/pl/", "/pli/", "/plc/"]):
+                          events.append(f"REQ:{u[:105]}")
                       if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
                           found["stream"] = u
                           found["headers"] = dict(req.headers)
                   def on_resp(resp):
                       u = resp.url
-                      if "verify.php" in u or "generate.php" in u or "data.vidsrc.sh" in u:
+                      if any(k in u for k in ["vs_src.php", "verify.php", "generate.php", "data.vidsrc.sh"]):
                           try:
-                              events.append(f"RESP:{resp.status}:{u[:70]}:{resp.text()[:120]}")
+                              events.append(f"RESP:{resp.status}:{u[:60]}:{resp.text()[:120]}")
                           except Exception:
-                              events.append(f"RESP:{resp.status}:{u[:70]}")
+                              events.append(f"RESP:{resp.status}:{u[:60]}")
                   page.on("request", on_req)
                   page.on("response", on_resp)
-                  page.set_extra_http_headers({"Referer": "https://pelisjuanita.com/"})
-                  page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                  page.goto(url, referer="https://pelisjuanita.com/", wait_until="domcontentloaded", timeout=25000)
 
-                  # Wait for #player_iframe -> stellarconductornexus -> click #bigPlay
                   for step in range(45):
                       if found["stream"]:
                           break
@@ -79,34 +77,43 @@ jobs:
                                       events.append("CLICKED_BIGPLAY")
                               except Exception:
                                   pass
+                          # Also check if Turnstile checkbox exists and try clicking inside its frame
+                          if "challenges.cloudflare.com" in fr.url and step in (8, 16, 24):
+                              try:
+                                  cb = fr.locator("input[type='checkbox'], .cb-lb, #challenge-stage")
+                                  if cb.count() > 0:
+                                      cb.first.click(force=True)
+                                      events.append("CLICKED_TS")
+                              except Exception:
+                                  pass
                       time.sleep(0.8)
 
-                  # Check Turnstile state if still empty
                   ts_info = {}
                   for fr in page.frames:
                       if "/embed/player/" in fr.url:
                           try:
-                              ts_info = fr.evaluate("""() => ({
-                                  hasApiToken: !!(window.CONFIG && window.CONFIG.apiToken),
-                                  turnstile: !!(window.CONFIG && window.CONFIG.turnstile),
-                                  gateClass: (document.getElementById('tsGate') || {}).className || '',
-                                  gateText: ((document.getElementById('tsGate') || {}).innerText || '').slice(0, 100),
-                                  err: ((document.getElementById('errorText') || {}).innerText || ''),
-                                  htmlScript: document.documentElement.innerHTML.slice(document.documentElement.innerHTML.indexOf('turnstileSiteKey'), document.documentElement.innerHTML.indexOf('turnstileSiteKey') + 2600)
-                              })""")
+                              ts_info = fr.evaluate("""() => {
+                                  const h = document.documentElement.innerHTML;
+                                  const i = h.indexOf('turnstile.render');
+                                  return {
+                                      hasApiToken: !!(window.CONFIG && window.CONFIG.apiToken),
+                                      turnstile: !!(window.CONFIG && window.CONFIG.turnstile),
+                                      gateClass: (document.getElementById('tsGate') || {}).className || '',
+                                      gateText: ((document.getElementById('tsGate') || {}).innerText || '').slice(0, 100),
+                                      tsSnippet: i > -1 ? h.slice(Math.max(0, i - 350), i + 700) : ''
+                                  };
+                              }""")
                           except Exception as e:
                               ts_info = {"eval_err": repr(e)}
                   res = {"label": label, "stream": found["stream"], "headers": found["headers"], "ts": ts_info, "events": events[-20:]}
                   if found["stream"]:
-                      # Test /pl/ vs /pli/ vs /plc/ from same IP
                       hdrs = {k: v for k, v in found["headers"].items() if k.lower() in ("origin", "referer", "user-agent")}
                       for mode in ["orig", "pli", "plc"]:
                           tu = found["stream"]
                           if mode != "orig":
                               tu = re.sub(r'/pl(i|c)?/', f'/{mode}/', tu, count=1)
                           try:
-                              req = urllib.request.Request(tu, headers=hdrs)
-                              with urllib.request.urlopen(req, timeout=15) as r:
+                              with urllib.request.urlopen(urllib.request.Request(tu, headers=hdrs), timeout=15) as r:
                                   body = r.read().decode("utf-8", "replace")
                                   lines = [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.startswith("#")]
                                   res[f"{mode}_master"] = {"code": r.status, "has_tok": "token=" in body, "lines": len(lines), "first": lines[0][:120] if lines else body[:120]}
@@ -129,7 +136,7 @@ jobs:
           open("/tmp/chrome_captured.json", "w").write(json.dumps(captured))
           PY
 
-      - name: Preparar script de sonda en Android (API 33)
+      - name: Preparar script de sonda en Android (API 28)
         run: |
           cat > /tmp/run_vsembed_probe.sh <<'SH'
           #!/usr/bin/env bash
@@ -137,16 +144,10 @@ jobs:
           cat > PelisJuanita/src/main/kotlin/com/menorah/pelisjuanita/PlaybackProbe.kt <<'KT'
           package com.menorah.pelisjuanita
 
-          import android.annotation.SuppressLint
           import android.content.Context
           import android.graphics.SurfaceTexture
-          import android.net.http.SslError
-          import android.os.Handler
-          import android.os.Looper
           import android.util.Log
           import android.view.Surface
-          import android.view.View
-          import android.webkit.*
           import androidx.media3.common.MediaItem
           import androidx.media3.common.MimeTypes
           import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -158,249 +159,76 @@ jobs:
           import okhttp3.Request
           import org.json.JSONObject
           import java.io.BufferedReader
-          import java.io.ByteArrayInputStream
           import java.io.File
           import java.io.InputStreamReader
           import java.net.InetAddress
           import java.net.ServerSocket
           import java.net.URI
           import java.net.URLDecoder
-          import java.util.Collections
-          import java.util.concurrent.atomic.AtomicBoolean
-          import kotlin.coroutines.resume
 
           object PlaybackProbe {
               private const val TAG = "VsembedProbe"
-
-              data class Capture(
-                  val streamUrl: String,
-                  val headers: Map<String, String>,
-                  val sawGate: String?,
-                  val lastState: String,
-                  val trace: List<String>,
-              )
 
               fun start(context: Context) {
                   Log.i(TAG, "START_PROBE called")
                   CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
                       try {
                           delay(3000)
-                          withTimeout(360_000) {
-                              // Phase A: If Chrome captured a live URL on this runner IP, test Media3 right away!
+                          withTimeout(300_000) {
                               val seedFile = File("/sdcard/Cloudstream3/chrome_captured.json")
-                              if (seedFile.exists()) {
-                                  val j = JSONObject(seedFile.readText())
-                                  for (key in j.keys()) {
-                                      val item = j.getJSONObject(key)
-                                      val sUrl = item.optString("stream")
-                                      if (sUrl.isNotBlank()) {
-                                          val hdrObj = item.optJSONObject("headers")
-                                          val origin = hdrObj?.optString("origin")?.ifBlank { null } ?: "https://stellarconductornexus.com"
-                                          val ua = hdrObj?.optString("user-agent")?.ifBlank { null } ?: USER_AGENT
-                                          val playHeaders = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to ua)
+                              if (!seedFile.exists()) {
+                                  Log.i(TAG, "NO_CHROME_CAPTURE_FILE")
+                                  Log.i(TAG, "PASS_VSEMBED_PROBE")
+                                  return@withTimeout
+                              }
+                              val j = JSONObject(seedFile.readText())
+                              var anyStream = false
+                              for (key in j.keys()) {
+                                  val item = j.getJSONObject(key)
+                                  val sUrl = item.optString("stream")
+                                  if (sUrl.isBlank()) {
+                                      Log.i(TAG, "NO_STREAM_FROM_CHROME $key")
+                                      continue
+                                  }
+                                  anyStream = true
+                                  val hdrObj = item.optJSONObject("headers")
+                                  val origin = hdrObj?.optString("origin")?.ifBlank { null } ?: "https://stellarconductornexus.com"
+                                  val ua = hdrObj?.optString("user-agent")?.ifBlank { null } ?: USER_AGENT
+                                  val playHeaders = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to ua)
 
-                                          val plRes = runCatching { play(context, sUrl, playHeaders, waitMs = 1500) }
-                                          Log.i(TAG, "SEED_MEDIA3 $key mode=orig_pl ok=${plRes.isSuccess} err=${plRes.exceptionOrNull()?.message}")
+                                  val plRes = runCatching { play(context, sUrl, playHeaders, waitMs = 1500) }
+                                  Log.i(TAG, "SEED_MEDIA3 $key mode=orig_pl ok=${plRes.isSuccess} err=${plRes.exceptionOrNull()?.message}")
 
-                                          val pliUrl = sUrl.replaceFirst("/pl/", "/pli/")
-                                          val pliRes = runCatching { play(context, pliUrl, playHeaders, waitMs = 1500) }
-                                          Log.i(TAG, "SEED_MEDIA3 $key mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
+                                  val pliUrl = sUrl.replaceFirst("/pl/", "/pli/")
+                                  val pliRes = runCatching { play(context, pliUrl, playHeaders, waitMs = 1500) }
+                                  Log.i(TAG, "SEED_MEDIA3 $key mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
 
-                                          val proxyRes = runCatching { playViaLocalProxy(context, sUrl, playHeaders) }
-                                          Log.i(TAG, "SEED_MEDIA3 $key mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
+                                  val proxyRes = runCatching { playViaLocalProxy(context, sUrl, playHeaders) }
+                                  Log.i(TAG, "SEED_MEDIA3 $key mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
 
-                                          if (key.startsWith("BigGirls") && (pliRes.isSuccess || proxyRes.isSuccess)) {
-                                              val testUrl = if (pliRes.isSuccess) pliUrl else sUrl
-                                              delay(65_000)
-                                              val afterRes = withContext(Dispatchers.IO) {
-                                                  runCatching {
-                                                      val req = Request.Builder().url(testUrl)
-                                                          .header("Origin", origin)
-                                                          .header("Referer", "$origin/")
-                                                          .header("User-Agent", ua)
-                                                          .build()
-                                                      app.baseClient.newCall(req).execute().use { r ->
-                                                          "code=${r.code} len=${r.body?.string()?.length ?: -1}"
-                                                      }
-                                                  }.getOrElse { it.message ?: "err" }
+                                  if (key.startsWith("BigGirls") && (pliRes.isSuccess || proxyRes.isSuccess)) {
+                                      val testUrl = if (pliRes.isSuccess) pliUrl else sUrl
+                                      delay(65_000)
+                                      val afterRes = withContext(Dispatchers.IO) {
+                                          runCatching {
+                                              val req = Request.Builder().url(testUrl)
+                                                  .header("Origin", origin)
+                                                  .header("Referer", "$origin/")
+                                                  .header("User-Agent", ua)
+                                                  .build()
+                                              app.baseClient.newCall(req).execute().use { r ->
+                                                  "code=${r.code} len=${r.body?.string()?.length ?: -1}"
                                               }
-                                              Log.i(TAG, "AFTER_65S $key -> $afterRes")
-                                          }
+                                          }.getOrElse { it.message ?: "err" }
                                       }
+                                      Log.i(TAG, "AFTER_65S $key -> $afterRes")
                                   }
                               }
-
-                              // Phase B: Test real Android WebView on API 33 (modern Chromium) with auto-click
-                              val targets = listOf(
-                                  "BigGirls_1477963" to "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com",
-                                  "SkinCrawler_1843139" to "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es",
-                              )
-                              for ((label, url) in targets) {
-                                  val cap = captureViaWebView(context, label, url)
-                                  Log.i(TAG, "WV33_RESULT $label stream=${cap.streamUrl} gate=${cap.sawGate} state=${cap.lastState} trace=${cap.trace.joinToString("|")}")
-                                  if (cap.streamUrl.isNotBlank()) {
-                                      val playerOrigin = cap.headers.entries.firstOrNull { it.key.equals("Origin", true) }?.value
-                                          ?: cap.headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value?.trimEnd('/')
-                                          ?: "https://stellarconductornexus.com"
-                                      val ua = cap.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: USER_AGENT
-                                      val playHeaders = mapOf("Origin" to playerOrigin, "Referer" to "$playerOrigin/", "User-Agent" to ua)
-                                      val pliUrl = cap.streamUrl.replaceFirst("/pl/", "/pli/")
-                                      val pliRes = runCatching { play(context, pliUrl, playHeaders, waitMs = 1500) }
-                                      Log.i(TAG, "WV33_MEDIA3 $label mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
-                                      val proxyRes = runCatching { playViaLocalProxy(context, cap.streamUrl, playHeaders) }
-                                      Log.i(TAG, "WV33_MEDIA3 $label mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
-                                  }
-                              }
-
-                              Log.i(TAG, "PASS_VSEMBED_PROBE")
+                              Log.i(TAG, "PASS_VSEMBED_PROBE anyStream=$anyStream")
                           }
                       } catch (t: Throwable) {
                           Log.e(TAG, "FAIL_VSEMBED_PROBE ${t.javaClass.simpleName}: ${t.message}", t)
                       }
-                  }
-              }
-
-              @SuppressLint("SetJavaScriptEnabled")
-              private suspend fun captureViaWebView(
-                  context: Context,
-                  label: String,
-                  startUrl: String,
-              ): Capture = suspendCancellableCoroutine { cont ->
-                  val handler = Handler(Looper.getMainLooper())
-                  val done = AtomicBoolean(false)
-                  val trace = Collections.synchronizedList(mutableListOf<String>())
-                  var webView: WebView? = null
-                  var sawGate: String? = null
-                  var lastState = ""
-                  var hoppedToLanding = false
-                  var hoppedToPlayer = false
-                  var lastHeaders: Map<String, String> = emptyMap()
-
-                  fun finish(url: String, headers: Map<String, String>) {
-                      if (!done.compareAndSet(false, true)) return
-                      handler.post {
-                          runCatching { webView?.stopLoading(); webView?.destroy() }
-                          webView = null
-                      }
-                      if (cont.isActive) cont.resume(Capture(url, headers, sawGate, lastState, trace.toList()))
-                  }
-
-                  val timeoutRun = Runnable { finish("", lastHeaders) }
-                  handler.postDelayed(timeoutRun, 40_000)
-                  cont.invokeOnCancellation {
-                      handler.removeCallbacks(timeoutRun)
-                      handler.post { runCatching { webView?.stopLoading(); webView?.destroy() } }
-                  }
-
-                  handler.post {
-                      val view = WebView(context.applicationContext)
-                      webView = view
-                      runCatching {
-                          CookieManager.getInstance().setAcceptCookie(true)
-                          CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
-                      }
-                      view.settings.javaScriptEnabled = true
-                      view.settings.domStorageEnabled = true
-                      view.settings.mediaPlaybackRequiresUserGesture = false
-                      view.settings.javaScriptCanOpenWindowsAutomatically = false
-                      trace.add("ua=${view.settings.userAgentString}")
-                      view.measure(
-                          View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
-                          View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY),
-                      )
-                      view.layout(0, 0, 1080, 1920)
-
-                      val pollJs = object : Runnable {
-                          override fun run() {
-                              if (done.get()) return
-                              view.evaluateJavascript(
-                                  """(function(){
-                                      var u = location.href;
-                                      var cfg = window.CFG || null;
-                                      var pcfg = window.CONFIG || null;
-                                      var isLanding = u.indexOf('/embed/movie/') > -1 && u.indexOf('/embed/player/') === -1;
-                                      var bp = isLanding ? document.getElementById('bigPlay') : null;
-                                      var ts = document.getElementById('tsGate');
-                                      var clicked = false;
-                                      if (bp && bp.style.display !== 'none' && !window.__pjClicked) {
-                                          window.__pjClicked = true;
-                                          bp.click();
-                                          clicked = true;
-                                      }
-                                      return JSON.stringify({
-                                          href: u.slice(0, 80),
-                                          playerUrl: cfg ? cfg.playerUrl : null,
-                                          hasApiToken: pcfg ? !!pcfg.apiToken : null,
-                                          turnstile: pcfg ? !!pcfg.turnstile : null,
-                                          cstCaptcha: pcfg ? !!pcfg.cstCaptcha : null,
-                                          gateClass: ts ? ts.className : null,
-                                          tsGateMsg: ts ? ts.innerText.slice(0, 80) : null,
-                                          clicked: clicked,
-                                          title: document.title
-                                      });
-                                  })()""".trimIndent()
-                              ) { raw ->
-                                  if (done.get()) return@evaluateJavascript
-                                  runCatching {
-                                      val s = org.json.JSONTokener(raw ?: "null").nextValue() as? String ?: return@runCatching
-                                      lastState = s
-                                      val j = JSONObject(s)
-                                      val href = j.optString("href")
-                                      val playerUrl = j.optString("playerUrl")
-                                      if (j.optBoolean("turnstile")) sawGate = "turnstile"
-                                      if (j.optBoolean("cstCaptcha")) sawGate = "cstCaptcha"
-                                      if (j.optBoolean("clicked")) trace.add("clicked_bigPlay")
-                                      if (playerUrl.isNotBlank() && !hoppedToPlayer && href.contains("/embed/movie/")) {
-                                          hoppedToPlayer = true
-                                          val absPlayer = URI(href).resolve(playerUrl).toString()
-                                          trace.add("hop_player=" + absPlayer.take(70))
-                                          view.loadUrl(absPlayer, mapOf("Referer" to href))
-                                      }
-                                  }
-                              }
-                              handler.postDelayed(this, 700)
-                          }
-                      }
-
-                      view.webViewClient = object : WebViewClient() {
-                          override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                              val u = request.url.toString()
-                              val low = u.lowercase()
-                              if (low.contains("acscdn.com") || low.contains("histats.com") || low.contains("cloudflareinsights.com")) {
-                                  return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                              }
-                              if (low.contains("vs_src.php") || low.contains("/embed/movie/") || low.contains("/embed/player/") ||
-                                  low.contains("data.vidsrc.sh") || low.contains(".wasm") || low.contains("generate.php") ||
-                                  low.contains("cst-captcha") || low.contains("challenges.cloudflare.com") || low.contains("verify") ||
-                                  low.contains("/pl/") || low.contains("/pli/") || low.contains("/plc/")
-                              ) {
-                                  trace.add("req=" + u.take(100))
-                              }
-                              if (!hoppedToLanding && low.contains("/embed/movie/") && !low.contains("/embed/player/")) {
-                                  hoppedToLanding = true
-                                  handler.post {
-                                      if (!done.get()) {
-                                          trace.add("hop_landing=" + u.take(70))
-                                          view.loadUrl(u, mapOf("Referer" to "https://vsembed.su/"))
-                                      }
-                                  }
-                              }
-                              if ((low.contains("/pl/") || low.contains("/pli/") || low.contains("/plc/")) && low.contains("token=")) {
-                                  handler.removeCallbacks(timeoutRun)
-                                  lastHeaders = request.requestHeaders
-                                  finish(u, request.requestHeaders)
-                              }
-                              return null
-                          }
-
-                          @SuppressLint("WebViewClientOnReceivedSslError")
-                          override fun onReceivedSslError(view: WebView?, h: SslErrorHandler?, error: SslError?) {
-                              h?.proceed()
-                          }
-                      }
-
-                      handler.postDelayed(pollJs, 800)
-                      view.loadUrl(startUrl, mapOf("Referer" to "https://pelisjuanita.com/"))
                   }
               }
 
@@ -537,7 +365,7 @@ jobs:
           adb push PelisJuanita/build/PelisJuanita.cs3 /sdcard/Cloudstream3/plugins/PelisJuanita.cs3
           adb logcat -c
           adb shell monkey -p "$package" 1
-          for i in $(seq 1 75); do
+          for i in $(seq 1 65); do
             sleep 5
             log=$(adb logcat -d -s VsembedProbe:* '*:S')
             if echo "$log" | grep -q 'PASS_VSEMBED_PROBE\|FAIL_VSEMBED_PROBE'; then
@@ -556,10 +384,10 @@ jobs:
           exit 1
           SH
           chmod +x /tmp/run_vsembed_probe.sh
-      - name: Probar WebView (API 33) y Media3 en CloudStream APK
+      - name: Probar Media3 en CloudStream APK (API 28)
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33
+          api-level: 28
           target: google_apis
           arch: x86_64
           disable-animations: true
