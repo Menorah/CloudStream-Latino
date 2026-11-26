@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detailed multi-part extractor for pelisjuanita.com.zip HTML & JS files."""
+"""Lossless compact multi-part extractor for pelisjuanita.com.zip (<= 9 chunks x 3800 chars per part)."""
 import argparse
 import base64
 import hashlib
@@ -52,24 +52,24 @@ def download_zip():
     )
 
 
-def emit_chunks(tag: str, obj, max_chunks: int = 9):
+def emit_chunks(tag: str, obj):
     raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     b64 = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
-    chunk_size = 3300
+    chunk_size = 3800
     total = (len(b64) + chunk_size - 1) // chunk_size
-    if total > max_chunks:
-        chunk_size = (len(b64) + max_chunks - 1) // max_chunks
-        total = (len(b64) + chunk_size - 1) // chunk_size
+    if total > 9:
+        raise RuntimeError(f"{tag} too big: {total} chunks ({len(b64)} b64 chars, {len(raw)} raw)")
     for idx, i in enumerate(range(0, len(b64), chunk_size)):
         print(f"::notice::{tag} {idx + 1}/{total} {b64[i:i+chunk_size]}", flush=True)
 
 
-def clean_html(raw_html: str) -> str:
+def clean_soup(raw_html: str) -> BeautifulSoup:
     soup = BeautifulSoup(raw_html, "html.parser")
-    for st in soup.find_all("style"):
-        cls = " ".join(st.get("class") or [])
-        if "darkreader" in cls or "--darkreader-" in st.get_text():
-            st.decompose()
+    for tag in soup.find_all(["style", "svg"]):
+        if tag.name == "style":
+            tag.decompose()
+        else:
+            tag.clear()
     for tag in soup.find_all(True):
         for attr in list(tag.attrs):
             if attr.startswith("data-darkreader"):
@@ -83,15 +83,40 @@ def clean_html(raw_html: str) -> str:
                 del tag["style"]
     for meta in soup.find_all("meta", attrs={"name": "darkreader"}):
         meta.decompose()
-    return redact(str(soup))
+    return soup
 
 
-def summarize_html(zf: zipfile.ZipFile, filename: str, keep_body: bool = False):
+def compact_body_for_catalog(soup: BeautifulSoup) -> str:
+    body = soup.body or soup
+    clone = BeautifulSoup(str(body), "html.parser")
+    for s in clone.find_all("script"):
+        s.decompose()
+    # Keep only first 3 children inside dense grids/carousels while preserving all headers/nav/forms/pagination/filters
+    for container in clone.find_all(["div", "ul", "section"]):
+        kids = [c for c in container.find_all(recursive=False)]
+        if len(kids) > 8:
+            # Check if repetitive cards (tags with <a> links)
+            with_links = sum(1 for k in kids if k.find("a") or k.name == "a")
+            if with_links >= 6:
+                kept = 0
+                removed = 0
+                for k in kids:
+                    if kept < 3:
+                        kept += 1
+                    else:
+                        k.decompose()
+                        removed += 1
+                if removed:
+                    note = clone.new_tag("span")
+                    note.string = f"<!-- +{removed} more cards -->"
+                    container.append(note)
+    return redact(re.sub(r"\s{2,}", " ", str(clone)))
+
+
+def summarize_catalog(zf: zipfile.ZipFile, filename: str):
     raw = zf.read(filename).decode("utf-8", "replace")
     saved_m = re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600])
-    saved_url = saved_m.group(1) if saved_m else ""
-    cleaned = clean_html(raw)
-    soup = BeautifulSoup(cleaned, "html.parser")
+    soup = clean_soup(raw)
     title = soup.title.get_text(strip=True) if soup.title else ""
     inline_scripts = []
     ext_scripts = []
@@ -101,41 +126,62 @@ def summarize_html(zf: zipfile.ZipFile, filename: str, keep_body: bool = False):
             ext_scripts.append(src)
         else:
             txt = sc.get_text().strip()
-            if txt and "darkreader" not in txt[:200].lower():
-                inline_scripts.append(txt)
-    forms = [
-        {"action": f.get("action"), "method": f.get("method"), "html": str(f)[:1000]}
-        for f in soup.find_all("form")
+            if txt:
+                inline_scripts.append(redact(txt))
+    # All distinct hrefs grouped or sampled
+    all_links = []
+    seen_href = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if href not in seen_href and not href.startswith(("#", "javascript:")):
+            seen_href.add(href)
+            all_links.append([a.get_text(" ", strip=True)[:60], href])
+    selects = [
+        {
+            "name": s.get("name"),
+            "id": s.get("id"),
+            "cls": s.get("class"),
+            "opts": [[o.get("value"), o.get_text(strip=True)] for o in s.find_all("option")][:50],
+        }
+        for s in soup.find_all("select")
     ]
-    iframes = [
-        {k: v for k, v in fr.attrs.items()}
-        for fr in soup.find_all("iframe")
-    ]
-    nav_links = [
-        {"text": a.get_text(" ", strip=True)[:80], "href": a.get("href")}
-        for a in soup.select("header a, nav a, .navbar a, .menu a, .sidebar a")
-        if a.get("href")
-    ]
-    # Remove scripts/head/svg noise when dumping body structure
-    body_soup = BeautifulSoup(cleaned, "html.parser")
-    for s in body_soup.find_all(["script", "style", "svg"]):
-        if s.name == "svg":
-            s.clear()
-        else:
-            s.decompose()
-    body_html = str(body_soup.body or body_soup)
     return {
         "file": filename,
-        "saved_url": saved_url,
+        "saved_url": saved_m.group(1) if saved_m else "",
         "title": title,
-        "cleaned_len": len(cleaned),
         "ext_scripts": ext_scripts,
         "inline_scripts": inline_scripts,
-        "forms": forms,
+        "selects": selects,
+        "sample_links": all_links[:90],
+        "compact_body": compact_body_for_catalog(soup),
+    }
+
+
+def summarize_detail(zf: zipfile.ZipFile, filename: str, compact_cards: bool = False):
+    raw = zf.read(filename).decode("utf-8", "replace")
+    saved_m = re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600])
+    soup = clean_soup(raw)
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    inline_scripts = []
+    ext_scripts = []
+    for sc in soup.find_all("script"):
+        src = sc.get("src")
+        if src:
+            ext_scripts.append(src)
+        else:
+            txt = sc.get_text().strip()
+            if txt:
+                inline_scripts.append(redact(txt))
+    iframes = [dict(fr.attrs) for fr in soup.find_all("iframe")]
+    body_html = compact_body_for_catalog(soup) if compact_cards else redact(re.sub(r"\s{2,}", " ", str(soup.body or soup)))
+    return {
+        "file": filename,
+        "saved_url": saved_m.group(1) if saved_m else "",
+        "title": title,
+        "ext_scripts": ext_scripts,
+        "inline_scripts": inline_scripts,
         "iframes": iframes,
-        "nav_links": nav_links[:80],
-        "body": body_html if keep_body else body_html[:16000],
-        "body_tail": "" if keep_body or len(body_html) <= 16000 else body_html[-4000:],
+        "body": body_html,
     }
 
 
@@ -147,7 +193,6 @@ def main():
 
     if args.download:
         download_zip()
-        print("Downloaded zip bytes:", os.path.getsize(ZIP_PATH))
         return
 
     with zipfile.ZipFile(ZIP_PATH) as zf:
@@ -160,27 +205,24 @@ def main():
                 n for n in sorted(htmls)
                 if any(k in n for k in ("/movies/", "/estrenos/", "/populares/", "/sagas/", "/ultimas agregadas/", "/peliculas "))
             ]
-            out = [summarize_html(zf, n, keep_body=("/movies/" in n or "filtro" in n)) for n in movie_pages]
-            emit_chunks("PJP1", out)
+            emit_chunks("PJP1", [summarize_catalog(zf, n) for n in movie_pages])
 
         elif args.part == 2:
             series_pages = [
                 n for n in sorted(htmls)
                 if "/series" in n or "ultimos episodios" in n or "ultimas series" in n
             ]
-            out = [summarize_html(zf, n, keep_body=("/series/" in n or "filtro" in n or "ultimos episodios" in n)) for n in series_pages]
-            emit_chunks("PJP2", out)
+            emit_chunks("PJP2", [summarize_catalog(zf, n) for n in series_pages])
 
         elif args.part == 3:
-            detail_pages = [
-                n for n in sorted(htmls)
-                if "pelicula detalle" in n or "serie detalle" in n
-            ] + sorted(inner_htmls)
-            out = [summarize_html(zf, n, keep_body=("embed-" not in n and "comments" not in n)) for n in detail_pages]
+            detail_pages = [n for n in sorted(htmls) if "pelicula detalle" in n or "serie detalle" in n]
+            player_pages = [n for n in sorted(inner_htmls) if "movie.html" in n or "serie.html" in n]
+            out = [summarize_detail(zf, n, compact_cards=True) for n in detail_pages] + [
+                summarize_detail(zf, n, compact_cards=False) for n in player_pages
+            ]
             emit_chunks("PJP3", out)
 
         elif args.part == 4:
-            # Dump unique interesting JS/HTML files (excluding standard libraries & Cloudflare beacon)
             js_dump = {}
             skip_prefixes = ("lottie-player", "jquery.min", "hls.js", "jwplayer", "vast.js", "ima-ad-player", "cast_", "www-widgetapi", "vce701823")
             for n in sorted(all_names):
@@ -194,12 +236,16 @@ def main():
                         continue
                     txt = redact(raw.decode("utf-8", "replace"))
                     if base.startswith("index-v2"):
-                        # Huge webpack/vite bundle (405KB): grab endpoints/strings + head/tail
                         urls = sorted(set(re.findall(r"https?://[^\s\"'<>\\)]+", txt)))[:80]
                         paths = sorted(set(re.findall(r"['\"](/[a-zA-Z0-9_./?=&%-]{3,80})['\"]", txt)))[:120]
-                        js_dump[sha] = {"file": n, "size": len(txt), "urls": urls, "paths": paths, "head": txt[:3000], "tail": txt[-3000:]}
+                        js_dump[sha] = {"file": n, "size": len(txt), "urls": urls, "paths": paths, "head": txt[:2500], "tail": txt[-2500:]}
+                    elif "embed-" in base:
+                        soup = clean_soup(txt)
+                        scripts = [sc.get_text().strip() for sc in soup.find_all("script") if sc.get_text().strip()]
+                        ext = [sc.get("src") for sc in soup.find_all("script") if sc.get("src")]
+                        js_dump[sha] = {"file": n, "size": len(txt), "title": soup.title.get_text(strip=True) if soup.title else "", "ext": ext, "scripts": scripts, "body": str(soup.body or "")[:6000]}
                     else:
-                        js_dump[sha] = {"file": n, "size": len(txt), "text": txt[:60000]}
+                        js_dump[sha] = {"file": n, "size": len(txt), "text": txt}
             emit_chunks("PJP4", js_dump)
 
 
