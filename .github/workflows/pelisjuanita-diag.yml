@@ -1,4 +1,4 @@
-name: Sonda Byse Ops y MixDrop Headers Diag
+name: Sonda Byse Full HTML y Busqueda JS Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Buscar operations y routes de embed en Byse JS y probar MixDrop wurl
+      - name: Inspeccionar HTML completo Byse ev5, POST playback, y detalles busqueda.zip
         shell: python3 {0}
         run: |
-          import json, re, urllib.request, urllib.error, http.cookiejar
+          import json, re, urllib.request, urllib.error, http.cookiejar, zipfile, io
 
           def emit(title, text):
               for i in range(0, len(text), 3500):
@@ -24,11 +24,11 @@ jobs:
           opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
           ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
-          def fetch(url, referer='https://pelisjuanita.com/', method='GET', headers=None):
+          def fetch(url, referer='https://pelisjuanita.com/', method='GET', headers=None, data=None):
               try:
                   h = {'Referer': referer, 'User-Agent': ua}
                   if headers: h.update(headers)
-                  req = urllib.request.Request(url, headers=h, method=method)
+                  req = urllib.request.Request(url, data=data, headers=h, method=method)
                   r = opener.open(req, timeout=15)
                   return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
               except urllib.error.HTTPError as e:
@@ -36,54 +36,59 @@ jobs:
               except Exception as e:
                   return -1, url, {}, repr(e)
 
-          c, u, _, b = fetch('https://n1mwq.org/assets/index-DocunfmE.js', 'https://n1mwq.org/ev5/92rgcn88ka85')
-          # Search for route ev5/fe4, operation:, gp=, details, playback, decrypt
-          hits = []
-          for pat in [r'ev5', r'embed', r'playback', r'operation:', r'gp\s*=', r'details', r'AES-GCM|importKey']:
-              matches = list(re.finditer(pat, b))
-              samples = [b[max(0, m.start()-80):min(len(b), m.end()+140)] for m in matches[:8]]
-              hits.append(f'PAT={pat} count={len(matches)}\n' + '\n  | '.join(samples))
-          emit('byse_embed_js', '\n===\n'.join(hits))
+          c, u, hdrs, body = fetch('https://n1mwq.org/ev5/92rgcn88ka85', 'https://bysesukior.com/')
+          emit('byse_ev5_html', f'code={c} url={u}\n{body}')
 
-          # Also test GET /api/videos/92rgcn88ka85/embed/playback and /details
-          for ep in [
-              'https://n1mwq.org/api/videos/92rgcn88ka85/embed/details',
-              'https://n1mwq.org/api/videos/92rgcn88ka85/embed/playback',
-              'https://n1mwq.org/api/embed/92rgcn88ka85/details',
-              'https://n1mwq.org/api/embed/92rgcn88ka85/playback',
+          # Check dynamic chunks imported inside index-DocunfmE.js
+          _, _, _, jsb = fetch('https://n1mwq.org/assets/index-DocunfmE.js', 'https://n1mwq.org/ev5/92rgcn88ka85')
+          chunks = sorted(set(re.findall(r'assets/[A-Za-z0-9_.-]+\.js', jsb)))
+          emit('byse_chunks', 'chunks=' + json.dumps(chunks))
+          for ch in chunks:
+              if 'DocunfmE' in ch: continue
+              _, _, _, cb = fetch('https://n1mwq.org/' + ch, 'https://n1mwq.org/ev5/92rgcn88ka85')
+              if any(w in cb for w in ['playback', 'details', 'ev5', 'embed', 'videos', 'AES', 'decrypt']):
+                  hits = []
+                  for pat in [r'playback', r'details', r'videos', r'ev5', r'AES-GCM|decrypt', r'x-embed']:
+                      for m in re.finditer(pat, cb, re.I):
+                          hits.append(cb[max(0, m.start()-120):min(len(cb), m.end()+200)])
+                  emit('byse_chunk_' + ch.split('/')[-1][:18], '\n---\n'.join(hits[:20]))
+
+          # Test POST playback and details on both bysesukior.com and n1mwq.org with pelisjuanita.com parent
+          for base, ref, parent in [
+              ('https://bysesukior.com', 'https://bysesukior.com/e/92rgcn88ka85', 'https://pelisjuanita.com/'),
+              ('https://n1mwq.org', 'https://n1mwq.org/ev5/92rgcn88ka85', 'https://bysesukior.com/'),
+              ('https://n1mwq.org', 'https://n1mwq.org/ev5/92rgcn88ka85', 'https://pelisjuanita.com/'),
           ]:
-              sc, _, _, sb = fetch(ep, 'https://n1mwq.org/ev5/92rgcn88ka85', 'GET', {'X-Embed-Parent': 'https://bysesukior.com/'})
-              emit('byse_ep', f'GET {ep} -> {sc} {sb[:300]}')
+              for mth, ep in [('GET', 'embed/details'), ('GET', 'embed/playback'), ('POST', 'embed/playback'), ('OPTIONS', 'embed/playback')]:
+                  sc, _, sh, sb = fetch(
+                      f'{base}/api/videos/92rgcn88ka85/{ep}',
+                      ref,
+                      mth,
+                      {'Origin': base, 'X-Embed-Parent': parent, 'Accept': '*/*'},
+                      data=(b'{}' if mth == 'POST' else None),
+                  )
+                  emit('byse_probe', f'{mth} {base}/.../{ep} parent={parent} -> {sc} allow={sh.get("Allow") or sh.get("allow")} body={sb[:500]}')
 
-          # Unpack MixDrop wurl and test video URL with various headers
-          _, u_md, _, b_md = fetch('https://mixdrop.top/e/q11gg30obxxogvn', 'https://pelisjuanita.com/')
-          m = re.search(r"eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\),0,\{\}\)\)", b_md)
-          if m:
-              raw = m.group(0)
-              mk = re.search(r"'([^']+)'\.split\('\|'\)", raw)
-              words = mk.group(1).split('|') if mk else []
-              # simple base36/base62 js unpack
-              mp = re.search(r"\}\('(.*)',(\d+),(\d+),'", raw)
-              if mp:
-                  p, a, c_cnt = mp.group(1), int(mp.group(2)), int(mp.group(3))
-                  def enc(n):
-                      ch = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                      return ('' if n < a else enc(n // a)) + ch[n % a]
-                  table = {enc(i): (words[i] if i < len(words) and words[i] else enc(i)) for i in range(c_cnt)}
-                  unpacked = re.sub(r'\b\w+\b', lambda mm: table.get(mm.group(0), mm.group(0)), p)
-                  mw = re.search(r'wurl\s*=\s*"([^"]+)"', unpacked)
-                  wurl = ('https:' + mw.group(1) if mw and mw.group(1).startswith('//') else (mw.group(1) if mw else ''))
-                  results = [f'u_md={u_md} wurl={wurl}']
-                  if wurl:
-                      for ref in [None, 'https://mixdrop.top/e/q11gg30obxxogvn', 'https://mxdrop.click/e/q11gg30obxxogvn', 'https://mxdrop.click/']:
-                          try:
-                              hdrs = {'User-Agent': ua, 'Range': 'bytes=0-1023'}
-                              if ref: hdrs['Referer'] = ref
-                              rq = urllib.request.Request(wurl, headers=hdrs)
-                              rr = urllib.request.urlopen(rq, timeout=15)
-                              results.append(f'ref={ref} -> {rr.status} len={len(rr.read())} ct={rr.headers.get("Content-Type")}')
-                          except urllib.error.HTTPError as e:
-                              results.append(f'ref={ref} -> HTTP {e.code} {e.headers.get("Content-Type")}')
-                          except Exception as e:
-                              results.append(f'ref={ref} -> ERR {e!r}')
-                  emit('mixdrop_test', '\n'.join(results))
+          # Also dump search pagination & mixed grid items & script.js search functions from busqueda.zip
+          try:
+              zbytes = urllib.request.urlopen(urllib.request.Request('https://tmpfiles.org/dl/w5Azv6U6dMIa/busqueda.zip', headers={'User-Agent': ua}), timeout=20).read()
+          except Exception:
+              zbytes = urllib.request.urlopen(urllib.request.Request('https://tmpfiles.org/w5Azv6U6dMIa/busqueda.zip', headers={'User-Agent': ua}), timeout=20).read()
+          if zbytes[:2] == b'PK':
+              zf = zipfile.ZipFile(io.BytesIO(zbytes))
+              for name in zf.namelist():
+                  if name.endswith('.html') and zf.getinfo(name).file_size > 0:
+                      txt = zf.read(name).decode('utf-8', 'replace')
+                      m = re.search(r'<div class="grid-container">.*?(?:<footer|</body>)', txt, re.S)
+                      if m:
+                          cleaned = re.sub(r'<style[^>]*>.*?</style>', '', m.group(0), flags=re.S)
+                          cleaned = re.sub(r'\s+', ' ', cleaned)
+                          emit('busqueda_grid', cleaned[:6500])
+                  elif name.endswith('script.js.download'):
+                      js = zf.read(name).decode('utf-8', 'replace')
+                      for fn in ['realizarBusqueda', 'cargarPeliculas', 'cargarSeries', 'pagina', 'search']:
+                          idx = js.find(fn)
+                          if idx >= 0:
+                              emit('busqueda_js_' + fn, js[max(0, idx-120):idx+1800])
+          else:
+              emit('busqueda_zip_err', f'not zip: {zbytes[:300]!r}')
