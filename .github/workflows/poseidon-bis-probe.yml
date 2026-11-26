@@ -9,5 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify live vsembed StreamWish AES-CBC extraction and segments
+      - name: Check StreamWish strings, vsembed tiktok, episodios, series, and image shapes
         run: python3 scripts/poseidon_bis_probe.py

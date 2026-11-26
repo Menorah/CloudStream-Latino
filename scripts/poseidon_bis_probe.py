@@ -1,4 +1,3 @@
-import http.cookiejar
 import json
 import re
 import subprocess
@@ -12,28 +11,18 @@ UA = (
 )
 
 
-def make_opener():
-    cj = http.cookiejar.CookieJar()
-    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-
-
-def fetch(op, url, ref="https://vsembed.com/", headers=None):
-    hdrs = {
-        "User-Agent": UA,
-        "Accept": "*/*",
-        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-        "Referer": ref,
-    }
-    if headers:
-        hdrs.update(headers)
-    req = urllib.request.Request(url, headers=hdrs)
+def fetch(url, ref="https://www.poseidonhd2.co/"):
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": UA, "Accept": "*/*", "Accept-Language": "es-MX,es;q=0.9,en;q=0.8", "Referer": ref},
+    )
     try:
-        with op.open(req, timeout=20) as resp:
-            return resp.status, resp.geturl(), dict(resp.headers), resp.read()
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.status, resp.geturl(), resp.read()
     except urllib.error.HTTPError as e:
-        return e.code, e.geturl(), dict(e.headers), e.read()
+        return e.code, e.geturl(), e.read()
     except Exception as e:
-        return -1, url, {}, repr(e).encode()
+        return -1, url, repr(e).encode()
 
 
 def notice(tag, obj):
@@ -42,85 +31,83 @@ def notice(tag, obj):
     print(f"::notice::{tag}: {txt[:3600]}")
 
 
-op = make_opener()
-_, _, _, vhr = fetch(op, "https://vsembed.com/jer74", ref="https://streamwish.to/")
-vh = vhr.decode("utf-8", "replace")
-js_path = re.search(r'src="(/assets/[^"]+\.js)"', vh).group(1)
-_, _, _, vjsr = fetch(op, "https://vsembed.com" + js_path, ref="https://vsembed.com/jer74")
-vjs = vjsr.decode("utf-8", "replace")
-p_ai = vjs.find("class Ai{")
-ai_code = vjs[p_ai: vjs.find("typeof window", p_ai)]
-
-node_crypto = r"""
-const crypto = require('crypto');
-const [,, mode, code, arg1, host] = process.argv;
-const keyChars = eval(code.match(/this\.keyChars=(\[[^\]]+\])/)[1]);
-const saltChars = eval(code.match(/this\.saltChars=(\[[^\]]+\])/)[1]);
-function genKey() {
-  let t = "";
-  keyChars.forEach(r => t += r.codePointAt(0).toString(16));
-  const n = Math.floor(Date.now() / 864e5);
-  t += n.toString(16);
-  return t.slice(0, 32).padEnd(32, "0");
-}
-function genIV(h) {
-  let n = "";
-  saltChars.forEach(r => n += r.codePointAt(0).toString(16));
-  if (h) n += Buffer.from(h, 'utf8').toString('hex');
-  return n.length > 32 ? n.slice(0, 32) : n.padEnd(32, "0");
-}
-function enc(plain, h) {
-  const k = Buffer.from(genKey(), 'hex');
-  const iv = Buffer.from(genIV(h), 'hex');
-  const c = crypto.createCipheriv('aes-128-cbc', k, iv);
-  return Buffer.concat([c.update(plain, 'utf8'), c.final()]).toString('hex');
-}
-function dec(hexStr, h) {
-  const k = Buffer.from(genKey(), 'hex');
-  const iv = Buffer.from(genIV(h), 'hex');
-  const d = crypto.createDecipheriv('aes-128-cbc', k, iv);
-  return Buffer.concat([d.update(Buffer.from(hexStr, 'hex')), d.final()]).toString('utf8');
-}
-if (mode === 'enc') {
-  console.log(JSON.stringify({
-    keyHex: genKey(), ivHex: genIV(host), encHex: enc(arg1, host),
-    keyCodes: keyChars.map(c => c.codePointAt(0).toString(16)),
-    saltCodes: saltChars.map(c => c.codePointAt(0).toString(16)),
-  }));
-} else if (mode === 'dec') {
-  console.log(dec(arg1, host));
-}
+# 1. Inspect how streamwish.to/main.js constructs "https://medixiru.com/e/..."
+_, _, swr = fetch("https://streamwish.to/main.js?v=1.1.9", "https://streamwish.to/e/yu5idnr7ncl9")
+swjs = swr.decode("utf-8", "replace")
+# Extract decoded string table from main.js via Node by running the decoder IIFE only
+m_fn = re.search(r"function\s+(_0x[a-f0-9]+)\(_0x[^)]+\)\{const\s+(_0x[a-f0-9]+)=_0x[a-f0-9]+\(\);", swjs)
+# Safer: intercept property set on location.href in vm and dump string array values
+open("/tmp/sw_main2.js", "w").write(swjs)
+node_dump = r"""
+const fs = require('fs');
+const code = fs.readFileSync('/tmp/sw_main2.js', 'utf8');
+// Find the string array function _0xXXXX(){const _0xYYYY=[...];...}
+const m = code.match(/function\s+(_0x[a-f0-9]+)\(\)\{const\s+_0x[a-f0-9]+=\[(.*?)\];/s);
+console.log(JSON.stringify({ fn: m ? m[1] : null, raw_arr: m ? m[2].slice(0, 1500) : null, has_medixiru_plain: code.includes('medixiru'), b64_hits: code.match(/[A-Za-z0-9+/]{12,}={0,2}/g)?.slice(0, 20) }));
 """
-open("/tmp/vs_aes.js", "w").write(node_crypto)
+open("/tmp/sw_dump.js", "w").write(node_dump)
+notice("sw_mainjs_strings", subprocess.check_output(["node", "/tmp/sw_dump.js"], text=True).strip())
 
-for vid in ["jer74", "6168w"]:
-    res_enc = json.loads(subprocess.check_output(["node", "/tmp/vs_aes.js", "enc", ai_code, vid, "vsembed.com"], text=True, stderr=subprocess.STDOUT))
-    st_s, _, _, body_s = fetch(op, f"https://vsembed.com/api/stream?s={vid}&ld=1", ref=f"https://vsembed.com/{vid}")
-    st_t, _, hdrs_t, body_t = fetch(op, f"https://vsembed.com/api/stream/tracking?c={res_enc['encHex']}&ld=1", ref=f"https://vsembed.com/{vid}", headers={"Accept": "application/json, text/plain, */*"})
-    hdrs_low = {k.lower(): v for k, v in hdrs_t.items()}
-    xtrk = hdrs_low.get("x-tracking")
-    dec_str = None
-    seg_check = None
-    if xtrk:
-        dec_str = subprocess.check_output(["node", "/tmp/vs_aes.js", "dec", ai_code, xtrk, "vsembed.com"], text=True, stderr=subprocess.STDOUT).strip()
-        dj = json.loads(dec_str)
-        st_obj = dj.get("stream") or dj
-        hls_url = st_obj.get("hls") or (st_obj.get("sources") or [{}])[0].get("file")
-        if hls_url:
-            mst, mfu, _, mr = fetch(op, hls_url, ref="https://vsembed.com/", headers={"Origin": "https://vsembed.com"})
-            mtxt = mr.decode("utf-8", "replace")
-            mlines = [l.strip() for l in mtxt.splitlines() if l.strip() and not l.startswith("#")]
-            if mlines:
-                nxt = urllib.parse.urljoin(mfu, mlines[0])
-                sst, sfu, _, sr = fetch(op, nxt, ref="https://vsembed.com/", headers={"Origin": "https://vsembed.com"})
-                slines = [l.strip() for l in sr.decode("utf-8", "replace").splitlines() if l.strip() and not l.startswith("#")]
-                if slines:
-                    tg = urllib.parse.urljoin(sfu, slines[0])
-                    gst, _, gh, gr = fetch(op, tg, ref="https://vsembed.com/", headers={"Origin": "https://vsembed.com"})
-                    seg_check = {"mst": mst, "sst": sst, "gst": gst, "len": len(gr), "hex": gr[:12].hex(), "ct": gh.get("Content-Type")}
-    notice(f"vs_res_{vid}", {
-        "enc": res_enc,
-        "st_s": st_s, "body_s": body_s.decode("utf-8", "replace")[:250],
-        "st_t": st_t, "has_xtrk": bool(xtrk),
-        "dec_json": dec_str[:1000] if dec_str else None, "seg": seg_check,
-    })
+# 2. Check vsembed tiktok fallback for 6168w (since primequantdesk timed out) & inspect /episodios pageProps + related movies/series
+_, _, mr_tt = fetch("https://vsembed.com/e/1795679406/7iXlp1wdfBaCxMIDREbVwQ/4ouuqugv/play-tt/cocd2/master.txt", ref="https://vsembed.com/6168w")
+mtxt_tt = mr_tt.decode("utf-8", "replace")
+tt_lines = [l.strip() for l in mtxt_tt.splitlines() if l.strip() and not l.startswith("#")]
+tt_info = {"head": mtxt_tt[:250], "lines": len(tt_lines)}
+if tt_lines:
+    u1 = urllib.parse.urljoin("https://vsembed.com/e/1795679406/7iXlp1wdfBaCxMIDREbVwQ/4ouuqugv/play-tt/cocd2/master.txt", tt_lines[0])
+    st1, fu1, sr1 = fetch(u1, ref="https://vsembed.com/")
+    sl1 = [l.strip() for l in sr1.decode("utf-8", "replace").splitlines() if l.strip() and not l.startswith("#")]
+    if sl1:
+        u2 = urllib.parse.urljoin(fu1, sl1[0])
+        st2, _, gr2 = fetch(u2, ref="https://vsembed.com/")
+        tt_info["seg"] = {"st1": st1, "st2": st2, "len": len(gr2), "hex": gr2[:12].hex()}
+notice("vsembed_6168w_tiktok", tt_info)
+
+# 3. Inspect /episodios, /serie/84773/el-senor-de-los-anillos-los-anillos-de-poder, and related items on movie_matrix & serie_hotd
+for label, url in [
+    ("episodios", "https://www.poseidonhd2.co/episodios"),
+    ("episodios_p2", "https://www.poseidonhd2.co/episodios/page/2"),
+    ("lotr_serie", "https://www.poseidonhd2.co/serie/84773/el-senor-de-los-anillos-los-anillos-de-poder"),
+    ("matrix_rel", "https://www.poseidonhd2.co/pelicula/603/the-matrix"),
+]:
+    st, fu, r = fetch(url)
+    html = r.decode("utf-8", "replace")
+    nd = json.loads(re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S).group(1))
+    pp = nd["props"]["pageProps"]
+    out = {"st": st, "keys": list(pp.keys()), "pages": pp.get("pages")}
+    if "episodes" in pp:
+        out["episodes_len"] = len(pp["episodes"])
+        out["episodes_sample"] = pp["episodes"][:2]
+    if "movies" in pp:
+        out["movies_len"] = len(pp["movies"])
+        out["movies_sample"] = [x.get("url") for x in pp["movies"][:3]]
+    if "related" in pp:
+        out["related_sample"] = [{"TMDbId": x.get("TMDbId"), "titles": x.get("titles"), "url": x.get("url"), "images": x.get("images")} for x in (pp["related"] or [])[:2]]
+    if "thisSerie" in pp:
+        ts = pp["thisSerie"]
+        out["serie_keys"] = list(ts.keys())
+        out["cast_len"] = len((ts.get("cast") or {}).get("acting") or [])
+        out["seasons"] = [{"n": s.get("number"), "eps": len(s.get("episodes") or [])} for s in (ts.get("seasons") or [])]
+        ep0 = next((s["episodes"][0] for s in (ts.get("seasons") or []) if s.get("episodes")), None)
+        out["ep_sample"] = ep0
+    notice("detail_" + label, out)
+
+# 4. Also check image paths across home & movies to verify if all poster/backdrop are full URLs
+_, _, hr = fetch("https://www.poseidonhd2.co/")
+hnd = json.loads(re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', hr.decode("utf-8", "replace"), re.S).group(1))
+hpp = hnd["props"]["pageProps"]
+bad_imgs = []
+slug_prefixes = set()
+for k, v in hpp.items():
+    if isinstance(v, list):
+        for item in v:
+            if not isinstance(item, dict):
+                continue
+            slug = (item.get("url") or {}).get("slug", "")
+            if slug:
+                slug_prefixes.add("/".join(slug.split("/")[:1]) + f" ({slug.count('/')+1}seg)")
+            for ik in ("poster", "backdrop", "image"):
+                iv = (item.get("images") or {}).get(ik) or item.get(ik)
+                if iv and not str(iv).startswith("http"):
+                    bad_imgs.append((k, ik, iv))
+notice("home_shapes", {"slug_prefixes": sorted(slug_prefixes), "bad_imgs": bad_imgs[:10]})
