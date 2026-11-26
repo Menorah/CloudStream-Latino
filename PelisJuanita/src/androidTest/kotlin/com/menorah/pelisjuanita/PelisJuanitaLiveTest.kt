@@ -18,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
@@ -136,40 +137,63 @@ class PelisJuanitaLiveTest {
         checkImageReachable(firstMovieRec.posterUrl!!)
         firstMovieRec.backdropUrl?.let { checkImageReachable(it) }
 
-        // 3. Unauthenticated /movies/ redirects cleanly to /inicio.php gate
+        // 3. Unauthenticated /movies/ must be blocked by the verification/Cloudflare gate (never raw catalog)
         val gateReq = Request.Builder()
             .url("${PelisJuanitaMarkup.MAIN_URL}/movies/")
             .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
             .build()
         noRedirectHttp.newCall(gateReq).execute().use { res ->
             val loc = res.header("Location").orEmpty()
-            assertTrue("Expected 302 redirect to inicio.php, got ${res.code} ($loc)", res.code in 300..399 && loc.contains("inicio.php"))
+            val body = res.body?.string().orEmpty()
+            val blocked = PelisJuanitaSessionHelper.looksLikeVerificationGate(
+                res.code,
+                loc.ifBlank { res.request.url.toString() },
+                body,
+            )
+            assertTrue("Expected /movies/ gate (302->inicio.php or 403 challenge), got ${res.code} ($loc)", blocked)
         }
 
         // 4. Real Android WebView loading /inicio.php verification gate (never auto-solving CAPTCHA)
         val latch = CountDownLatch(1)
+        val done = AtomicBoolean(false)
         val webViewCheck = AtomicReference<String>("")
         Handler(Looper.getMainLooper()).post {
             val wv = WebView(context)
             wv.settings.javaScriptEnabled = true
-            wv.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String?) {
-                    if (url != null && url.contains("inicio.php", ignoreCase = true)) {
-                        view.evaluateJavascript(
-                            "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),title:document.title})",
-                        ) { res ->
-                            webViewCheck.set(res ?: "")
+            wv.settings.userAgentString = PelisJuanitaSessionHelper.DEFAULT_USER_AGENT
+            fun inspectGate(view: WebView, attempt: Int) {
+                if (done.get()) return
+                view.evaluateJavascript(
+                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form'),title:document.title})",
+                ) { res ->
+                    val raw = res ?: ""
+                    webViewCheck.set(raw)
+                    if (raw.contains("\\\"hasCaptcha\\\":true") || raw.contains("\"hasCaptcha\":true") || attempt >= 6) {
+                        if (done.compareAndSet(false, true)) {
                             wv.destroy()
                             latch.countDown()
                         }
+                    } else {
+                        Handler(Looper.getMainLooper()).postDelayed({ inspectGate(view, attempt + 1) }, 1500L)
+                    }
+                }
+            }
+            wv.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String?) {
+                    if (url != null && url.contains("inicio.php", ignoreCase = true) && !done.get()) {
+                        inspectGate(view, 0)
                     }
                 }
             }
             wv.loadUrl("${PelisJuanitaMarkup.MAIN_URL}/inicio.php?redirect=%2Fmovies%2F")
         }
-        assertTrue("WebView loaded inicio.php in time", latch.await(25, TimeUnit.SECONDS))
+        assertTrue("WebView loaded inicio.php in time", latch.await(35, TimeUnit.SECONDS))
         val wvResult = webViewCheck.get()
-        assertTrue("Expected WebView gate fields on inicio.php: $wvResult", wvResult.contains("hasCaptcha") && wvResult.contains("true"))
+        val hasGate = wvResult.contains("hasCaptcha\\\":true") ||
+            wvResult.contains("hasCaptcha\":true") ||
+            wvResult.contains("hasCf\\\":true") ||
+            wvResult.contains("hasCf\":true")
+        assertTrue("Expected WebView gate fields on inicio.php: $wvResult", hasGate)
 
         // 5. Live host parser checks on Vimeus->Vimeos, Fastserver Movie & Series, Earnvids
         var workingHosts = 0

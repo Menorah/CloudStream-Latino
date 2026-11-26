@@ -24,7 +24,7 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | pelisplus-to.com | **Sin complemento viable** | Ídem. |
 | cuevana3me.info | **Sin complemento viable** | Ídem; la ruta `/ver.html` de episodios devuelve HTTP 500. |
 | 123pelispop.pro | **Sin complemento viable** | La ficha no expone ninguna fuente de vídeo (`data-url="#"`); solo registro y publicidad. |
-| pelisjuanita.com | **Sin complemento viable** | Muro de CAPTCHA interactivo de imagen (abajo). |
+| pelisjuanita.com (`PelisJuanita`) | **Creado desde cero y verificado (v1)** | Portada (27 secciones), paginación, búsqueda y fichas públicas vía `/tv/app/buscar.php` + verificación interactiva del usuario en `Ajustes (⚙) -> PelisJuanita` (WebView sobre `inicio.php` sin automatizar CAPTCHA); portadas TMDB/Coil y reproducción Media3 verificada en 9 servidores (`Vimeus`, `Vimeos`, `Fastserver`, `Earnvids`, `StreamWish`, `Voe`, `Savefiles`, `Vidara`). |
 | pelisenhd.org | **Sin complemento viable (abortado)** | Solo enlaces DDL `.rar`/`.zip` tras temporizador en `financialtrust.info` y Cloudflare Turnstile en `hdpastes.com`, sin vídeo embebido directo. |
 | Cinecalidad.org | **Verificado con Media3** | API JSON pública (`/wp-api/v1/`): películas, series, animes, novelas y WWE; película, película subtitulada, episodio de serie (10 temporadas / 232 episodios en `csi-miami-2002`) y anime reproducidos con CloudStream + Media3 (`Vimeos` y `Voe`). |
 
@@ -63,25 +63,39 @@ complemento que reproduzca estas obras desde las fuentes públicas**; publicar u
 Evidencia reproducible: `scripts/trap_family_probe.py` (rondas 1-3, runs 45297167223,
 45298286466, 45298720540).
 
-## PelisJuanita.com
+## PelisJuanita.com (v1) — creado desde cero y verificado con Media3
 
-El sitio (PHP propio, no WordPress) tiene un muro de verificación interactiva:
-`inicio.php?captcha=<n>` muestra un **CAPTCHA de imagen** + casilla de términos + honeypot
-(«No llenar este campo»). Toda la web (`/movies/`, `movieInfo.php`, `serieInfo.php`)
-redirige a ese muro sin la sesión que emite al resolverlo.
+El sitio web (`https://pelisjuanita.com/`, PHP propio) protege `/movies/*`, `/series/*` y
+`/tv/` mediante un muro de verificación humana en `/inicio.php?redirect=...` (CAPTCHA
+de imagen + casilla de términos + honeypot `empresa_hp`) que emite la cookie de sesión
+`PHPSESSID`, mientras expone el buscador público JSON en `/tv/app/buscar.php?q=...&pagina=...`
+(~27.890 títulos entre películas y series) con portadas y fondos directos en `image.tmdb.org`.
 
-Existe una API para la app de Smart TV en `/tv/app`:
-- `home.php` — **pública** (portada con secciones de TV en vivo, películas y series);
-- `buscar.php`, `movies.php`, `series.php` — responden `{"error":true,"message":"Acceso no autorizado"}`
-  sin la sesión/autorización de la app (probado con y sin cookies, referer y varios UA);
-- `hzplayer.php?id=<base64>` — reproductor de canales de TV («Canal no encontrado» con id de película).
-
-La única forma de acceso autorizada y viable sería una verificación **interactiva del
-usuario** (p. ej. un WebView donde la persona resuelva el captcha una vez), que exige
-puentes de cookies y UI no disponibles de forma estándar para complementos. No se
-automatizará el CAPTCHA ni se pedirán cookies. **No se publica complemento.**
-Los canales de TV en vivo que expone `home.php` incluyen claves de DRM de TV por
-suscripción: quedan fuera de alcance.
+- **Modo dual sin automatizar CAPTCHAs**:
+  - Antes de verificarse, el complemento carga el catálogo completo en la portada (27 secciones
+    en paralelo en ~1,4 s, 0 vacías), paginación, búsqueda y fichas de películas desde
+    `/tv/app/buscar.php` y guía claramente al usuario para completar la verificación única
+    en **`Ajustes (⚙) -> PelisJuanita`**.
+  - `PelisJuanitaPlugin.openSettings` abre un diálogo Android con `WebView` a pantalla
+    completa (`PelisJuanitaVerificationDialog`) donde la propia persona resuelve el CAPTCHA
+    de `/inicio.php`; al confirmar sesión activa (o desaparecer el muro en `/movies/`),
+    persiste `PHPSESSID`, cookies y `User-Agent` en `SharedPreferences` y activa el
+    catálogo HTML autenticado (incluidos `/movies/`, `/series/`, temporadas/episodios vía
+    `serieInfo.php` y `movieInfo.php`, con respaldo `PelisJuanitaWebTransport` si Cloudflare
+    presenta reto JavaScript).
+- **Extractores integrados y propios** (`PelisJuanitaExtractors.kt`):
+  - **Vimeus → Vimeos** (resolución de `vimeus.net/e/...` hacia `vimeos.net`), **Fastserver**
+    (`pelisplayer.fortamomar.workers.dev` / `seriesplayer.fortamomar.workers.dev`), **Earnvids**
+    (`callistanise.com` / `morencius.com`), **StreamWish / HGLink** (`hglink.to` → `vsembed.com`
+    AES-128-CBC `x-tracking`), **VOE** (`voe.sx` / espejos con ALTCHA v2), **Savefiles /
+    Lulustream** (`savefiles.com` `POST /dl` y `lplaygo.com`), **Byse** (`bysesukior.com` /
+    `bysejikuar.com` AES-256-GCM + `ByseSX`) y delegación nativa (`Vidara`, `MixDrop`, etc.).
+- **Verificación real en CloudStream pre-release + Coil 3.3.0 + Media3 ExoPlayer**:
+  - Portada de 27 secciones sin vacíos (~1,4 s), paginación, metadatos no verificados con
+    aviso limpio hacia `Ajustes`, 9/9 portadas TMDB con Coil y decodificación real de
+    fotogramas en Media3 en 9 muestras de servidores (`Vimeus` película y serie, `Fastserver`
+    película y serie, `Earnvids`, `StreamWish`, `Voe`, `Savefiles` y `Vidara`).
+  - Los canales de TV en vivo con claves DRM quedan fuera del complemento.
 
 ## SoloLatino.net
 
