@@ -9,5 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extract vsembed stream endpoint/crypto and ALTCHA solver code
+      - name: Read vsembed tail & ALTCHA payload serialization
         run: python3 scripts/poseidon_bis_probe.py
