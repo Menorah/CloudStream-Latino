@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Leer player.js, subtitles.js, vsdec.js y probar Turnstile limpio en Chrome
+      - name: Leer STATIC_PL_RE/fetchStream/sub_url y probar Chrome sin add_init_script
         run: |
           python3 -m pip install -q playwright
           python3 -m playwright install chromium || true
@@ -44,28 +44,23 @@ jobs:
 
           m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', b4)
           p_js, _ = ufetch(urllib.parse.urljoin(u4, m_pj.group(1)), u4)
-          emit("PJS_LEN", str(len(p_js)))
-          for name, pat in [
-              ("PJS_BOOT", "function boot("),
-              ("PJS_LOADSRC", "streamApiUrl("),
-              ("PJS_HLS", "TokenLoader"),
-              ("PJS_PLI", "/pl"),
-          ]:
-              i = p_js.find(pat, 500 if name == "PJS_LOADSRC" else 0)
-              if i == -1: i = p_js.find(pat)
-              emit(name, p_js[max(0, i-250):i+3000] if i != -1 else f"NOT_FOUND:{pat}")
+          i_st = p_js.find("STATIC_PL_RE")
+          emit("PJS_STATIC_PL", p_js[max(0, i_st-100):i_st+3200] if i_st != -1 else "NO_STATIC")
+          i_fs = p_js.find("function fetchStream")
+          emit("PJS_FETCHSTREAM", p_js[max(0, i_fs-100):i_fs+3200] if i_fs != -1 else "NO_FS")
+          i_lh = p_js.find("function playStream")
+          if i_lh == -1: i_lh = p_js.find("new Hls(")
+          emit("PJS_PLAYSTREAM", p_js[max(0, i_lh-400):i_lh+2800] if i_lh != -1 else "NO_PLAY")
 
           m_sub = re.search(r'src="(/embed/iframe_player/assets/subtitles\.js[^"]*)"', b4)
           if m_sub:
               s_js, _ = ufetch(urllib.parse.urljoin(u4, m_sub.group(1)), u4)
-              emit("SUBTITLES_JS", s_js[:3300])
+              i_su = s_js.find("sub_url")
+              if i_su == -1: i_su = s_js.find("defaultSub")
+              if i_su == -1: i_su = s_js.find("CONFIG.sub")
+              emit("SUBS_CUSTOM", s_js[max(0, i_su-300):i_su+3000] if i_su != -1 else s_js[-3300:])
 
-          m_vsd = re.search(r'src="(/embed/iframe_player/assets/vsdec\.js[^"]*)"', b4)
-          if m_vsd:
-              v_js, _ = ufetch(urllib.parse.urljoin(u4, m_vsd.group(1)), u4)
-              emit("VSDEC_JS", v_js[:3300])
-
-          # Get fresh landing_b WITHOUT fetching landing_b
+          # Fresh landing_b WITHOUT consuming landing_b
           b1_b, u1_b = ufetch(U1843139, "https://pelisjuanita.com/")
           api_b = re.search(r'data-api="([^"]+)"', b1_b).group(1).replace("&amp;", "&")
           b2_b, _ = ufetch(urllib.parse.urljoin(u1_b, api_b), u1_b)
@@ -73,30 +68,34 @@ jobs:
 
           with sync_playwright() as p:
               try:
-                  browser = p.chromium.launch(channel="chrome", headless=False, args=["--no-sandbox"])
+                  browser = p.chromium.launch(channel="chrome", headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
               except Exception:
-                  browser = p.chromium.launch(headless=False, args=["--no-sandbox"])
+                  browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
               ctx = browser.new_context(viewport={"width": 1280, "height": 720})
               page = ctx.new_page()
+              page.route(re.compile(r"disable-devtool", re.I), lambda r: r.abort())
               events = []
-              found = {"stream": "", "verify": ""}
+              found = {"stream": "", "verify": "", "headers": {}}
               def on_req(req):
                   u = req.url
                   low = u.lower()
-                  if any(k in low for k in ["verify.php", "generate.php", "data.vidsrc.sh", "/pl/", "/pli/", "/plc/", "challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/orchestrate", "turnstile"]):
+                  if any(k in low for k in ["verify.php", "generate.php", "data.vidsrc.sh", "/pl/", "/pli/", "/plc/", "challenges.cloudflare"]):
                       events.append(f"REQ:{u[:105]}")
                   if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
                       found["stream"] = u
+                      found["headers"] = dict(req.headers)
               def on_resp(resp):
                   u = resp.url
                   if any(k in u for k in ["verify.php", "generate.php", "data.vidsrc.sh", "/embed/player/"]):
                       try:
-                          events.append(f"RESP:{resp.status}:{u[:55]}:{resp.text()[:120]}")
+                          txt = resp.text()[:180] if "verify.php" in u or "generate.php" in u or "data.vidsrc" in u else ""
+                          if "verify.php" in u: found["verify"] = txt
+                          events.append(f"RESP:{resp.status}:{u[:55]}:{txt}")
                       except Exception:
                           events.append(f"RESP:{resp.status}:{u[:55]}")
               page.on("request", on_req)
               page.on("response", on_resp)
-              page.on("console", lambda m: events.append(f"CON:{m.type}:{m.text[:120]}"))
+              page.on("console", lambda m: events.append(f"CON:{m.type}:{m.text[:100]}") if m.type in ("error", "warning") else None)
               page.goto(landing_b, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
 
               for step in range(40):
@@ -123,6 +122,6 @@ jobs:
                           })""")
                       except Exception as e:
                           ts_info = {"eval_err": repr(e)}
-              emit("CLEAN_CHROME_1843139", json.dumps({"stream": found["stream"], "ts": ts_info, "events": events[-24:]}))
+              emit("CLEAN_CHROME_1843139", json.dumps({"stream": found["stream"], "verify": found["verify"], "ts": ts_info, "events": events[-24:]}))
               browser.close()
           PY
