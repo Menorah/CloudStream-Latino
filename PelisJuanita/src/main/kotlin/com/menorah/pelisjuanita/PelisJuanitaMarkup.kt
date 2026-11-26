@@ -165,6 +165,8 @@ internal object PelisJuanitaMarkup {
     private val PAGE_OF_REGEX = Regex("""Página\s+\d+\s+de\s+(\d+)""", RegexOption.IGNORE_CASE)
     private val PAGE_HREF_REGEX = Regex("""(?:/page/|[?&]page=)(\d+)""", RegexOption.IGNORE_CASE)
     private val SERIE_ID_REGEX = Regex("""CURRENT_SERIE_ID\s*=\s*(\d+)""")
+    private val MOVIE_ID_REGEX = Regex("""CURRENT_MOVIE_ID\s*=\s*(\d+)""")
+    private val MOVIE_INFO_P_REGEX = Regex("""movieInfo\.php\?[^"'<>]*?[?&]p=(\d+)""")
     private val TMDB_FILENAME_REGEX = Regex("""^/?([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
     private val SAVED_LOCAL_ASSETS_REGEX = Regex("""_files/([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
 
@@ -289,8 +291,13 @@ internal object PelisJuanitaMarkup {
         return "$MAIN_URL/series/apiSeries.php?s=$encoded&page=${page.coerceAtLeast(1)}"
     }
 
-    fun buildMovieInfoUrl(slug: String): String =
-        "$MAIN_URL/movies/movieInfo.php?title=${URLEncoder.encode(slug, "UTF-8")}&p="
+    fun buildMovieShellUrl(slug: String): String =
+        "$MAIN_URL/movies/pelicula/$slug"
+
+    fun buildMovieInfoUrl(slug: String, movieId: Long? = null): String {
+        val pVal = movieId?.takeIf { it > 0 }?.toString().orEmpty()
+        return "$MAIN_URL/movies/movieInfo.php?title=${URLEncoder.encode(slug, "UTF-8")}&p=$pVal"
+    }
 
     fun buildSerieShellUrl(slug: String): String =
         "$MAIN_URL/series/ver-serie/$slug"
@@ -305,8 +312,17 @@ internal object PelisJuanitaMarkup {
         return "$MAIN_URL/series/serieInfo.php?nombreSerie=${URLEncoder.encode(slug, "UTF-8")}&temporada=$season&snum=$snum&enum=$enumVal&p=$pVal"
     }
 
+    fun buildSerieInfoSeasonModeUrl(slug: String, season: Int, serieId: Long?): String {
+        val pVal = serieId?.takeIf { it > 0 }?.toString().orEmpty()
+        return "$MAIN_URL/series/serieInfo.php?nombreSerie=${URLEncoder.encode(slug, "UTF-8")}&nroTemporada=$season&nroEpisodio=0&modoTemporada=1&p=$pVal"
+    }
+
     fun extractSeriesIdFromShell(html: String): Long? =
         SERIE_ID_REGEX.find(html)?.groupValues?.getOrNull(1)?.toLongOrNull()
+
+    fun extractMovieIdFromShell(html: String): Long? =
+        MOVIE_INFO_P_REGEX.find(html)?.groupValues?.getOrNull(1)?.toLongOrNull()
+            ?: MOVIE_ID_REGEX.find(html)?.groupValues?.getOrNull(1)?.toLongOrNull()
 
     fun parseCatalogHtml(
         html: String,
@@ -556,9 +572,13 @@ internal object PelisJuanitaMarkup {
         )
     }
 
-    fun parseSeasonEpisodesHtml(html: String, seriesSlug: String): List<PelisJuanitaEpisode> {
+    fun parseSeasonEpisodesHtml(
+        html: String,
+        seriesSlug: String,
+        defaultSeason: Int = 1,
+    ): List<PelisJuanitaEpisode> {
         val doc = Jsoup.parse(html, MAIN_URL)
-        return parseSeasonEpisodesFromDoc(doc, seriesSlug)
+        return parseSeasonEpisodesFromDoc(doc, seriesSlug, defaultSeason)
     }
 
     fun parseStreamSourcesHtml(html: String): List<PelisJuanitaStreamSource> {
@@ -566,18 +586,24 @@ internal object PelisJuanitaMarkup {
         return parseStreamSourcesFromDoc(doc)
     }
 
-    private fun parseSeasonEpisodesFromDoc(doc: org.jsoup.nodes.Document, seriesSlug: String): List<PelisJuanitaEpisode> {
+    private fun parseSeasonEpisodesFromDoc(
+        doc: org.jsoup.nodes.Document,
+        seriesSlug: String,
+        defaultSeason: Int = 1,
+    ): List<PelisJuanitaEpisode> {
         val out = mutableListOf<PelisJuanitaEpisode>()
         val seenKeys = mutableSetOf<Pair<Int, Int>>()
 
-        for (anchor in doc.select("#ulTemporada a.episodio-item")) {
-            val href = resolveSiteUrl(anchor.attr("href")) ?: continue
-            val parsedHref = parseTargetUrl(href)
+        // serieInfo.php?temporada=N returns bare <a class="episodio-item"> elements without the #ulTemporada wrapper.
+        val anchors = doc.select("#ulTemporada a.episodio-item").ifEmpty { doc.select("a.episodio-item") }
+        for (anchor in anchors) {
+            val href = resolveSiteUrl(anchor.attr("href"))
+            val parsedHref = href?.let { parseTargetUrl(it) }
             val rawHeading = anchor.selectFirst("h2.list-title")?.text()?.trim().orEmpty()
             val headingMatch = EPISODE_PREFIX_REGEX.find(rawHeading)
             val season = parsedHref?.season
                 ?: headingMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
-                ?: 1
+                ?: defaultSeason.coerceAtLeast(1)
             val episode = parsedHref?.episode
                 ?: headingMatch?.groupValues?.getOrNull(2)?.toIntOrNull()
                 ?: continue
@@ -608,29 +634,41 @@ internal object PelisJuanitaMarkup {
     private fun parseStreamSourcesFromDoc(doc: org.jsoup.nodes.Document): List<PelisJuanitaStreamSource> {
         val out = mutableListOf<PelisJuanitaStreamSource>()
         val seen = mutableSetOf<Pair<String, String>>()
+        val rows = doc.select(".box-download .row-download")
 
-        for (row in doc.select(".box-download .row-download")) {
-            val tipo = row.attr("data-tipo").trim().lowercase()
-            if (tipo != "stream") continue
+        fun collectRows(strictStreamType: Boolean) {
+            for (row in rows) {
+                val tipo = row.attr("data-tipo").trim().lowercase()
+                if (strictStreamType) {
+                    if (tipo != "stream") continue
+                } else {
+                    if (tipo in setOf("descarga", "download", "descargas")) continue
+                }
 
-            val rawUrl = row.attr("data-url").trim().ifEmpty {
-                CARGAR_SERVIDOR_REGEX.find(row.attr("onclick"))?.groupValues?.getOrNull(1).orEmpty().trim()
+                val rawUrl = row.attr("data-url").trim().ifEmpty {
+                    CARGAR_SERVIDOR_REGEX.find(row.attr("onclick"))?.groupValues?.getOrNull(1).orEmpty().trim()
+                }
+                if (!rawUrl.startsWith("http", ignoreCase = true)) continue
+
+                val lang = normalizeLanguageLabel(row.attr("data-idioma"))
+                val spans = row.select("span").map { it.text().trim() }
+                val serverName = spans.getOrNull(0)?.takeIf { it.isNotEmpty() } ?: guessServerName(rawUrl)
+                val quality = spans.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: "HD"
+
+                if (seen.add(lang to rawUrl)) {
+                    out += PelisJuanitaStreamSource(
+                        serverName = serverName,
+                        languageLabel = lang,
+                        qualityLabel = quality,
+                        url = rawUrl,
+                    )
+                }
             }
-            if (!rawUrl.startsWith("http", ignoreCase = true)) continue
+        }
 
-            val lang = normalizeLanguageLabel(row.attr("data-idioma"))
-            val spans = row.select("span").map { it.text().trim() }
-            val serverName = spans.getOrNull(0)?.takeIf { it.isNotEmpty() } ?: guessServerName(rawUrl)
-            val quality = spans.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: "HD"
-
-            if (seen.add(lang to rawUrl)) {
-                out += PelisJuanitaStreamSource(
-                    serverName = serverName,
-                    languageLabel = lang,
-                    qualityLabel = quality,
-                    url = rawUrl,
-                )
-            }
+        collectRows(strictStreamType = true)
+        if (out.isEmpty()) {
+            collectRows(strictStreamType = false)
         }
 
         val iframeSrc = doc.selectFirst("iframe#if-video")?.attr("src")?.trim().orEmpty()

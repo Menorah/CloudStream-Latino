@@ -3,6 +3,7 @@ package com.menorah.pelisjuanita
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
+import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -87,11 +88,33 @@ class PelisJuanitaLiveTest {
         val loaded = store.read()
         assertTrue(loaded.hasPhpSession())
         assertEquals("PelisJuanitaTestUA/1.0", loaded.userAgent)
+
+        // Simulate global CookieManager wipe (e.g., another plugin's CloudflareKiller) and verify restore.
+        val restoreLatch = CountDownLatch(1)
+        val restoredCookie = AtomicReference("")
+        Handler(Looper.getMainLooper()).post {
+            val cm = CookieManager.getInstance()
+            cm.removeAllCookies {
+                PelisJuanitaSessionHelper.syncMissingCookiesToWebView(loaded.cookieHeader)
+                restoredCookie.set(cm.getCookie(PelisJuanitaMarkup.MAIN_URL).orEmpty())
+                restoreLatch.countDown()
+            }
+        }
+        assertTrue("CookieManager restore timed out", restoreLatch.await(10, TimeUnit.SECONDS))
+        assertTrue("Expected PHPSESSID restored into CookieManager, got '${restoredCookie.get()}'", restoredCookie.get().contains("PHPSESSID=testsession123"))
+
         store.clear()
         assertFalse(store.read().hasPhpSession())
 
+        val bareSeasonEps = PelisJuanitaMarkup.parseSeasonEpisodesHtml(
+            """<a class="episodio-item" href="/series/ver-serie/mobland/01x01"><div class="episodio-texto"><h2 class="list-title">[01x01] Ep 1</h2></div></a>""",
+            "mobland",
+            defaultSeason = 1,
+        )
+        assertEquals(1, bareSeasonEps.size)
         assertEquals(32, PelisJuanitaVsembedCrypto.encryptHex("6168w", "vsembed.com").length)
         assertTrue(PelisJuanitaSessionHelper.looksLikeVerificationGate(302, "https://pelisjuanita.com/inicio.php", ""))
+        assertTrue(PelisJuanitaSessionHelper.shouldTryWebTransport(403, "${PelisJuanitaMarkup.MAIN_URL}/movies/", "", null))
     }
 
     @Test

@@ -48,7 +48,7 @@ for i in $(seq 1 95); do
   log=$(adb logcat -d -s CSPlaybackProbe:I '*:S')
   if echo "$log" | grep -q 'PASS all'; then
     echo "$log"
-    summary=$(echo "$log" | grep -E 'home sections=|PASS pagination|PASS unverified|PASS coil posters=|PASS server |server coverage|PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g')
+    summary=$(echo "$log" | grep -E 'home sections=|PASS pagination|PASS unverified|PASS verified|PASS coil posters=|PASS server |server coverage|PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g')
     echo "::notice::$summary"
     echo '::notice::CloudStream comprobó PelisJuanita y reprodujo las muestras con Media3'
     exit 0

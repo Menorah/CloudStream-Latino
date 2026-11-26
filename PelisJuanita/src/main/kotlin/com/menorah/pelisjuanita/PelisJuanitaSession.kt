@@ -52,20 +52,23 @@ class AndroidPelisJuanitaSessionStore(
         verifiedAtMs = prefs.getLong(KEY_VERIFIED_AT, 0L),
     )
 
+    private fun readWebViewCookies(): String = runCatching {
+        val cm = CookieManager.getInstance()
+        val apex = cm.getCookie(PelisJuanitaMarkup.MAIN_URL).orEmpty()
+        val www = cm.getCookie("https://www.pelisjuanita.com").orEmpty()
+        PelisJuanitaSessionHelper.mergeCookieHeaders(www, apex)
+    }.getOrNull().orEmpty()
+
     override fun read(): PelisJuanitaSessionData {
         val base = cached
-        val webViewCookie = runCatching {
-            CookieManager.getInstance().getCookie(PelisJuanitaMarkup.MAIN_URL)
-        }.getOrNull().orEmpty()
+        val webViewCookie = readWebViewCookies()
         if (webViewCookie.isBlank()) return base
         val merged = PelisJuanitaSessionHelper.mergeCookieHeaders(base.cookieHeader, webViewCookie)
         return if (merged == base.cookieHeader) base else base.copy(cookieHeader = merged)
     }
 
     override fun save(data: PelisJuanitaSessionData) {
-        val webViewCookie = runCatching {
-            CookieManager.getInstance().getCookie(PelisJuanitaMarkup.MAIN_URL)
-        }.getOrNull().orEmpty()
+        val webViewCookie = readWebViewCookies()
         val mergedCookies = PelisJuanitaSessionHelper.mergeCookieHeaders(data.cookieHeader, webViewCookie)
         val normalized = data.copy(cookieHeader = mergedCookies)
         cached = normalized
@@ -81,9 +84,11 @@ class AndroidPelisJuanitaSessionStore(
         prefs.edit().clear().apply()
         runCatching {
             val cm = CookieManager.getInstance()
-            val existing = cm.getCookie(PelisJuanitaMarkup.MAIN_URL).orEmpty()
-            for (name in PelisJuanitaSessionHelper.parseCookieHeader(existing).keys) {
-                cm.setCookie(PelisJuanitaMarkup.MAIN_URL, "$name=; Max-Age=0; Path=/")
+            for (domainUrl in listOf(PelisJuanitaMarkup.MAIN_URL, "https://www.pelisjuanita.com")) {
+                val existing = cm.getCookie(domainUrl).orEmpty()
+                for (name in PelisJuanitaSessionHelper.parseCookieHeader(existing).keys) {
+                    cm.setCookie(domainUrl, "$name=; Max-Age=0; Path=/")
+                }
             }
             cm.flush()
         }
@@ -125,14 +130,39 @@ internal object PelisJuanitaSessionHelper {
         return merged.entries.joinToString("; ") { (k, v) -> "$k=$v" }
     }
 
+    /**
+     * Restores missing session cookies (such as PHPSESSID stored in SharedPreferences) into WebView's
+     * CookieManager if another plugin's CloudflareKiller called removeAllCookies(null).
+     * Existing keys already in CookieManager are preserved so fresher cf_clearance cookies are never overwritten.
+     */
+    fun syncMissingCookiesToWebView(cookieHeader: String?) {
+        if (cookieHeader.isNullOrBlank()) return
+        val desired = parseCookieHeader(cookieHeader)
+        if (desired.isEmpty()) return
+        runCatching {
+            val cm = CookieManager.getInstance()
+            val existing = parseCookieHeader(cm.getCookie(PelisJuanitaMarkup.MAIN_URL).orEmpty())
+            var wrote = false
+            for ((name, value) in desired) {
+                if (existing.keys.none { it.equals(name, ignoreCase = true) }) {
+                    cm.setCookie(PelisJuanitaMarkup.MAIN_URL, "$name=$value; Path=/; Secure")
+                    wrote = true
+                }
+            }
+            if (wrote) cm.flush()
+        }
+    }
+
     fun buildRequestHeaders(
         session: PelisJuanitaSessionData,
         referer: String = "${PelisJuanitaMarkup.MAIN_URL}/",
         isAjax: Boolean = false,
+        includeCookieHeader: Boolean = true,
     ): Map<String, String> {
         val ua = session.userAgent.takeIf { it.isNotBlank() } ?: DEFAULT_USER_AGENT
         val headers = linkedMapOf(
-            "User-Agent" to ua,
+            // Lowercase key matches CloudStream RequestsHelper.DEFAULT_HEADERS so NiceHttp replaces UA cleanly.
+            "user-agent" to ua,
             "Accept" to if (isAjax) "*/*" else "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             "Referer" to referer,
@@ -143,7 +173,7 @@ internal object PelisJuanitaSessionHelper {
         if (isAjax) {
             headers["X-Requested-With"] = "XMLHttpRequest"
         }
-        if (session.cookieHeader.isNotBlank()) {
+        if (includeCookieHeader && session.cookieHeader.isNotBlank()) {
             headers["Cookie"] = session.cookieHeader
         }
         return headers
@@ -175,6 +205,20 @@ internal object PelisJuanitaSessionHelper {
         }
         return body.contains("<title>Just a moment...</title>", ignoreCase = true) ||
             body.contains("Enable JavaScript and cookies to continue", ignoreCase = true)
+    }
+
+    fun shouldTryWebTransport(
+        code: Int,
+        finalUrl: String,
+        body: String,
+        error: Throwable?,
+    ): Boolean {
+        if (error != null) return true
+        if (code == 403 || code == 503) return true
+        if (body.isBlank()) return true
+        if (looksLikeCloudflareChallenge(code, body)) return true
+        if (looksLikeVerificationGate(code, finalUrl, body)) return true
+        return false
     }
 
     fun looksLikeVerifiedCatalogOrDetail(finalUrl: String, body: String): Boolean {

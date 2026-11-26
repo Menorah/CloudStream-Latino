@@ -674,13 +674,22 @@ open class PelisJuanitaByseExtractor : ByseSX() {
                 val frameCode = runCatching {
                     URI(embedFrameUrl).rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
                 }.getOrDefault(code)
-                val pbRes = runCatching {
+                var pbRes = runCatching {
                     app.get(
                         "$embedBase/api/videos/$frameCode/embed/playback",
                         headers = headers + mapOf("Referer" to embedFrameUrl, "x-embed-parent" to url),
                         timeout = 12L,
                     )
                 }.getOrNull()
+                if ((pbRes == null || !pbRes.isSuccessful) && !base.equals(embedBase, ignoreCase = true)) {
+                    pbRes = runCatching {
+                        app.get(
+                            "$base/api/videos/$code/embed/playback",
+                            headers = headers + mapOf("Referer" to url, "x-embed-parent" to url),
+                            timeout = 12L,
+                        )
+                    }.getOrNull()
+                }
                 if (pbRes != null && pbRes.isSuccessful) {
                     val root = runCatching { PelisJuanitaMarkup.jsonMapper.readTree(pbRes.text) }.getOrNull()
                     val playback = root?.get("playback")
@@ -1306,7 +1315,11 @@ class PelisJuanitaVoeExtractor : ExtractorApi() {
 
             val decrypted = PelisJuanitaVoeCrypto.decryptF7(encodedJson) ?: return false
             val origin = PelisJuanitaVidHideParser.originOf(res.url)
-            val streamHeaders = mapOf("Origin" to origin, "Referer" to "$origin/")
+            val streamHeaders = mapOf(
+                "Origin" to origin,
+                "Referer" to "$origin/",
+                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            )
             var emitted = false
 
             val m3u8Url = decrypted.source?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
@@ -1509,7 +1522,11 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             val streamNode = root.get("stream") ?: root
             val hlsUrl = streamNode.get("hls")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
             val tiktokUrl = streamNode.get("tiktok")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
-            val streamHeaders = mapOf("Origin" to origin, "Referer" to "$origin/")
+            val streamHeaders = mapOf(
+                "Origin" to origin,
+                "Referer" to "$origin/",
+                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            )
 
             var emitted = false
             for (candidate in listOfNotNull(hlsUrl, tiktokUrl).distinct()) {
@@ -1569,7 +1586,11 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
-            val streamHeaders = mapOf("Origin" to parsed.origin, "Referer" to "${parsed.origin}/")
+            val streamHeaders = mapOf(
+                "Origin" to parsed.origin,
+                "Referer" to "${parsed.origin}/",
+                "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            )
             for (sub in parsed.subtitles) subtitleCallback(newSubtitleFile(sub.label, sub.url))
             var emitted = false
             for (stream in parsed.streams) {

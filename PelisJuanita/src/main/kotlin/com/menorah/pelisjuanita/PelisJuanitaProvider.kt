@@ -73,10 +73,21 @@ class PelisJuanitaProvider(
     private val htmlCache = ConcurrentHashMap<String, CachedText>()
     private val publicCatalogCache = ConcurrentHashMap<Int, CachedSearchPage>()
     private val publicCatalogMutex = Mutex()
+    private val movieIdCache = ConcurrentHashMap<String, Long>()
     private val seriesIdCache = ConcurrentHashMap<String, Long>()
     private val siteGate = Semaphore(4)
     private val seasonGate = Semaphore(4)
     private val linkGate = Semaphore(4)
+
+    @Volatile
+    internal var testWebResponse: ((android.webkit.WebResourceRequest) -> android.webkit.WebResourceResponse?)? = null
+
+    fun clearCaches() {
+        htmlCache.clear()
+        publicCatalogCache.clear()
+        movieIdCache.clear()
+        seriesIdCache.clear()
+    }
 
     private data class FetchedSitePage(
         val code: Int,
@@ -105,49 +116,89 @@ class PelisJuanitaProvider(
             return FetchedSitePage(302, "$mainUrl/inicio.php", "", gated = true)
         }
 
-        val headers = PelisJuanitaSessionHelper.buildRequestHeaders(session, referer = referer, isAjax = isAjax)
+        val headers = PelisJuanitaSessionHelper.buildRequestHeaders(
+            session,
+            referer = referer,
+            isAjax = isAjax,
+            includeCookieHeader = false,
+        )
+        val cookies = session.cookieMap()
         return siteGate.withPermit {
             var code = 0
             var finalUrl = url
             var body = ""
             var error: Throwable? = null
+            val activeTestResponse = testWebResponse
 
-            try {
-                val res = if (postForm != null) {
-                    app.post(url, headers = headers, data = postForm, timeout = 18L)
-                } else {
-                    app.get(url, headers = headers, timeout = 18L)
+            if (activeTestResponse == null) {
+                try {
+                    val res = if (postForm != null) {
+                        app.post(url, headers = headers, cookies = cookies, data = postForm, timeout = 18L)
+                    } else {
+                        app.get(url, headers = headers, cookies = cookies, timeout = 18L)
+                    }
+                    code = res.code
+                    finalUrl = res.url
+                    body = res.text
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    error = t
                 }
-                code = res.code
-                finalUrl = res.url
-                body = res.text
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                error = t
+            } else {
+                code = 403
             }
 
             val webCtx = appContext
             if (webCtx != null &&
-                (error != null || PelisJuanitaSessionHelper.looksLikeCloudflareChallenge(code, body))
+                PelisJuanitaSessionHelper.shouldTryWebTransport(code, finalUrl, body, error)
             ) {
                 val webRes = runCatching {
+                    val ua = session.userAgent.takeIf { it.isNotBlank() }
                     if (postForm != null) {
-                        PelisJuanitaWebTransport.post(webCtx, url, referer, postForm, session.userAgent.takeIf { it.isNotBlank() })
+                        PelisJuanitaWebTransport.post(
+                            webCtx,
+                            url,
+                            referer,
+                            postForm,
+                            userAgent = ua,
+                            seedCookieHeader = session.cookieHeader,
+                            testResponse = activeTestResponse,
+                        )
                     } else {
-                        PelisJuanitaWebTransport.get(webCtx, url, referer, session.userAgent.takeIf { it.isNotBlank() })
+                        PelisJuanitaWebTransport.get(
+                            webCtx,
+                            url,
+                            referer,
+                            userAgent = ua,
+                            seedCookieHeader = session.cookieHeader,
+                            testResponse = activeTestResponse,
+                        )
                     }
                 }.getOrNull()
                 if (webRes != null) {
                     code = webRes.code
                     finalUrl = webRes.url
                     body = webRes.text
+                    if (activeTestResponse == null &&
+                        webRes.cookieHeader.isNotBlank() &&
+                        code in 200..299 &&
+                        !PelisJuanitaSessionHelper.looksLikeVerificationGate(code, finalUrl, body) &&
+                        !PelisJuanitaSessionHelper.looksLikeCloudflareChallenge(code, body)
+                    ) {
+                        val mergedCookies = PelisJuanitaSessionHelper.mergeCookieHeaders(
+                            session.cookieHeader,
+                            webRes.cookieHeader,
+                        )
+                        if (mergedCookies != session.cookieHeader) {
+                            sessionStore.save(session.copy(cookieHeader = mergedCookies))
+                        }
+                    }
                 }
             }
 
             val gated = PelisJuanitaSessionHelper.looksLikeVerificationGate(code, finalUrl, body)
             if (gated) {
-                sessionStore.clear()
                 htmlCache.clear()
                 return@withPermit FetchedSitePage(code, finalUrl, body, gated = true)
             }
@@ -161,7 +212,7 @@ class PelisJuanitaProvider(
 
     private suspend fun fetchPublicJson(url: String): String? {
         val headers = mapOf(
-            "User-Agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
+            "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             "Accept" to "application/json, text/plain, */*",
             "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             "Referer" to "$mainUrl/",
@@ -170,6 +221,17 @@ class PelisJuanitaProvider(
             val res = app.get(url, headers = headers, timeout = 15L)
             if (res.isSuccessful) res.text else null
         }.getOrNull()
+    }
+
+    private fun cachePublicRecords(items: List<PelisJuanitaSearchRecord>) {
+        for (rec in items) {
+            if (rec.id <= 0L) continue
+            if (rec.kind == PelisJuanitaItemKind.Series) {
+                seriesIdCache.putIfAbsent(rec.slug, rec.id)
+            } else {
+                movieIdCache.putIfAbsent(rec.slug, rec.id)
+            }
+        }
     }
 
     private suspend fun fetchPublicCatalogPage(page: Int): PelisJuanitaSearchResultPage? {
@@ -183,17 +245,38 @@ class PelisJuanitaProvider(
             }
             val raw = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl("%", safePage)) ?: return@withLock null
             val parsed = PelisJuanitaMarkup.parseSearchJson(raw) ?: return@withLock null
+            cachePublicRecords(parsed.items)
             publicCatalogCache[safePage] = CachedSearchPage(parsed, System.currentTimeMillis())
             parsed
         }
     }
 
     private suspend fun lookupPublicRecord(slug: String): PelisJuanitaSearchRecord? {
-        val query = slug.replace('-', ' ').trim().ifEmpty { slug }
-        val raw = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl(query, 1)) ?: return null
-        val parsed = PelisJuanitaMarkup.parseSearchJson(raw) ?: return null
-        return parsed.items.firstOrNull { it.slug.equals(slug, ignoreCase = true) }
-            ?: parsed.items.firstOrNull()
+        val words = slug.split('-').map { it.trim() }.filter { it.isNotEmpty() }
+        val fullQuery = words.joinToString(" ").ifEmpty { slug }
+        val queries = buildList {
+            add(fullQuery)
+            val longest = words.filter { it.length >= 4 }.maxByOrNull { it.length }
+            if (longest != null && !longest.equals(fullQuery, ignoreCase = true)) {
+                add(longest)
+            }
+            val first = words.firstOrNull()
+            if (first != null && !first.equals(fullQuery, ignoreCase = true) && !first.equals(longest, ignoreCase = true)) {
+                add(first)
+            }
+        }
+        var firstAny: PelisJuanitaSearchRecord? = null
+        for (q in queries) {
+            val raw = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl(q, 1)) ?: continue
+            val parsed = PelisJuanitaMarkup.parseSearchJson(raw) ?: continue
+            cachePublicRecords(parsed.items)
+            val exact = parsed.items.firstOrNull { it.slug.equals(slug, ignoreCase = true) }
+            if (exact != null) return exact
+            if (firstAny == null && q == fullQuery) {
+                firstAny = parsed.items.firstOrNull()
+            }
+        }
+        return firstAny
     }
 
     private fun toSearchResponse(card: PelisJuanitaCatalogCard): SearchResponse {
@@ -312,6 +395,7 @@ class PelisJuanitaProvider(
         val rawJson = fetchPublicJson(PelisJuanitaMarkup.buildSearchApiUrl(trimmed, page))
         val jsonPage = rawJson?.let { PelisJuanitaMarkup.parseSearchJson(it) }
         if (jsonPage != null) {
+            cachePublicRecords(jsonPage.items)
             return newSearchResponseList(
                 list = jsonPage.items.map(::toSearchResponse),
                 hasNext = jsonPage.hasNext,
@@ -344,6 +428,32 @@ class PelisJuanitaProvider(
     override suspend fun quickSearch(query: String): List<SearchResponse>? =
         search(query, 1)?.items
 
+    private suspend fun resolveMovieIdAndShell(slug: String, fetchShellIfMissing: Boolean): Pair<Long?, FetchedSitePage?> {
+        val cached = movieIdCache[slug]
+        if (cached != null && cached > 0) return cached to null
+
+        val pub = lookupPublicRecord(slug)
+        if (pub != null && pub.id > 0) {
+            movieIdCache[slug] = pub.id
+            return pub.id to null
+        }
+
+        if (!fetchShellIfMissing) return null to null
+        val shell = fetchSite(
+            url = PelisJuanitaMarkup.buildMovieShellUrl(slug),
+            referer = "$mainUrl/movies/",
+            isAjax = false,
+        )
+        if (shell.gated) {
+            throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
+        }
+        val extracted = PelisJuanitaMarkup.extractMovieIdFromShell(shell.text)
+        if (extracted != null && extracted > 0) {
+            movieIdCache[slug] = extracted
+        }
+        return extracted to shell
+    }
+
     override suspend fun load(url: String): LoadResponse? {
         val normalizedUrl = PelisJuanitaMarkup.resolveSiteUrl(url) ?: return null
         val target = PelisJuanitaMarkup.parseTargetUrl(normalizedUrl) ?: return null
@@ -359,15 +469,17 @@ class PelisJuanitaProvider(
                 throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
             }
 
-            val serieId = PelisJuanitaMarkup.extractSeriesIdFromShell(shellRes.text)
-                ?: lookupPublicRecord(target.slug)?.id
+            val shellId = PelisJuanitaMarkup.extractSeriesIdFromShell(shellRes.text)
+            val cachedId = seriesIdCache[target.slug]
+            val publicRec = if (shellId == null || cachedId == null) lookupPublicRecord(target.slug) else null
+            val serieId = shellId ?: cachedId ?: publicRec?.id
             if (serieId != null && serieId > 0) {
                 seriesIdCache[target.slug] = serieId
             }
 
             val initSeason = target.season ?: 1
             val initEpisode = target.episode ?: 1
-            val infoRes = fetchSite(
+            var infoRes = fetchSite(
                 url = PelisJuanitaMarkup.buildSerieInfoEpisodeUrl(target.slug, initSeason, initEpisode, serieId),
                 referer = parentUrl,
                 isAjax = true,
@@ -376,13 +488,46 @@ class PelisJuanitaProvider(
                 throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
             }
 
-            val detail = PelisJuanitaMarkup.parseSeriesDetailHtml(infoRes.text, parentUrl) ?: return null
-            val allEpisodes = Collections.synchronizedList(detail.episodes.toMutableList())
+            var detail = PelisJuanitaMarkup.parseSeriesDetailHtml(infoRes.text, parentUrl)
+            if (detail == null) {
+                val seasonModeRes = fetchSite(
+                    url = PelisJuanitaMarkup.buildSerieInfoSeasonModeUrl(target.slug, initSeason, serieId),
+                    referer = parentUrl,
+                    isAjax = true,
+                )
+                if (seasonModeRes.gated) {
+                    throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
+                }
+                if (seasonModeRes.text.isNotBlank()) {
+                    detail = PelisJuanitaMarkup.parseSeriesDetailHtml(seasonModeRes.text, parentUrl)
+                    if (detail != null) infoRes = seasonModeRes
+                }
+            }
+            if (detail == null && shellRes.text.isNotBlank()) {
+                detail = PelisJuanitaMarkup.parseSeriesDetailHtml(shellRes.text, parentUrl)
+            }
+            if (detail == null) {
+                if (infoRes.code == 403 || infoRes.code == 503 || infoRes.text.isBlank()) {
+                    throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
+                }
+                return null
+            }
 
-            val extraSeasons = detail.seasons.filter { it != detail.currentSeason }
-            if (extraSeasons.isNotEmpty()) {
+            val allEpisodes = Collections.synchronizedList(detail.episodes.toMutableList())
+            val knownSeasons = linkedSetOf<Int>().apply {
+                addAll(detail.seasons)
+                add(detail.currentSeason.coerceAtLeast(1))
+                if (initSeason > 0) add(initSeason)
+                publicRec?.seasonsCount?.let { sc ->
+                    for (s in 1..sc.coerceAtMost(40)) add(s)
+                }
+            }.sorted()
+
+            // Always fetch every season whose episodes are absent (including currentSeason when #ulTemporada awaits cargarEpisodiosDeTemporada).
+            val missingSeasons = knownSeasons.filter { s -> allEpisodes.none { it.season == s } }
+            if (missingSeasons.isNotEmpty()) {
                 coroutineScope {
-                    extraSeasons.map { seasonNum ->
+                    missingSeasons.map { seasonNum ->
                         async(Dispatchers.IO) {
                             seasonGate.withPermit {
                                 val sRes = fetchSite(
@@ -396,8 +541,27 @@ class PelisJuanitaProvider(
                                     referer = parentUrl,
                                     isAjax = true,
                                 )
-                                if (!sRes.gated && sRes.text.isNotBlank()) {
-                                    allEpisodes.addAll(PelisJuanitaMarkup.parseSeasonEpisodesHtml(sRes.text, target.slug))
+                                var seasonEpisodes = if (!sRes.gated && sRes.text.isNotBlank()) {
+                                    PelisJuanitaMarkup.parseSeasonEpisodesHtml(sRes.text, target.slug, defaultSeason = seasonNum)
+                                } else {
+                                    emptyList()
+                                }
+                                if (seasonEpisodes.isEmpty() && !sRes.gated) {
+                                    val epFallback = fetchSite(
+                                        url = PelisJuanitaMarkup.buildSerieInfoEpisodeUrl(target.slug, seasonNum, 1, serieId),
+                                        referer = parentUrl,
+                                        isAjax = true,
+                                    )
+                                    if (!epFallback.gated && epFallback.text.isNotBlank()) {
+                                        seasonEpisodes = PelisJuanitaMarkup.parseSeasonEpisodesHtml(
+                                            epFallback.text,
+                                            target.slug,
+                                            defaultSeason = seasonNum,
+                                        )
+                                    }
+                                }
+                                if (seasonEpisodes.isNotEmpty()) {
+                                    allEpisodes.addAll(seasonEpisodes)
                                 }
                             }
                         }
@@ -419,6 +583,10 @@ class PelisJuanitaProvider(
                     }
                 }
 
+            if (sortedEpisodes.isEmpty() && (infoRes.code !in 200..299 || infoRes.text.isBlank())) {
+                throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
+            }
+
             return newTvSeriesLoadResponse(detail.title, parentUrl, TvType.TvSeries, sortedEpisodes) {
                 this.posterUrl = detail.posterUrl
                 this.backgroundPosterUrl = detail.backdropUrl
@@ -438,13 +606,20 @@ class PelisJuanitaProvider(
         }
 
         // Movie
+        val hasSession = sessionStore.read().hasPhpSession()
+        val (movieId, movieShell) = if (hasSession) {
+            resolveMovieIdAndShell(target.slug, fetchShellIfMissing = true)
+        } else {
+            movieIdCache[target.slug] to null
+        }
         val movieRes = fetchSite(
-            url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug),
+            url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug, movieId),
             referer = target.publicUrl,
             isAjax = true,
         )
         if (!movieRes.gated && movieRes.text.isNotBlank()) {
             val detail = PelisJuanitaMarkup.parseMovieDetailHtml(movieRes.text, target.publicUrl)
+                ?: movieShell?.text?.takeIf { it.isNotBlank() }?.let { PelisJuanitaMarkup.parseMovieDetailHtml(it, target.publicUrl) }
             if (detail != null) {
                 return newMovieLoadResponse(detail.title, target.publicUrl, TvType.Movie, target.publicUrl) {
                     this.posterUrl = detail.posterUrl
@@ -499,7 +674,7 @@ class PelisJuanitaProvider(
         }
 
         val target = PelisJuanitaMarkup.parseTargetUrl(data) ?: return false
-        val infoRes = if (target.isSeries) {
+        var infoRes = if (target.isSeries) {
             val season = target.season ?: 1
             val episode = target.episode ?: 1
             var serieId = seriesIdCache[target.slug]
@@ -517,19 +692,36 @@ class PelisJuanitaProvider(
                 useCache = true,
             )
         } else {
+            val (movieId, _) = resolveMovieIdAndShell(target.slug, fetchShellIfMissing = sessionStore.read().hasPhpSession())
             fetchSite(
-                url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug),
+                url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug, movieId),
                 referer = target.publicUrl,
                 isAjax = true,
                 useCache = true,
             )
         }
 
-        if (infoRes.gated) {
+        if (infoRes.gated || infoRes.code == 403 || infoRes.code == 503) {
             throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
         }
 
-        val rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(infoRes.text)
+        var rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(infoRes.text)
+        if (rawSources.isEmpty() && !target.isSeries) {
+            val (movieId, movieShell) = resolveMovieIdAndShell(target.slug, fetchShellIfMissing = true)
+            infoRes = fetchSite(
+                url = PelisJuanitaMarkup.buildMovieInfoUrl(target.slug, movieId),
+                referer = target.publicUrl,
+                isAjax = true,
+                useCache = false,
+            )
+            if (infoRes.gated || infoRes.code == 403 || infoRes.code == 503) {
+                throw ErrorLoadingException(PelisJuanitaSessionHelper.VERIFICATION_REQUIRED_MESSAGE)
+            }
+            rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(infoRes.text)
+            if (rawSources.isEmpty() && movieShell != null && movieShell.text.isNotBlank()) {
+                rawSources = PelisJuanitaMarkup.parseStreamSourcesHtml(movieShell.text)
+            }
+        }
         if (rawSources.isEmpty()) return false
 
         val langPriority = mapOf("Latino" to 0, "Español" to 1, "Subtitulado" to 2)
