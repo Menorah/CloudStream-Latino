@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely inspect routes/filters/DOM on cuevana3v.pro."""
+"""Inspect full <main> text/HTML of series & movie pages (excluding player), check TMDB w500, and enumerate valid genres."""
 import json
 import urllib.error
 import urllib.request
@@ -13,13 +13,13 @@ HEADERS = {
 }
 
 
-def get(path: str):
-    req = urllib.request.Request(BASE + path, headers=HEADERS)
+def get(url: str):
+    req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
-            return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+            return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        return e.code, e.geturl(), e.read().decode("utf-8", "replace")
+        return e.code, e.read().decode("utf-8", "replace")
 
 
 def emit(tag: str, obj):
@@ -27,54 +27,46 @@ def emit(tag: str, obj):
     print("::notice::" + line[:3800])
 
 
-# Test route candidates
-routes = {}
-for p in [
-    "/explorar",
-    "/explorar?s=la",
-    "/explorar?s=la&page=2",
-    "/explorar?genero=accion",
-    "/explorar?anio=2025",
-    "/peliculas?genero=accion",
-    "/peliculas?anio=2025",
-    "/series?genero=drama",
-    "/series?anio=2025",
-    "/peliculas?orden=tendencias&page=2",
-    "/episodios/recientes?page=2",
+# 1. Inspect top part of <main> (before related/player) on series and movie
+for name, path in [
+    ("serie_deriva", "/serie/a-la-deriva-2"),
+    ("serie_dexter", "/serie/dexter-resurreccion"),
+    ("serie_dbs", "/serie/dragon-ball-super-beerus"),
+    ("movie_hunger", "/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha"),
 ]:
-    st, fu, body = get(p)
-    s = BeautifulSoup(body, "html.parser")
-    cards = len(s.select("main a[href*='/pelicula/'], main a[href*='/serie/']"))
-    pag = [(a.get_text(" ", strip=True), a.get("href")) for a in s.select("a[href*='page=']")]
-    routes[p] = {"status": st, "cards": cards, "pag": pag}
-emit("route_probe", routes)
+    st, html = get(BASE + path)
+    s = BeautifulSoup(html, "html.parser")
+    main = s.select_one("main")
+    if main:
+        for t in main.select("script, style, #player"):
+            t.decompose()
+    meta_tags = {m.get("property") or m.get("name"): m.get("content") for m in s.select("meta[property], meta[name='description']")}
+    emit(name, {
+        "status": st,
+        "meta": meta_tags,
+        "main_html_head": str(main)[:3200] if main else "",
+    })
 
-# /episodios/recientes DOM
-st, _, rec_html = get("/episodios/recientes")
-rs = BeautifulSoup(rec_html, "html.parser")
-rec_cards = [str(el)[:320] for el in rs.select("main a[href*='/episodio-']")[:2]]
-rec_pag = [(a.get_text(" ", strip=True), a.get("href")) for a in rs.select("a[href*='page=']")]
-emit("recientes", {"status": st, "count": len(rs.select("main a[href*='/episodio-']")), "samples": rec_cards, "pag": rec_pag})
+# 2. Check genre slugs on /peliculas?genero=... and /series?genero=...
+candidates = [
+    "accion", "animacion", "aventura", "belica", "ciencia-ficcion", "comedia",
+    "crimen", "documental", "drama", "familia", "fantasia", "historia",
+    "misterio", "musica", "pelicula-de-tv", "romance", "suspense", "terror", "western",
+]
+valid_movie_genres = []
+valid_series_genres = []
+for g in candidates:
+    st_m, h_m = get(f"{BASE}/peliculas?genero={g}")
+    c_m = len(BeautifulSoup(h_m, "html.parser").select("main a[href*='/pelicula/']"))
+    if st_m == 200 and c_m > 0:
+        valid_movie_genres.append((g, c_m))
+    st_s, h_s = get(f"{BASE}/series?genero={g}")
+    c_s = len(BeautifulSoup(h_s, "html.parser").select("main a[href*='/serie/']"))
+    if st_s == 200 and c_s > 0:
+        valid_series_genres.append((g, c_s))
+emit("genres", {"movies": valid_movie_genres, "series": valid_series_genres})
 
-# /explorar?s=la DOM
-_, _, sq_html = get("/explorar?s=la")
-sqs = BeautifulSoup(sq_html, "html.parser")
-sq_items = [(a.get("href"), a.get_text(" ", strip=True)) for a in sqs.select("main a[href*='/pelicula/'], main a[href*='/serie/']")[:6]]
-sq_sample = str(sqs.select_one("main a[href*='/pelicula/'], main a[href*='/serie/']"))[:500]
-emit("search_la", {"count": len(sqs.select("main a[href*='/pelicula/'], main a[href*='/serie/']")), "items": sq_items, "sample": sq_sample})
-
-# Serie detail DOM (/serie/a-la-deriva-2)
-_, _, sd_html = get("/serie/a-la-deriva-2")
-sds = BeautifulSoup(sd_html, "html.parser")
-sd_main = sds.select_one("main")
-sd_ld = [s.get_text(strip=True)[:1200] for s in sds.select("script[type='application/ld+json']")]
-sd_links = [(a.get_text(" ", strip=True), a.get("href")) for a in (sd_main.select("a") if sd_main else [])][:25]
-emit("serie_detail", {"ld": sd_ld, "links": sd_links, "backdrop": str(sd_main.select_one(".backdrop"))[:1200] if sd_main and sd_main.select_one(".backdrop") else ""})
-
-# Movie detail extra (/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha)
-_, _, md_html = get("/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha")
-mds = BeautifulSoup(md_html, "html.parser")
-md_main = mds.select_one("main")
-md_links = [(a.get_text(" ", strip=True), a.get("href")) for a in (md_main.select("a") if md_main else [])][:35]
-md_related = [(a.get("href"), a.get_text(" ", strip=True)) for a in mds.select("section a[href*='/pelicula/'], section a[href*='/serie/']")[:8]]
-emit("movie_detail_extra", {"links": md_links, "related": md_related, "backdrop": str(md_main.select_one(".backdrop"))[:1200] if md_main and md_main.select_one(".backdrop") else ""})
+# 3. Check TMDB w500 vs w200
+req = urllib.request.Request("https://image.tmdb.org/t/p/w500/8K4lZ5oepk3kArMWfQuqSegxSRe.jpg", headers=HEADERS, method="HEAD")
+with urllib.request.urlopen(req, timeout=15) as r:
+    emit("tmdb_w500", {"status": r.status, "ct": r.headers.get("Content-Type"), "cl": r.headers.get("Content-Length")})
