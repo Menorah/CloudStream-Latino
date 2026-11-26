@@ -1,0 +1,301 @@
+name: Diagnostico otraspeliculasdeejemplo
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/pelisjuanita-diag.yml']
+permissions:
+  contents: read
+jobs:
+  extract:
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [0, 1]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Preparar script y descargar zip
+        shell: python3 {0}
+        run: |
+          import base64, hashlib, http.cookiejar, json, os, re, urllib.request, zipfile, zlib
+
+          LANDING = "https://tmpfiles.org/w0AwvfHrJzwM/otraspeliculasdeejemplo.zip"
+          FALLBACK_DL = "https://tmpfiles.org/dl/1795732020.0a18466d710ddce6/w0AwvfHrJzwM/otraspeliculasdeejemplo.zip"
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+          cj = http.cookiejar.CookieJar()
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+          opener.addheaders = [("User-Agent", UA)]
+
+          landing_html = opener.open(LANDING, timeout=30).read().decode("utf-8", "replace")
+          m = re.search(r"https://tmpfiles\.org/dl/[^\"'\s<>]+", landing_html)
+          dl_url = m.group(0) if m else FALLBACK_DL
+          req = urllib.request.Request(dl_url, headers={"User-Agent": UA, "Referer": LANDING})
+          zip_bytes = opener.open(req, timeout=120).read()
+          assert zip_bytes[:2] == b"PK", f"Not a zip: {zip_bytes[:100]!r}"
+          with open("/tmp/archive.zip", "wb") as f:
+              f.write(zip_bytes)
+
+          def redact(s):
+              s = re.sub(r"[A-Za-z]:\\Users\\[^\\\"'\s]+", r"C:\\Users\\REDACTED", s)
+              s = re.sub(r"/(?:Users|home)/[^/\"'\s]+", "/Users/REDACTED", s)
+              return s
+
+          entries = []
+          blobs = {}
+          binary_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".webm", ".avif", ".mp3", ".svg"}
+          with zipfile.ZipFile("/tmp/archive.zip") as zf:
+              for info in sorted(zf.infolist(), key=lambda i: i.filename):
+                  name = info.filename
+                  if info.is_dir():
+                      entries.append({"name": redact(name), "dir": True, "size": 0})
+                      continue
+                  raw = zf.read(name)
+                  sha = hashlib.sha256(raw).hexdigest()[:16]
+                  base = name.rsplit("/", 1)[-1]
+                  ext = ("." + base.rsplit(".", 1)[-1].lower()) if "." in base else ""
+                  entries.append({
+                      "name": redact(name),
+                      "dir": False,
+                      "size": info.file_size,
+                      "csize": info.compress_size,
+                      "ext": ext,
+                      "sha": sha,
+                  })
+                  if ext not in binary_exts and sha not in blobs:
+                      txt = redact(raw.decode("utf-8", "replace"))
+                      if ext == ".css":
+                          blobs[sha] = {"kind": "css", "len": len(txt), "head": txt[:400]}
+                      elif ext == ".json" and len(txt) > 80000:
+                          blobs[sha] = {"kind": "large_json", "len": len(txt), "head": txt[:1000]}
+                      else:
+                          blobs[sha] = {"kind": "text", "len": len(txt), "text": txt}
+
+          def build_b64(payload_obj):
+              raw_json = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+              return base64.b64encode(zlib.compress(raw_json, 9)).decode("ascii")
+
+          b64 = build_b64({"zip_bytes": len(zip_bytes), "entries": entries, "blobs": blobs})
+          if len(b64) > 240000:
+              # Trim large CSS/vendor JS or <style> tags if payload exceeds 80 chunk budget (~256KB b64)
+              for sha, b in list(blobs.items()):
+                  if b.get("kind") == "text":
+                      t = b["text"]
+                      t2 = re.sub(r"(?is)<style\b.*?</style>", "<style>/*STRIPPED*/</style>", t)
+                      t2 = re.sub(r"data:image/[^\"'\s)]{200,}", "data:image/STRIPPED", t2)
+                      if len(t2) > 120000:
+                          t2 = t2[:60000] + "\n/*MIDDLE_STRIPPED*/\n" + t2[-40000:]
+                      b["text"] = t2
+              b64 = build_b64({"zip_bytes": len(zip_bytes), "trimmed": True, "entries": entries, "blobs": blobs})
+
+          chunks = [b64[i:i+3200] for i in range(0, len(b64), 3200)]
+          with open("/tmp/chunks.json", "w") as f:
+              json.dump({"total": len(chunks), "b64_len": len(b64), "chunks": chunks}, f)
+          print(f"::notice::META slot=${{ matrix.slot }} zip_bytes={len(zip_bytes)} entries={len(entries)} blobs={len(blobs)} total_chunks={len(chunks)} b64_len={len(b64)}", flush=True)
+
+      - name: Emitir bloque 1
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/chunks.json"))
+          base = ${{ matrix.slot }} * 40
+          for i in range(base, min(base + 8, d["total"])):
+              print(f"::notice::OTRAS {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
+
+      - name: Emitir bloque 2
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/chunks.json"))
+          base = ${{ matrix.slot }} * 40 + 8
+          for i in range(base, min(base + 8, d["total"])):
+              print(f"::notice::OTRAS {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
+
+      - name: Emitir bloque 3
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/chunks.json"))
+          base = ${{ matrix.slot }} * 40 + 16
+          for i in range(base, min(base + 8, d["total"])):
+              print(f"::notice::OTRAS {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
+
+      - name: Emitir bloque 4
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/chunks.json"))
+          base = ${{ matrix.slot }} * 40 + 24
+          for i in range(base, min(base + 8, d["total"])):
+              print(f"::notice::OTRAS {i+1}/{d['chunks'][i]}", flush=True)
+
+      - name: Emitir bloque 5
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/chunks.json"))
+          base = ${{ matrix.slot }} * 40 + 32
+          for i in range(base, min(base + 8, d["total"])):
+              print(f"::notice::OTRAS {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
+
+  analyze_and_probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Instalar bs4
+        run: python3 -m pip install --break-system-packages -q beautifulsoup4
+
+      - name: Analizar archivos y sondear hosts
+        shell: python3 {0}
+        run: |
+          import base64, http.cookiejar, json, re, urllib.error, urllib.request, zipfile, zlib
+          from bs4 import BeautifulSoup
+
+          LANDING = "https://tmpfiles.org/w0AwvfHrJzwM/otraspeliculasdeejemplo.zip"
+          FALLBACK_DL = "https://tmpfiles.org/dl/1795732020.0a18466d710ddce6/w0AwvfHrJzwM/otraspeliculasdeejemplo.zip"
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+          cj = http.cookiejar.CookieJar()
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+          opener.addheaders = [("User-Agent", UA)]
+
+          landing_html = opener.open(LANDING, timeout=30).read().decode("utf-8", "replace")
+          m = re.search(r"https://tmpfiles\.org/dl/[^\"'\s<>]+", landing_html)
+          dl_url = m.group(0) if m else FALLBACK_DL
+          zip_bytes = opener.open(urllib.request.Request(dl_url, headers={"User-Agent": UA, "Referer": LANDING}), timeout=120).read()
+          with open("/tmp/archive.zip", "wb") as f:
+              f.write(zip_bytes)
+
+          file_reports = []
+          probe_urls = []
+          seen_urls = set()
+
+          def add_probe(u):
+              if not u or not isinstance(u, str):
+                  return
+              u = u.strip()
+              if u.startswith("//"):
+                  u = "https:" + u
+              if u.startswith("http") and "youtube.com/embed/" not in u and u not in seen_urls:
+                  seen_urls.add(u)
+                  probe_urls.append(u)
+
+          with zipfile.ZipFile("/tmp/archive.zip") as zf:
+              for info in sorted(zf.infolist(), key=lambda i: i.filename):
+                  if info.is_dir():
+                      continue
+                  name = info.filename
+                  low = name.lower()
+                  if low.endswith((".html", ".htm", ".php")):
+                      raw = zf.read(name).decode("utf-8", "replace")
+                      soup = BeautifulSoup(raw, "html.parser")
+                      saved_m = re.search(r"saved from url=\(\d+\)([^\s>]+)", raw)
+                      title_el = soup.find("title")
+                      h1_el = soup.select_one(".titleInfo h1, h1")
+                      rows = []
+                      for row in soup.select(".row-download"):
+                          spans = [sp.get_text(strip=True) for sp in row.select("span")]
+                          durl = row.get("data-url") or row.get("data-src") or row.get("data-link") or ""
+                          onclick = row.get("onclick") or ""
+                          rows.append({
+                              "idioma": row.get("data-idioma", ""),
+                              "tipo": row.get("data-tipo", ""),
+                              "data_url": durl,
+                              "onclick": onclick,
+                              "spans": spans,
+                          })
+                          if row.get("data-tipo", "").lower() != "descarga":
+                              add_probe(durl)
+                              mc = re.search(r"cargarServi(?:d)?or\(\s*['\"]([^'\"]+)['\"]", onclick)
+                              if mc:
+                                  add_probe(mc.group(1))
+                      iframes = [{"id": f.get("id", ""), "src": f.get("src", "")} for f in soup.find_all("iframe")]
+                      for f in iframes:
+                          add_probe(f.get("src", ""))
+                      # Also check inline JSON like vimeus <script id="data">
+                      data_tag = soup.find("script", id="data")
+                      data_json = data_tag.get_text(strip=True) if data_tag else None
+                      if data_json:
+                          for um in re.findall(r"https?://[^\s\"'<>\\]+", data_json):
+                              add_probe(um)
+                      movie_id_m = re.search(r"CURRENT_MOVIE_ID\s*=\s*(\d+)", raw)
+                      serie_id_m = re.search(r"CURRENT_SERIE_ID\s*=\s*(\d+)", raw)
+                      file_reports.append({
+                          "name": name,
+                          "size": info.file_size,
+                          "saved_from": saved_m.group(1) if saved_m else None,
+                          "title": title_el.get_text(strip=True) if title_el else None,
+                          "h1": h1_el.get_text(strip=True) if h1_el else None,
+                          "movie_id": movie_id_m.group(1) if movie_id_m else None,
+                          "serie_id": serie_id_m.group(1) if serie_id_m else None,
+                          "rows_count": len(rows),
+                          "rows": rows,
+                          "iframes": iframes,
+                          "data_tag": data_json,
+                          "videos": [str(v) for v in soup.find_all(["video", "source"])],
+                      })
+
+          # Probe each unique stream URL live
+          live_probes = []
+          for u in probe_urls[:40]:
+              try:
+                  req = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": "https://pelisjuanita.com/"})
+                  with opener.open(req, timeout=15) as r:
+                      body = r.read(20000).decode("utf-8", "replace")
+                      final_url = r.geturl()
+                      live_probes.append({
+                          "url": u,
+                          "code": r.status,
+                          "final_url": final_url,
+                          "ct": r.headers.get("Content-Type", ""),
+                          "len": len(body),
+                          "has_turnstile": ("challenges.cloudflare.com/turnstile" in body or "cf-turnstile" in body),
+                          "has_hcaptcha": ("hcaptcha.com" in body),
+                          "has_cf": ("cf-browser-verification" in body or "Just a moment" in body or "__cf_chl" in body),
+                          "has_pass_md5": ("/pass_md5/" in body),
+                          "has_packed": ("eval(function(p,a,c,k,e,d" in body),
+                          "has_m3u8": (".m3u8" in body),
+                          "head": re.sub(r"\s+", " ", body[:400]),
+                      })
+              except urllib.error.HTTPError as e:
+                  body = e.read(4000).decode("utf-8", "replace")
+                  live_probes.append({
+                      "url": u,
+                      "code": e.code,
+                      "final_url": e.geturl(),
+                      "head": re.sub(r"\s+", " ", body[:300]),
+                  })
+              except Exception as e:
+                  live_probes.append({"url": u, "err": repr(e)})
+
+          out = {"html_files": file_reports, "live_probes": live_probes}
+          raw_json = json.dumps(out, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+          b64 = base64.b64encode(zlib.compress(raw_json, 9)).decode("ascii")
+          chunks = [b64[i:i+3200] for i in range(0, len(b64), 3200)]
+          with open("/tmp/analysis_chunks.json", "w") as f:
+              json.dump({"total": len(chunks), "chunks": chunks}, f)
+
+      - name: Emitir analisis 1
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/analysis_chunks.json"))
+          for i in range(0, min(8, d["total"])):
+              print(f"::notice::ANALYZE {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
+
+      - name: Emitir analisis 2
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/analysis_chunks.json"))
+          for i in range(8, min(16, d["total"])):
+              print(f"::notice::ANALYZE {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
+
+      - name: Emitir analisis 3
+        shell: python3 {0}
+        run: |
+          import json
+          d = json.load(open("/tmp/analysis_chunks.json"))
+          for i in range(16, min(24, d["total"])):
+              print(f"::notice::ANALYZE {i+1}/{d['total']} {d['chunks'][i]}", flush=True)
