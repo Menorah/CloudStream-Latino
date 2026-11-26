@@ -9,7 +9,7 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe endpoints
+      - name: Inspect inicio.php and 403 headers
         run: |
           python3 - <<'PY'
           import urllib.request, urllib.error, http.cookiejar, json
@@ -20,8 +20,7 @@ jobs:
               def redirect_request(self, req, fp, code, msg, headers, newurl):
                   return None
 
-          cj = http.cookiejar.CookieJar()
-          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj), NoRedir())
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), NoRedir())
 
           def hit(url, hdrs=None):
               req = urllib.request.Request(url, headers={
@@ -32,29 +31,25 @@ jobs:
               })
               try:
                   with opener.open(req, timeout=15) as r:
-                      body = r.read().decode("utf-8", "replace")
-                      return r.status, dict(r.headers), body
+                      return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
               except urllib.error.HTTPError as e:
-                  body = e.read().decode("utf-8", "replace")
-                  return e.code, dict(e.headers), body
+                  return e.code, dict(e.headers), e.read().decode("utf-8", "replace")
 
-          urls = [
-              ("inicio", "https://pelisjuanita.com/inicio.php?redirect=%2Fmovies%2F", {}),
-              ("root", "https://pelisjuanita.com/", {}),
-              ("movie_shell", "https://pelisjuanita.com/movies/pelicula/madden", {}),
-              ("movie_info_nop", "https://pelisjuanita.com/movies/movieInfo.php?title=madden&p=", {"Referer": "https://pelisjuanita.com/movies/pelicula/madden", "X-Requested-With": "XMLHttpRequest"}),
-              ("movie_info_p", "https://pelisjuanita.com/movies/movieInfo.php?title=madden&p=55775", {"Referer": "https://pelisjuanita.com/movies/pelicula/madden", "X-Requested-With": "XMLHttpRequest"}),
-              ("serie_shell", "https://pelisjuanita.com/series/ver-serie/mobland", {}),
-              ("serie_info_ep", "https://pelisjuanita.com/series/serieInfo.php?nombreSerie=mobland&nroTemporada=1&nroEpisodio=1&p=7650", {"Referer": "https://pelisjuanita.com/series/ver-serie/mobland", "X-Requested-With": "XMLHttpRequest"}),
-              ("serie_info_temp", "https://pelisjuanita.com/series/serieInfo.php?nombreSerie=mobland&temporada=1&snum=1&enum=1&p=7650", {"Referer": "https://pelisjuanita.com/series/ver-serie/mobland", "X-Requested-With": "XMLHttpRequest"}),
-              ("buscar_madden", "https://pelisjuanita.com/tv/app/buscar.php?q=madden&pagina=1", {}),
-              ("voe_sample", "https://voe.sx/e/l2pnsxuqf4yq", {}),
-          ]
-          for name, u, h in urls:
-              code, hdrs, body = hit(u, h)
-              loc = hdrs.get("Location") or hdrs.get("location") or ""
-              sc = hdrs.get("Set-Cookie") or hdrs.get("set-cookie") or ""
-              srv = hdrs.get("Server") or hdrs.get("server") or ""
-              msg = json.dumps({"name": name, "code": code, "len": len(body), "srv": srv, "loc": loc, "sc": sc, "head": body[:2400]}, ensure_ascii=False)
-              print("::notice::" + msg[:3800].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D"))
+          def emit(tag, text):
+              for i in range(0, len(text), 3500):
+                  chunk = text[i:i+3500].replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+                  print(f"::notice::{tag}_{i}: {chunk}")
+
+          code, hdrs, body = hit("https://pelisjuanita.com/inicio.php?redirect=%2Fmovies%2F")
+          idx = body.find("<form")
+          emit("INICIO_FORM", body[max(0, idx-200):] if idx >= 0 else body[3000:])
+
+          for name, u in [
+              ("movies_dir", "https://pelisjuanita.com/movies/"),
+              ("series_dir", "https://pelisjuanita.com/series/"),
+              ("movie_shell", "https://pelisjuanita.com/movies/pelicula/madden"),
+              ("serie_shell", "https://pelisjuanita.com/series/ver-serie/mobland"),
+          ]:
+              c, h, b = hit(u)
+              emit("HDR_" + name, json.dumps({"code": c, "len": len(b), "hdrs": h}, ensure_ascii=False))
           PY
