@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe waaw, lulustream, oisauh, playmogo
+      - name: Inspect waaw embed.js, lulu seg 403, playmogo tail
         run: |
           python3 - <<'PY'
-          import json, re, time, urllib.request, urllib.parse, urllib.error
+          import re, urllib.request, urllib.parse, urllib.error
 
           UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
           notices = []
@@ -28,16 +28,13 @@ jobs:
               if headers:
                   h.update(headers)
               req = urllib.request.Request(url, data=data, headers=h)
-              t0 = time.time()
               try:
                   with urllib.request.urlopen(req, timeout=timeout) as r:
-                      body = r.read().decode("utf-8", "replace")
-                      return r.status, r.geturl(), dict(r.headers), body, round(time.time() - t0, 2)
+                      return r.status, r.geturl(), dict(r.headers), r.read()
               except urllib.error.HTTPError as e:
-                  body = e.read().decode("utf-8", "replace")
-                  return e.code, e.geturl(), dict(e.headers), body, round(time.time() - t0, 2)
+                  return e.code, e.geturl(), dict(e.headers), e.read()
               except Exception as e:
-                  return -1, url, {}, repr(e), round(time.time() - t0, 2)
+                  return -1, url, {}, repr(e).encode()
 
           def unpack_dean(html):
               m = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", html, re.S)
@@ -56,69 +53,59 @@ jobs:
               mapping = {enc(i): (k[i] if i < len(k) and k[i] else enc(i)) for i in range(c)}
               return re.sub(r"\b\w+\b", lambda x: mapping.get(x.group(0), x.group(0)), p)
 
-          # 1. Waaw script analysis
-          _, _, _, wb, _ = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
-          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
-          script_info = []
-          for idx, sc in enumerate(scripts):
-              s_strip = sc.strip()
-              if not s_strip:
-                  continue
-              script_info.append(f"[{idx}:len={len(s_strip)}] {s_strip[:260]}")
-          script_srcs = re.findall(r"<script[^>]+src=['\"]([^'\"]+)['\"]", wb, re.I)
-          add_notice("WAAW_SCRIPTS", f"srcs={script_srcs} count={len(scripts)} -> " + " || ".join(script_info)[:3400])
-          long_scripts = [(i, sc.strip()) for i, sc in enumerate(scripts) if len(sc.strip()) > 300]
-          for idx, sc in long_scripts[:3]:
-              add_notice(f"WAAW_LONG_{idx}", f"len={len(sc)} head={sc[:1900]} tail={sc[-1800:]}")
+          # 1. Waaw inline scripts >= 20 + embed.232.js
+          _, _, _, wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
+          wb_s = wb.decode("utf-8", "replace")
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb_s, re.S | re.I)
+          tail_sc = [f"[{i}:len={len(s.strip())}] {s.strip()[:300]}" for i, s in enumerate(scripts) if i >= 20 and s.strip()]
+          add_notice("WAAW_TAIL_SC", " || ".join(tail_sc)[:3700])
 
-          # 2. Lulustream / Lplaygo unpacked + M3U8 + segment test
-          lulu_logs = []
-          for origin in ["https://lplaygo.com", "https://lulustream.com"]:
-              form = urllib.parse.urlencode({
-                  "op": "embed", "file_code": "zxfcz3pz68ds", "auto": "1", "referer": "https://pelisjuanita.com/"
-              }).encode()
-              c, u, h, b, dt = fetch(f"{origin}/dl", {"Referer": f"{origin}/e/zxfcz3pz68ds", "Origin": origin, "Content-Type": "application/x-www-form-urlencoded"}, data=form)
-              unp = unpack_dean(b)
-              urls = re.findall(r'https?://[^\s"\'<>\\]+', unp or b)
-              m3s = [x for x in urls if ".m3u8" in x or "master" in x or "v.mp4" in x]
-              lulu_logs.append(f"{origin}: c={c} packed={bool(unp)} unp_snippet={unp[:400]!r} urls={m3s[:5]}")
-              if m3s:
-                  m3_url = m3s[0]
-                  for ref_try in [f"{origin}/", "https://lulustream.com/", "https://lplaygo.com/", ""]:
-                      hdrs = {"Referer": ref_try, "Origin": ref_try.rstrip("/")} if ref_try else {}
-                      mc, mu, mh, mb, mdt = fetch(m3_url, hdrs, timeout=8)
-                      lulu_logs.append(f"  m3u8({ref_try!r}) c={mc} ct={mh.get('Content-Type')} len={len(mb)} head={mb[:250]!r}")
-                      if mc == 200 and "#EXT" in mb:
-                          sub = [ln.strip() for ln in mb.splitlines() if ln.strip() and not ln.startswith("#")]
-                          if sub:
-                              su0 = urllib.parse.urljoin(mu, sub[0])
-                              sc, su, sh, sb, _ = fetch(su0, hdrs, timeout=8)
-                              lulu_logs.append(f"  sub c={sc} head={sb[:220]!r}")
-                              if sc == 200:
-                                  segs = [ln.strip() for ln in sb.splitlines() if ln.strip() and not ln.startswith("#")]
-                                  if segs:
-                                      segu = urllib.parse.urljoin(su, segs[0])
-                                      req = urllib.request.Request(segu, headers={**{"User-Agent": UA}, **hdrs})
-                                      try:
-                                          with urllib.request.urlopen(req, timeout=8) as r:
-                                              chunk = r.read(1024)
-                                              lulu_logs.append(f"  seg c={r.status} ct={r.headers.get('Content-Type')} b0={chunk[:16].hex()}")
-                                      except Exception as ex:
-                                          lulu_logs.append(f"  seg ERR={ex!r}")
-          lulu_txt = " || ".join(lulu_logs)
-          add_notice("LULU_1", lulu_txt[:3800])
-          if len(lulu_txt) > 3800:
-              add_notice("LULU_2", lulu_txt[3800:7600])
+          c, u, h, ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
+          ejs_s = ejs.decode("utf-8", "replace")
+          add_notice("WAAW_EJS_1", f"c={c} len={len(ejs_s)} head={ejs_s[:3600]}")
+          for idx, start in enumerate([3600, 7200, 10800]):
+              if len(ejs_s) > start:
+                  add_notice(f"WAAW_EJS_{idx+2}", ejs_s[start:start+3600])
 
-          # 3. Oisauh vs Vidara /api/stream + Playmogo HTML
-          vid_logs = []
-          for origin in ["https://oisauh.com", "https://vidara.to"]:
-              payload = json.dumps({"filecode": "HnuAfGnH5Z97l", "device": "desktop"}).encode()
-              c, u, h, b, dt = fetch(f"{origin}/api/stream", {"Referer": f"{origin}/e/HnuAfGnH5Z97l", "Origin": origin, "Content-Type": "application/json"}, data=payload)
-              vid_logs.append(f"{origin}: c={c} dt={dt} body={b[:500]}")
-          _, _, _, pm_b, _ = fetch("https://playmogo.com/e/kmq8ibge16z1", {"Referer": "https://pelisjuanita.com/"})
-          vid_logs.append(f"PLAYMOGO len={len(pm_b)} body={pm_b[:2200]}")
-          add_notice("VID_PM", " || ".join(vid_logs)[:3800])
+          # 2. Lulustream /dl vs /e + encryption.key + seg 403 detail
+          _, _, _, eb = fetch("https://lplaygo.com/e/zxfcz3pz68ds", {"Referer": "https://pelisjuanita.com/"})
+          eb_s = eb.decode("utf-8", "replace")
+          unp_e = unpack_dean(eb_s)
+          form = urllib.parse.urlencode({"op": "embed", "file_code": "zxfcz3pz68ds", "auto": "1", "referer": "https://pelisjuanita.com/"}).encode()
+          _, _, _, db = fetch("https://lplaygo.com/dl", {"Referer": "https://lplaygo.com/e/zxfcz3pz68ds", "Origin": "https://lplaygo.com", "Content-Type": "application/x-www-form-urlencoded"}, data=form)
+          unp_d = unpack_dean(db.decode("utf-8", "replace"))
+          m3 = re.findall(r'https?://[^\s"\'<>\\]+\.m3u8[^\s"\'<>\\]*', unp_d or unp_e)
+          lulu_info = [f"unp_e={len(unp_e)} unp_d={len(unp_d)} m3={m3[:2]}"]
+          if m3:
+              mc, mu, mh, mb = fetch(m3[0], {"Referer": "https://lplaygo.com/", "Origin": "https://lplaygo.com"})
+              mb_s = mb.decode("utf-8", "replace")
+              sub = [ln.strip() for ln in mb_s.splitlines() if ln.strip() and not ln.startswith("#")]
+              if sub:
+                  su0 = urllib.parse.urljoin(mu, sub[0])
+                  sc, su, sh, sb = fetch(su0, {"Referer": "https://lplaygo.com/", "Origin": "https://lplaygo.com"})
+                  sb_s = sb.decode("utf-8", "replace")
+                  lulu_info.append(f"sub_lines={sb_s[:900]!r}")
+                  key_m = re.search(r'URI="([^"]+)"', sb_s)
+                  if key_m:
+                      kc, _, kh, kb = fetch(key_m.group(1), {"Referer": "https://lplaygo.com/"})
+                      lulu_info.append(f"key c={kc} len={len(kb)} hdrs={dict(list(kh.items())[:8])}")
+                  segs = [ln.strip() for ln in sb_s.splitlines() if ln.strip() and not ln.startswith("#")]
+                  if segs:
+                      segu = urllib.parse.urljoin(su, segs[0])
+                      for hdr_name, hdrs in [
+                          ("ref_lplaygo", {"Referer": "https://lplaygo.com/", "Origin": "https://lplaygo.com"}),
+                          ("ref_lulucdn", {"Referer": "https://lulustream.com/"}),
+                          ("no_ref_desktop_ua", {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}),
+                          ("empty_hdr", {}),
+                      ]:
+                          gc, gu, gh, gb = fetch(segu, hdrs)
+                          lulu_info.append(f"seg({hdr_name}) u={segu[:90]} c={gc} len={len(gb)} gh={dict(list(gh.items())[:6])} body={gb[:120]!r}")
+          add_notice("LULU_DETAIL", " || ".join(lulu_info)[:3800])
+
+          # 3. Playmogo tail
+          _, _, _, pm = fetch("https://playmogo.com/e/kmq8ibge16z1", {"Referer": "https://pelisjuanita.com/"})
+          pm_s = pm.decode("utf-8", "replace")
+          add_notice("PM_TAIL", pm_s[2000:5700])
 
           for n in notices[:9]:
               print(f"::notice::{n}")
