@@ -14,3 +14,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -c "import bs4" 2>/dev/null || python3 -m pip install --break-system-packages -q beautifulsoup4
       - run: python3 scripts/pelisjuanita_probe.py --download --part 6 --slice 0:9
+      - run: python3 scripts/pelisjuanita_probe.py --part 6 --slice 9:18
