@@ -22,6 +22,11 @@ PY
 set +e
 ./gradlew :PelisJuanita:make --stacktrace > probe-build.log 2>&1
 bstatus=$?
+if [ "$bstatus" -ne 0 ] && grep -q '429' probe-build.log; then
+  sleep 8
+  ./gradlew :PelisJuanita:make --stacktrace > probe-build.log 2>&1
+  bstatus=$?
+fi
 cat probe-build.log
 if [ "$bstatus" -ne 0 ]; then
   errs=$(grep -E '^e: |^> |Execution failed|Could not |Caused by:|What went wrong:' probe-build.log | head -20 | tr '\n' '|' | sed 's/%/%25/g')

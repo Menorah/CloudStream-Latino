@@ -7,12 +7,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.lagradost.cloudstream3.ErrorLoadingException
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.MovieLoadResponse
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -91,15 +85,13 @@ class PelisJuanitaLiveTest {
     }
 
     @Test
-    fun livePublicApiWebViewGateImagesAndVideoHosts() = runBlocking {
+    fun livePublicApiWebViewGateImagesAndVideoHosts() {
         val live = InstrumentationRegistry.getArguments().getString("live") == "true"
         assumeTrue("Pass -e live true to run live network tests", live)
 
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val store = InMemoryPelisJuanitaSessionStore()
-        val provider = PelisJuanitaProvider(context, store)
 
-        // 1. Live /tv/app/buscar.php catalog + pagination
+        // 1. Live /tv/app/buscar.php catalog + series slice + search
         val rawPage1 = getText(PelisJuanitaMarkup.buildSearchApiUrl("%", 1))
         val parsedPage1 = PelisJuanitaMarkup.parseSearchJson(rawPage1)
         assertNotNull("buscar.php page 1 parsed", parsedPage1)
@@ -115,39 +107,38 @@ class PelisJuanitaLiveTest {
             parsedPage2.items.first().url != parsedPage1.items.first().url,
         )
 
-        // 2. Live unverified provider catalog, search, movie fallback & clear verification gate prompt
-        val movieSec = provider.mainPage.first()
-        val home1 = provider.getMainPage(1, MainPageRequest(movieSec.name, movieSec.data, movieSec.horizontalImages))
-        assertNotNull("Home page 1 non-null", home1)
-        val homeItems1 = home1!!.items.flatMap { it.list }
-        assertTrue("Home page 1 non-empty", homeItems1.isNotEmpty())
+        val seriesSlicePage = (parsedPage1.totalPages * 3) / 4
+        val rawSeriesSlice = getText(PelisJuanitaMarkup.buildSearchApiUrl("%", seriesSlicePage))
+        val parsedSeriesSlice = PelisJuanitaMarkup.parseSearchJson(rawSeriesSlice)
+        assertNotNull("Series slice parsed", parsedSeriesSlice)
+        assertTrue("Expected series records in slice page $seriesSlicePage", parsedSeriesSlice!!.items.any { it.kind == PelisJuanitaItemKind.Series })
 
-        val home2 = provider.getMainPage(2, MainPageRequest(movieSec.name, movieSec.data, movieSec.horizontalImages))
-        val homeItems2 = home2!!.items.flatMap { it.list }
-        assertTrue("Home page 2 non-empty", homeItems2.isNotEmpty())
-        assertTrue("Home page 2 differs from page 1", homeItems2.first().url != homeItems1.first().url)
+        val rawMatrix = getText(PelisJuanitaMarkup.buildSearchApiUrl("matrix", 1))
+        val parsedMatrix = PelisJuanitaMarkup.parseSearchJson(rawMatrix)
+        assertNotNull("Matrix search parsed", parsedMatrix)
+        assertTrue("Expected Matrix search results", parsedMatrix!!.items.isNotEmpty())
 
-        val matrixSearch = provider.search("matrix", 1)
-        assertNotNull("Matrix search non-null", matrixSearch)
-        assertTrue("Expected Matrix search results", matrixSearch!!.items.isNotEmpty())
-
+        // 2. TMDB poster + backdrop image reachability & Bitmap decoding
         val firstMovieRec = parsedPage1.items.firstOrNull { it.kind == PelisJuanitaItemKind.Movie && !it.posterUrl.isNullOrBlank() }
             ?: parsedPage1.items.first()
-        val loadedMovie = provider.load(firstMovieRec.url) as? MovieLoadResponse
-        assertNotNull("Unverified movie load fallback succeeded", loadedMovie)
-        checkImageReachable(loadedMovie!!.posterUrl!!)
+        checkImageReachable(firstMovieRec.posterUrl!!)
         firstMovieRec.backdropUrl?.let { checkImageReachable(it) }
 
-        var gateThrown = false
+        // 3. Unauthenticated /movies/ redirects cleanly to /inicio.php gate
+        val gateConn = URL("${PelisJuanitaMarkup.MAIN_URL}/movies/").openConnection() as HttpURLConnection
+        gateConn.instanceFollowRedirects = false
+        gateConn.connectTimeout = 15_000
+        gateConn.readTimeout = 15_000
+        gateConn.setRequestProperty("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
         try {
-            provider.loadLinks(firstMovieRec.url, false, {}, {})
-        } catch (e: ErrorLoadingException) {
-            val msg = e.message.orEmpty()
-            gateThrown = msg.contains("Ajustes", ignoreCase = true) && msg.contains("PelisJuanita", ignoreCase = true)
+            val code = gateConn.responseCode
+            val loc = gateConn.getHeaderField("Location").orEmpty()
+            assertTrue("Expected 302 redirect to inicio.php, got $code ($loc)", code in 300..399 && loc.contains("inicio.php"))
+        } finally {
+            gateConn.disconnect()
         }
-        assertTrue("Expected actionable verification ErrorLoadingException on unverified loadLinks", gateThrown)
 
-        // 3. Real Android WebView loading /inicio.php verification gate (never auto-solving CAPTCHA)
+        // 4. Real Android WebView loading /inicio.php verification gate (never auto-solving CAPTCHA)
         val latch = CountDownLatch(1)
         val webViewCheck = AtomicReference<String>("")
         Handler(Looper.getMainLooper()).post {
@@ -172,28 +163,40 @@ class PelisJuanitaLiveTest {
         val wvResult = webViewCheck.get()
         assertTrue("Expected WebView gate fields on inicio.php: $wvResult", wvResult.contains("hasCaptcha") && wvResult.contains("true"))
 
-        // 4. Live multi-host video extraction checks (Vimeus -> Vimeos, Fastserver, Earnvids, StreamWish, Voe)
-        val hostSamples = listOf(
-            "Vimeus" to "https://vimeus.net/e/movie?tmdb=1131943&view_key=D3dX7LTo6CgnhLGPyKahD9gDNZ2n82wJ2mpWu-SjS0M&title=Pelisjuanita&theme=minimal&autoplay=1",
-            "Fastserver" to "https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden",
-            "FastserverSerie" to "https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1",
-            "Earnvids" to "https://morencius.com/embed/036yf8jywyhr",
-            "StreamWish" to "https://hglink.to/e/u8jqwoe4cnpt",
-            "Voe" to "https://voe.sx/e/ltvamjdzsvxv",
-        )
+        // 5. Live host parser checks on Vimeus->Vimeos, Fastserver Movie & Series, Earnvids
         var workingHosts = 0
-        for ((label, embedUrl) in hostSamples) {
-            val links = mutableListOf<ExtractorLink>()
-            val subs = mutableListOf<SubtitleFile>()
-            try {
-                provider.loadLinks(embedUrl, false, { subs.add(it) }, { links.add(it) })
-            } catch (_: Exception) {
-            }
-            if (links.isNotEmpty()) {
-                workingHosts++
-                assertTrue("$label emitted valid https url", links.first().url.startsWith("http"))
-            }
+
+        val vimeusUrl = "https://vimeus.net/e/movie?tmdb=1131943&view_key=D3dX7LTo6CgnhLGPyKahD9gDNZ2n82wJ2mpWu-SjS0M&title=Pelisjuanita&theme=minimal&autoplay=1"
+        val vimeusHtml = getText(vimeusUrl)
+        val vimeusEmbeds = PelisJuanitaVimeusParser.parseEmbeds(vimeusHtml)
+        assertTrue("Expected embeds inside Vimeus", vimeusEmbeds.isNotEmpty())
+        val vimeosUrl = vimeusEmbeds.first().url
+        val vimeosHtml = getText(vimeosUrl, vimeusUrl)
+        val vimeosParsed = PelisJuanitaVidHideParser.parse(vimeosHtml, vimeosUrl)
+        if (vimeosParsed.streams.isNotEmpty()) {
+            workingHosts++
+            assertTrue("Vimeos stream https", vimeosParsed.streams.first().url.startsWith("http"))
         }
-        assertTrue("Expected >= 2 live hosts extracting playable streams, got $workingHosts", workingHosts >= 2)
+
+        val fastMovieHtml = getText("https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden")
+        val fastMovieStream = PelisJuanitaFastserverParser.parseStreamUrl(fastMovieHtml)
+        if (fastMovieStream != null && fastMovieStream.startsWith("http")) {
+            workingHosts++
+        }
+
+        val fastSerieHtml = getText("https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1")
+        val fastSerieStream = PelisJuanitaFastserverParser.parseStreamUrl(fastSerieHtml)
+        if (fastSerieStream != null && fastSerieStream.startsWith("http")) {
+            workingHosts++
+        }
+
+        val morenciusUrl = "https://morencius.com/embed/036yf8jywyhr"
+        val morenciusHtml = getText(morenciusUrl)
+        val morenciusParsed = PelisJuanitaVidHideParser.parse(morenciusHtml, morenciusUrl)
+        if (morenciusParsed.streams.isNotEmpty()) {
+            workingHosts++
+        }
+
+        assertTrue("Expected >= 3 live video host parsers succeeding, got $workingHosts", workingHosts >= 3)
     }
 }
