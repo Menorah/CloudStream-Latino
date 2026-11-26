@@ -4,8 +4,8 @@ import base64
 import json
 import re
 import urllib.error
-import urllib.parse
 import urllib.request
+import zlib
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -62,6 +62,16 @@ def sanitize_cookies(cookies):
     return out
 
 
+def emit_compressed(tag, obj):
+    raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    comp = zlib.compress(raw, 9)
+    b64 = base64.b64encode(comp).decode("ascii")
+    chunk_size = 3200
+    parts = [b64[i:i + chunk_size] for i in range(0, len(b64), chunk_size)]
+    for idx, part in enumerate(parts[:8]):
+        print(f"::notice::{tag} {idx + 1}/{len(parts)} {part}", flush=True)
+
+
 def main():
     report = {}
 
@@ -76,37 +86,40 @@ def main():
         ("tv_app_series", "https://pelisjuanita.com/tv/app/series.php"),
         ("tv_app_buscar", "https://pelisjuanita.com/tv/app/buscar.php?q=shrek"),
     ]:
-        res = fetch(url, follow_redirects=(label in {"sitemap", "tv_app_home", "tv_app_movies", "tv_app_series", "tv_app_buscar"}))
+        res = fetch(
+            url,
+            follow_redirects=(label in {"sitemap", "tv_app_home", "tv_app_movies", "tv_app_series", "tv_app_buscar"}),
+        )
         if label == "captcha_head":
             res = {
                 "status": res.get("status"),
                 "content_type": (res.get("headers") or {}).get("content-type"),
                 "len": res.get("len"),
                 "set_cookies": res.get("set_cookies"),
-                "magic_hex": res.get("text", "")[:16].encode("utf-8", "replace").hex() if isinstance(res.get("text"), str) else None,
             }
         elif label == "inicio_gate":
-            # Full HTML of the public gate page so we can inspect form fields, JS, and assets.
-            pass
+            # Strip binary/base64 bloat if any, keep complete form/script markup
+            res["text"] = res.get("text", "")[:24000]
         elif label == "tv_app_home":
             res["text"] = res.get("text", "")[:12000]
         elif label == "sitemap":
-            res["text"] = res.get("text", "")[:12000]
+            res["text"] = res.get("text", "")[:8000]
         else:
-            res["text"] = res.get("text", "")[:2000]
+            res["text"] = res.get("text", "")[:1500]
+        # Keep key HTTP headers only to avoid bloat
+        hdrs = res.get("headers") or {}
+        if isinstance(hdrs, dict):
+            res["headers"] = {k: hdrs[k] for k in sorted(hdrs) if k in {"server", "location", "content-type", "cf-ray", "cf-cache-status", "cache-control", "x-powered-by"}}
         report[label] = res
 
     inicio_html = report["inicio_gate"].get("text", "")
-    asset_urls = sorted(set(re.findall(r"""(?:src|href)=["']([^"']+)["']""", inicio_html)))
-    report["inicio_assets"] = asset_urls
+    report["inicio_assets"] = sorted(set(re.findall(r"""(?:src|href)=["']([^"']+)["']""", inicio_html)))
 
-    # Check common static/public paths in /movies/ that might exist regardless of PHP router
     static_probes = {}
     for path in [
         "https://pelisjuanita.com/movies/js/app.js",
         "https://pelisjuanita.com/movies/js/main.js",
         "https://pelisjuanita.com/movies/js/scripts.js",
-        "https://pelisjuanita.com/movies/assets/js/app.js",
         "https://pelisjuanita.com/tv/app/config.php",
         "https://pelisjuanita.com/tv/app/",
         "https://pelisjuanita.com/sitemaps/",
@@ -117,18 +130,11 @@ def main():
             "location": r.get("location"),
             "content_type": (r.get("headers") or {}).get("content-type"),
             "len": r.get("len"),
-            "head": (r.get("text") or "")[:500],
+            "head": (r.get("text") or "")[:400],
         }
     report["static_probes"] = static_probes
 
-    out_path = "/tmp/pelisjuanita_probe.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
-
-    print("Wrote", out_path, "bytes=", len(json.dumps(report)))
-    for k, v in report.items():
-        if isinstance(v, dict) and "status" in v:
-            print(f"[{k}] status={v.get('status')} loc={v.get('location')} len={v.get('len')} cookies={v.get('set_cookies')}")
+    emit_compressed("PJPROBE", report)
 
 
 if __name__ == "__main__":
