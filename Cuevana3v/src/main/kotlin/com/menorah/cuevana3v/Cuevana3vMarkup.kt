@@ -427,12 +427,9 @@ internal object Cuevana3vMarkup {
             ?: cleanOgTitle(doc.selectFirst("meta[property='og:title']")?.attr("content"))
             ?: "Película"
 
-        val posterRaw = doc.selectFirst(".backdrop-info figure img")?.let {
-            it.attr("data-src").ifBlank { it.attr("src") }
-        } ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
-        val bgRaw = doc.selectFirst(".backdrop-image figure img, figure.backdrop img")?.let {
-            it.attr("data-src").ifBlank { it.attr("src") }
-        }
+        val posterRaw = imgSrc(doc.selectFirst(".backdrop-info figure img"))
+            ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
+        val bgRaw = imgSrc(doc.selectFirst(".backdrop-image figure img, figure.backdrop img"))
 
         val plot = doc.selectFirst(".backdrop-info p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
             ?: ld?.path("description")?.asText()?.trim()?.takeIf { it.isNotEmpty() }
@@ -495,13 +492,10 @@ internal object Cuevana3vMarkup {
             ?: cleanOgTitle(doc.selectFirst("meta[property='og:title']")?.attr("content"))
             ?: "Serie"
 
-        val posterRaw = doc.selectFirst(".title-detail-hero-details figure.poster img, .backdrop-info figure img")?.let {
-            it.attr("data-src").ifBlank { it.attr("src") }
-        } ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
+        val posterRaw = imgSrc(doc.selectFirst(".title-detail-hero-details figure.poster img, .backdrop-info figure img"))
+            ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
 
-        val bgRaw = doc.selectFirst(".title-detail-hero-background figure.backdrop img, figure.backdrop img")?.let {
-            it.attr("data-src").ifBlank { it.attr("src") }
-        }
+        val bgRaw = imgSrc(doc.selectFirst(".title-detail-hero-background figure.backdrop img, figure.backdrop img"))
 
         val sections = sectionMapBySubtitle(doc)
         val rawSummary = sections.entries.firstOrNull { it.key.contains("resumen") }?.value
@@ -688,6 +682,11 @@ internal object Cuevana3vMarkup {
         }
         val mOnly = MINUTES_ONLY_REGEX.find(text)?.groupValues?.get(1)?.toIntOrNull()
         return mOnly?.takeIf { it > 0 }
+    }
+
+    private fun imgSrc(el: Element?): String? {
+        if (el == null) return null
+        return el.attr("data-src").ifBlank { el.attr("src") }.takeIf { it.isNotBlank() }
     }
 
     private fun sectionMapBySubtitle(doc: Document): Map<String, Element> {

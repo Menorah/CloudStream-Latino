@@ -1,29 +1,8 @@
 package com.menorah.cuevana3v
 
-import com.lagradost.cloudstream3.DrmExtractorLink
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.Score
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SearchResponseList
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newDrmExtractorLink
-import com.lagradost.cloudstream3.newEpisode
-import com.lagradost.cloudstream3.newExtractorLink
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.newSearchResponseList
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.newTvSeriesSearchResponse
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -45,6 +24,12 @@ class Cuevana3vProvider : MainAPI() {
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    override val getMainPageTimeoutMs: Long? = 60_000L
+    override val searchTimeoutMs: Long? = 25_000L
+    override val quickSearchTimeoutMs: Long? = 20_000L
+    override val loadTimeoutMs: Long? = 35_000L
+    override val loadLinksTimeoutMs: Long? = 55_000L
 
     override val mainPage = mainPageOf(
         "/episodios/recientes" to "Últimos Episodios",
