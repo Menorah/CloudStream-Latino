@@ -1,9 +1,11 @@
+import hashlib
 import http.cookiejar
 import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import base64
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -43,73 +45,45 @@ def notice(tag, obj):
 
 op = make_opener()
 
-# 1. Fetch medixiru.com/e/yu5idnr7ncl9 & r9aqfshy5ch6 and unpack!
-for vid in ["yu5idnr7ncl9", "r9aqfshy5ch6"]:
-    st, fu, hdrs, raw = fetch(op, f"https://medixiru.com/e/{vid}", ref="https://streamwish.to/")
-    txt = raw.decode("utf-8", "replace")
-    m = re.search(r"eval\(function\(p,a,c,k,e,[dr]\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", txt, re.S)
-    unp = ""
-    if m:
-        p, a, c, k = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
-        chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        def base_n(n, r):
-            if n == 0: return "0"
-            s = ""
-            while n > 0: s = chars[n % r] + s; n //= r
-            return s
-        sym = {base_n(i, a): (k[i] if i < len(k) and k[i] else base_n(i, a)) for i in range(c - 1, -1, -1)}
-        unp = re.sub(r"\b\w+\b", lambda x: sym.get(x.group(0), x.group(0)), p)
-    # Check any media URLs found in unpacked
-    urls = re.findall(r'https?://[^\s"\'<>\\]+(?:\.m3u8|\.txt|\.mp4)[^\s"\'<>\\]*|"hls\d+"\s*:\s*"([^"]+)"', unp)
-    rel_urls = re.findall(r'"(hls\d+)"\s*:\s*"([^"]+)"', unp)
-    seg_res = {}
-    for rk, rv in rel_urls:
-        full = urllib.parse.urljoin("https://medixiru.com", rv)
-        mst, mfu, _, mr = fetch(op, full, ref="https://medixiru.com/", headers={"Origin": "https://medixiru.com"})
-        mtxt = mr.decode("utf-8", "replace")
-        mlines = [l.strip() for l in mtxt.splitlines() if l.strip() and not l.startswith("#")]
-        seg_st = None
-        if mlines:
-            nxt = urllib.parse.urljoin(mfu, mlines[0])
-            if ".m3u8" in nxt or ".txt" in nxt:
-                sst, sfu, _, sr = fetch(op, nxt, ref="https://medixiru.com/")
-                sl = [l.strip() for l in sr.decode("utf-8", "replace").splitlines() if l.strip() and not l.startswith("#")]
-                if sl:
-                    tg = urllib.parse.urljoin(sfu, sl[0])
-                    gst, _, gh, gr = fetch(op, tg, ref="https://medixiru.com/")
-                    seg_st = {"sub": sst, "seg": gst, "len": len(gr), "hex": gr[:12].hex(), "ct": gh.get("Content-Type")}
-                else:
-                    seg_st = {"sub": sst, "sub_body": sr.decode("utf-8", "replace")[:200]}
-            else:
-                gst, _, gh, gr = fetch(op, nxt, ref="https://medixiru.com/")
-                seg_st = {"seg": gst, "len": len(gr), "hex": gr[:12].hex(), "ct": gh.get("Content-Type")}
-        seg_res[rk] = {"url": full[:120], "mst": mst, "head": mtxt[:180], "seg": seg_st}
-    notice(f"medixiru_{vid}", {"st": st, "fu": fu, "len": len(txt), "has_eval": bool(m), "unp_head": unp[:500], "streams": seg_res})
+# 1. Inspect vsembed.com HTML & JS (/assets/index-Ch9JFCx1.js)
+st, fu, _, r_html = fetch(op, "https://vsembed.com/jer74", ref="https://streamwish.to/")
+vsembed_html = r_html.decode("utf-8", "replace")
+m_js = re.search(r'src="(/assets/[^"]+\.js)"', vsembed_html)
+notice("vsembed_html_tail", {"fu": fu, "tail": vsembed_html[-1200:], "js_path": m_js.group(1) if m_js else None})
+if m_js:
+    _, _, _, r_js = fetch(op, "https://vsembed.com" + m_js.group(1), ref=fu)
+    js_txt = r_js.decode("utf-8", "replace")
+    # Search for API endpoints, fetch calls, m3u8, decrypt, source keys
+    api_hits = re.findall(r'.{0,80}(?:/api/|fetch\(|sources|playlist|stream|jer74|aes|decrypt|m3u8|playback|filecode|embed).{0,80}', js_txt, re.I)
+    notice("vsembed_js_len", {"len": len(js_txt), "hits": api_hits[:30]})
+    # Also search for short custom endpoints or URL paths in the bundle
+    paths = sorted(set(re.findall(r'["\'](/[a-zA-Z0-9_\-/${}]+(?:/[a-zA-Z0-9_\-/${}]+)*)["\']', js_txt)))
+    notice("vsembed_paths", [p for p in paths if len(p) > 2][:60])
 
-# 2. Check streamwish main.js decoded domain(s)
-_, _, _, swr = fetch(op, "https://streamwish.to/main.js?v=1.1.9", ref="https://streamwish.to/e/yu5idnr7ncl9")
-swjs = swr.decode("utf-8", "replace")
-# Also check on hglink.to/main.js?v=1.1.9 if same target or different
-_, _, _, hgr = fetch(op, "https://hglink.to/main.js?v=1.1.9", ref="https://hglink.to/e/yu5idnr7ncl9")
-hgjs = hgr.decode("utf-8", "replace")
-notice("sw_hg_compare", {"same": swjs == hgjs, "sw_len": len(swjs), "hg_len": len(hgjs)})
-
-# 3. Inspect VOE altcha challenge endpoint raw response!
+# 2. Inspect VOE altcha.min.js around PBKDF2 / deriveKey / counter / solution format & test solving!
 op2 = make_opener()
 _, fu1, _, raw1 = fetch(op2, "https://voe.sx/e/sm8v06z32ntn", ref="https://player.poseidonhd2.co/")
 rm = re.search(r"window\.location\.href\s*=\s*'([^']+)'", raw1.decode("utf-8", "replace"))
 target = rm.group(1) if rm else fu1
-st2, fu2, h2hdrs, raw2 = fetch(op2, target, ref="https://voe.sx/")
+_, fu2, _, raw2 = fetch(op2, target, ref="https://voe.sx/")
 h2 = raw2.decode("utf-8", "replace")
-chl = re.search(r'challenge="([^"]+)"', h2)
-cst, cfu, chdrs, craw = fetch(op2, chl.group(1), ref=fu2, headers={"Accept": "application/json, */*"})
-_, _, _, alt_js = fetch(op2, urllib.parse.urljoin(fu2, "/js/altcha.min.js"), ref=fu2)
-notice("voe_chl_raw", {
-    "fu2": fu2,
-    "chl_url": chl.group(1),
-    "cst": cst,
-    "chdrs": {k: v for k, v in chdrs.items() if k.lower() in ("content-type", "set-cookie")},
-    "craw_len": len(craw),
-    "craw": craw.decode("utf-8", "replace")[:1000],
-    "altjs_head": alt_js.decode("utf-8", "replace")[:400],
-})
+_, _, _, alt_raw = fetch(op2, urllib.parse.urljoin(fu2, "/js/altcha.min.js"), ref=fu2)
+alt_js = alt_raw.decode("utf-8", "replace")
+hits_alt = re.findall(r'.{0,120}(?:PBKDF2|derivedKey|counter|keyPrefix|signature|solve).{0,120}', alt_js, re.I)
+notice("altcha_js_hits", hits_alt[:15])
+
+# Also solve ALTCHA v2 right now!
+tok = re.search(r'name="_token"\s+value="([^"]+)"', h2).group(1)
+chl_url = re.search(r'challenge="([^"]+)"', h2).group(1)
+act_url = re.search(r'method="POST"\s+action="([^"]+)"', h2).group(1)
+_, _, _, craw = fetch(op2, chl_url, ref=fu2, headers={"Accept": "application/json, */*"})
+cj = json.loads(craw.decode("utf-8", "replace"))
+params = cj["parameters"]
+salt_bytes = bytes.fromhex(params["salt"])
+nonce_bytes = bytes.fromhex(params["nonce"])
+cost = int(params["cost"])
+klen = int(params["keyLength"])
+prefix = params["keyPrefix"]
+# Check both salt_bytes+nonce_bytes+counter or hex string variants — look at alt_js snippet first, and test standard ALTCHA v2 format!
+# Standard Altcha v2 PBKDF2: password = nonce + counter? Or salt = salt, password = nonce + ":" + counter? Look at hits_alt!
+notice("altcha_params_and_solve_preview", {"params": params, "pbkdf_snippets": re.findall(r'.{0,200}deriveBits.{0,200}', alt_js)[:5]})
