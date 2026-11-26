@@ -44,12 +44,13 @@ jobs:
               ctx = browser.new_context(viewport={"width": 1280, "height": 720})
               for label, url in TARGETS:
                   page = ctx.new_page()
+                  page.route("**/disable-devtool*", lambda route: route.abort())
                   events = []
                   found = {"stream": "", "headers": {}}
                   def on_req(req):
                       u = req.url
                       low = u.lower()
-                      if any(k in low for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "turnstile", "/pl/", "/pli/", "/plc/"]):
+                      if any(k in low for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "turnstile", "/pl/", "/pli/", "/plc/", "about:blank"]):
                           events.append(f"REQ:{u[:105]}")
                       if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
                           found["stream"] = u
@@ -63,6 +64,7 @@ jobs:
                               events.append(f"RESP:{resp.status}:{u[:60]}")
                   page.on("request", on_req)
                   page.on("response", on_resp)
+                  page.on("framenavigated", lambda fr: events.append(f"NAV:{fr.url[:80]}"))
                   page.goto(url, referer="https://pelisjuanita.com/", wait_until="domcontentloaded", timeout=25000)
 
                   for step in range(45):
@@ -77,15 +79,16 @@ jobs:
                                       events.append("CLICKED_BIGPLAY")
                               except Exception:
                                   pass
-                          # Also check if Turnstile checkbox exists and try clicking inside its frame
-                          if "challenges.cloudflare.com" in fr.url and step in (8, 16, 24):
+                          if "challenges.cloudflare.com" in fr.url and step in (10, 18, 26):
                               try:
-                                  cb = fr.locator("input[type='checkbox'], .cb-lb, #challenge-stage")
-                                  if cb.count() > 0:
-                                      cb.first.click(force=True)
-                                      events.append("CLICKED_TS")
-                              except Exception:
-                                  pass
+                                  el = fr.frame_element()
+                                  box = el.bounding_box()
+                                  events.append(f"TS_BOX:{box}")
+                                  if box and box["width"] > 20 and box["height"] > 20:
+                                      page.mouse.click(box["x"] + 28, box["y"] + box["height"] / 2)
+                                      events.append("MOUSE_CLICKED_TS")
+                              except Exception as ex:
+                                  events.append(f"TS_ERR:{repr(ex)[:60]}")
                       time.sleep(0.8)
 
                   ts_info = {}
