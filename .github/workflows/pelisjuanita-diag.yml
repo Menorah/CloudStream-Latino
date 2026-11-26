@@ -9,37 +9,17 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Byse POST and Lulustream unpack
+      - name: Check Byse JS and Lulu segment
         run: |
           python3 - <<'PY'
-          import urllib.request, urllib.error, urllib.parse, json, re
+          import urllib.request, json, re
           ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-          def hit(url, data=None, hdrs=None, method=None):
-              body = data.encode() if isinstance(data, str) else (urllib.parse.urlencode(data).encode() if data else None)
-              req = urllib.request.Request(url, data=body, headers={"User-Agent": ua, **(hdrs or {})}, method=method)
-              try:
-                  with urllib.request.urlopen(req, timeout=15) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
-              except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
-          c, u, h, t = hit("https://n1mwq.org/fe4/92rgcn88ka85", None, {"Referer": "https://bysesukior.com/e/92rgcn88ka85"})
-          print("::notice::BYSE_HTML=" + json.dumps({"code": c, "url": u, "head": t[:2000]})[:3800].replace("%","%25").replace("\n","%0A"))
-          c_p, u_p, h_p, t_p = hit("https://n1mwq.org/api/videos/92rgcn88ka85/embed/playback", data="{}", hdrs={"Accept":"*/*","Content-Type":"application/json","Referer":"https://n1mwq.org/fe4/92rgcn88ka85","Origin":"https://n1mwq.org","x-embed-parent":"https://bysesukior.com/e/92rgcn88ka85"}, method="POST")
-          print("::notice::BYSE_POST=" + json.dumps({"code": c_p, "url": u_p, "body": t_p[:1500]})[:3800].replace("%","%25").replace("\n","%0A"))
-          c2, u2, h2, t2 = hit("https://lplaygo.com/dl", {"op":"embed","file_code":"zxfcz3pz68ds","auto":"1","referer":"https://pelisjuanita.com/"}, {"Referer":"https://lplaygo.com/e/zxfcz3pz68ds"})
-          m = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split", t2, re.S)
-          if m:
-              p, a, _, k = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
-              alpha = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-              def rep(mt):
-                  s = mt.group(0)
-                  n = sum(alpha.index(ch)*(a**i) for i, ch in enumerate(reversed(s)))
-                  return k[n] if n < len(k) and k[n] else s
-              unp = re.sub(r"\b[0-9a-zA-Z]+\b", rep, p)
-              print("::notice::LULU_UNP=" + unp[:1500].replace("%","%25").replace("\n","%0A"))
-              u_m3u8 = re.search(r'file:"([^"]+)"', unp)
-              if u_m3u8:
-                  mu = u_m3u8.group(1)
-                  mc, _, mh, mt = hit(mu, None, {"Referer":"https://lplaygo.com/","Origin":"https://lplaygo.com"})
-                  print("::notice::LULU_M3U8=" + json.dumps({"url": mu, "code": mc, "head": mt[:800]})[:3800].replace("%","%25").replace("\n","%0A"))
+          def hit(url, hdrs=None):
+              req = urllib.request.Request(url, headers={"User-Agent": ua, **(hdrs or {})})
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  return r.status, r.read().decode("utf-8", "replace")
+          _, js = hit("https://n1mwq.org/assets/index-DocunfmE.js", {"Referer": "https://n1mwq.org/fe4/92rgcn88ka85"})
+          hits = [js[max(0, m.start()-120):m.end()+200] for m in re.finditer(r"embed/playback|embed/details", js)]
+          print("::notice::BYSE_JS=" + json.dumps(hits[:6])[:3800].replace("%","%25").replace("\n","%0A"))
+          _, pb = hit("https://bysesukior.com/api/videos/92rgcn88ka85/embed/playback", {"Accept":"*/*","Referer":"https://n1mwq.org/fe4/92rgcn88ka85","x-embed-parent":"https://bysesukior.com/e/92rgcn88ka85"}) if False else (0,"")
           PY
