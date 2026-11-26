@@ -9,7 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Deep probe hosts and m3u8/mp4 streams
-        run: python3 scripts/poseidon_bis_probe.py hosts_deep
-      - name: Probe recent movie cyberlockers and site JS chunks
-        run: python3 scripts/poseidon_bis_probe.py site_js_and_more
+      - name: Inspect Voe target, StreamWish loader, and menu hrefs
+        run: python3 scripts/poseidon_bis_probe.py
