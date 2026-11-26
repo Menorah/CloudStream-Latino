@@ -1,0 +1,111 @@
+name: Diag Cuevana3v Nebula
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/cuevana3v-diag.yml']
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect get-jiro & Dexter
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.request, urllib.parse
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          KEY = "a45f04ce-2394-47c3-b718-0ecd97ce51d6"
+          SERVERS = {
+              "1": "https://lkhjerbhye3wikhoduh5xiczuvd.lol/v/{id}",
+              "2": "https://filemoon.sx/e/{id}",
+              "3": "https://vibuxer.com/e/{id}",
+              "4": "https://dood.so/e/{id}",
+              "5": "https://streamtape.com/e/{id}",
+          }
+
+          def fetch(url, ref="https://cuevana3v.pro/"):
+              req = urllib.request.Request(url, headers={
+                  "User-Agent": UA,
+                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                  "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+                  "Referer": ref,
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, url, e.read().decode("utf-8", "replace")[:400]
+              except Exception as e:
+                  return -1, url, repr(e)
+
+          def dec_tok(raw_url):
+              q = urllib.parse.parse_qs(urllib.parse.urlparse(raw_url).query)
+              if "token" in q:
+                  t = q["token"][0]
+                  srv, payload = t[0], t[1:]
+                  pad = "=" * ((4 - len(payload) % 4) % 4)
+                  b = base64.b64decode(payload + pad)
+                  vid = "".join(chr(x ^ ord(KEY[i % len(KEY)])) for i, x in enumerate(b))
+                  return SERVERS.get(srv, f"UNKNOWN({srv}):{{id}}").format(id=vid)
+              if "v" in q:
+                  v = q["v"][0]
+                  pad = "=" * ((4 - len(v) % 4) % 4)
+                  return base64.b64decode(v + pad).decode("utf-8", "replace")
+              return raw_url
+
+          A62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+          def unpack(text):
+              out = []
+              pat = re.compile(r"eval\(\s*function\(p,a,c,k,e,[dr]\)\{.*?return p\}\(\s*'([^'\\]*(?:\\.[^'\\]*)*)'\s*,\s*(\d+)\s*,\s*\d+\s*,\s*'([^'\\]*(?:\\.[^'\\]*)*)'\.split\('\|'\)", re.S)
+              for m in pat.finditer(text):
+                  p = m.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+                  radix = int(m.group(2))
+                  words = m.group(3).split("|")
+                  def repl(wm):
+                      tok = wm.group(0)
+                      acc = 0
+                      for ch in tok:
+                          idx = A62[:radix].find(ch)
+                          if idx < 0:
+                              return tok
+                          acc = acc * radix + idx
+                      return words[acc] if 0 <= acc < len(words) and words[acc] else tok
+                  out.append(re.sub(r"\b[0-9a-zA-Z]+\b", repl, p))
+              return out
+
+          for u in [
+              "https://cuevana3v.pro/serie/get-jiro/episodio-1x9",
+              "https://cuevana3v.pro/serie/dexter-resurreccion/episodio-2x4",
+              "https://cuevana3v.pro/serie/dragon-ball-super-beerus/episodio-1x7",
+              "https://cuevana3v.pro/serie/ciudad-de-dios-la-lucha-sigue/episodio-2x3",
+          ]:
+              st, fu, html = fetch(u)
+              tabs = re.findall(r'<li[^>]*class="[^"]*tab-video-item[^"]*"[^>]*>(.*?)</ul>\s*</li>', html, re.S)
+              parts = []
+              for tab in tabs:
+                  lang_m = re.search(r'class="tab-item-name"[^>]*>(.*?)</span>', tab, re.S)
+                  lang = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', lang_m.group(1) if lang_m else '')).strip()
+                  srvs = re.findall(r'data-server="([^"]+)"[^>]*>(.*?)</li>', tab, re.S)
+                  for ds, label in srvs:
+                      lbl = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', label)).strip()
+                      dec = dec_tok(ds)
+                      if "Multilenguaje" in lang:
+                          continue
+                      est, efu, ehtml = fetch(dec, "https://tungtungsahur.cuevana3v.pro/")
+                      unp = unpack(ehtml)
+                      links_m = [re.findall(r'links\s*=\s*(\{[^}]+\})', x) for x in unp + [ehtml]]
+                      flat_links = [item for sub in links_m for item in sub]
+                      info = f"[{lang}] {lbl} -> {dec} http={est} len={len(ehtml)} unp={len(unp)}"
+                      if flat_links:
+                          d = json.loads(flat_links[0].replace("\\/", "/"))
+                          res = []
+                          for k, v in d.items():
+                              full = urllib.parse.urljoin(efu, v)
+                              hst, hfu, htxt = fetch(full, efu.split("/", 3)[0] + "//" + efu.split("/")[2] + "/")
+                              res.append(f"{k}:{hst}:{len(htxt)}")
+                          info += " streams=" + ",".join(res)
+                      else:
+                          info += " raw=" + re.sub(r'\s+', ' ', ehtml[:180])
+                      parts.append(info)
+              print("::notice::" + f"{u.split('/serie/')[-1]} (http={st}):: " + " | ".join(parts).replace("%", "%25"))
+          PY
