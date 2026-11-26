@@ -8,7 +8,7 @@ import android.webkit.CookieManager
 import android.webkit.WebResourceResponse
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil3.SingletonImageLoader
@@ -171,7 +171,10 @@ object PlaybackProbe {
                                 break
                             } catch (t: Throwable) {
                                 if (t is CancellationException && t !is TimeoutCancellationException) throw t
-                                errs.add("${link.name}[${link.url.take(60)}]: ${t.javaClass.simpleName}:${t.message?.take(100)}")
+                                val chain = generateSequence(t) { it.cause }
+                                    .take(4)
+                                    .joinToString(" <- ") { "${it.javaClass.simpleName}:${it.message?.take(80)}" }
+                                errs.add("${link.name}[${link.url.take(60)}]: $chain")
                             }
                         }
                         if (!played) failedServers.add("$srv -> $errs")
@@ -200,20 +203,19 @@ object PlaybackProbe {
         }
     }
 
-    private suspend fun play(context: Context, link: ExtractorLink) = withTimeout(30_000) {
+    private suspend fun play(context: Context, link: ExtractorLink) = withTimeout(45_000) {
         val texture = SurfaceTexture(0)
         val surface = Surface(texture)
         val headers = link.headers.toMutableMap()
         if (link.referer.isNotBlank() && headers.keys.none { it.equals("Referer", true) }) {
             headers["Referer"] = link.referer
         }
-        val userAgent = headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+        val userAgent = headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value ?: USER_AGENT
         val uaKeys = headers.keys.filter { it.equals("User-Agent", ignoreCase = true) }
         uaKeys.forEach { headers.remove(it) }
-        val factory = DefaultHttpDataSource.Factory().apply {
-            if (!userAgent.isNullOrBlank()) setUserAgent(userAgent)
-            setDefaultRequestProperties(headers)
-        }
+        val factory = OkHttpDataSource.Factory(com.lagradost.cloudstream3.app.baseClient)
+            .setUserAgent(userAgent)
+            .setDefaultRequestProperties(headers)
         val item = MediaItem.Builder().setUri(link.url).apply {
             if (link.type == ExtractorLinkType.M3U8) setMimeType(MimeTypes.APPLICATION_M3U8)
         }.build()

@@ -582,6 +582,7 @@ open class PelisJuanitaSavefilesExtractor : LuluStream() {
             val streamHeaders = mapOf(
                 "Origin" to parsed.origin,
                 "Referer" to "${parsed.origin}/",
+                "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
                 "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
             )
             for (stream in parsed.streams) {
@@ -622,8 +623,8 @@ open class PelisJuanitaSavefilesExtractor : LuluStream() {
             val postRes = runCatching {
                 app.post(
                     "$postOrigin/dl",
-                    referer = url,
-                    headers = headers,
+                    referer = "$postOrigin/e/$fileCode",
+                    headers = headers + ("Origin" to postOrigin),
                     data = mapOf(
                         "op" to "embed",
                         "file_code" to fileCode,
