@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspeccionar busqueda.zip sin CSS y probar Skin Crawler
+      - name: Extraer dt_contenedor y JS de busqueda.zip
         shell: python3 {0}
         run: |
-          import io, json, re, urllib.request, urllib.parse, http.cookiejar, zipfile
+          import io, re, urllib.request, http.cookiejar, zipfile
 
           def emit(title, text):
               for i in range(0, len(text), 3500):
@@ -25,44 +25,36 @@ jobs:
           opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36')]
 
           landing = opener.open('https://tmpfiles.org/w5Azv6U6dMIa/busqueda.zip', timeout=30).read().decode('utf-8', 'replace')
-          m = re.search(r'https://tmpfiles\.org/dl/[^\s"\'<>]+', landing)
-          dl_url = m.group(0)
-          data = opener.open(dl_url, timeout=60).read()
-          zf = zipfile.ZipFile(io.BytesIO(data))
-
-          non_img = [f'{info.filename} ({info.file_size}b)' for info in zf.infolist() if not info.filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.woff', '.woff2', '.ttf', '.svg', '.css'))]
-          emit('non_img_files', '\n'.join(non_img))
-
-          # Live probes first so they never get dropped by annotation limits
-          for label, url in [
-              ('buscar_skin', 'https://pelisjuanita.com/tv/app/buscar.php?q=skin%20crawler&pagina=1'),
-              ('buscar_the_skin', 'https://pelisjuanita.com/tv/app/buscar.php?q=The%20Skin%20Crawler%20Murders&pagina=1'),
-              ('vimeus_1843139', 'https://vimeus.net/e/movie?tmdb=1843139&view_key=D3dX7LTo6CgnhLGPyKahD9gDNZ2n82wJ2mpWu-SjS0M&title=Pelisjuanita&theme=minimal&autoplay=1'),
-              ('vimeus_1843139_alt', 'https://vimeus.net/e/movie?tmdb=1843139&view_key=D3dX7LTo6CgnhLGPyKahD9gDNZ2n82wJ2mpWu-SjS0M'),
-              ('movie_shell_55869', 'https://pelisjuanita.com/movies/pelicula/the-skin-crawler-murders'),
-              ('movie_info_55869', 'https://pelisjuanita.com/movies/movieInfo.php?title=the-skin-crawler-murders&p=55869'),
-          ]:
-              try:
-                  req = urllib.request.Request(url, headers={'Referer': 'https://pelisjuanita.com/'})
-                  resp = opener.open(req, timeout=15)
-                  emit(label, f'code={resp.status} url={resp.geturl()} body={resp.read().decode("utf-8", "replace")[:6000]}')
-              except urllib.error.HTTPError as e:
-                  emit(label, f'code={e.code} url={e.geturl()} body={e.read().decode("utf-8", "replace")[:1500]}')
-              except Exception as e:
-                  emit(label, f'err={e}')
+          dl_url = re.search(r'https://tmpfiles\.org/dl/[^\s"\'<>]+', landing).group(0)
+          zf = zipfile.ZipFile(io.BytesIO(opener.open(dl_url, timeout=60).read()))
 
           for info in zf.infolist():
-              name = info.filename
-              low = name.lower()
+              low = info.filename.lower()
               if low.endswith('.html') or low.endswith('.htm'):
-                  raw = zf.read(name).decode('utf-8', 'replace')
-                  no_style = re.sub(r'(?s)<style\b.*?</style>', '', raw)
-                  no_style = re.sub(r'(?s)<head\b.*?</head>', '<head>STRIPPED</head>', no_style)
-                  emit('html_' + name.split('/')[-2][:20], no_style[:12000])
-                  if len(no_style) > 12000:
-                      emit('html_tail_' + name.split('/')[-2][:20], no_style[-8000:])
-              elif low.endswith('.js') or low.endswith('.js.download'):
-                  if 'lottie' in low or 'jquery' in low:
-                      continue
-                  raw = zf.read(name).decode('utf-8', 'replace')
-                  emit('js_' + name.split('/')[-1][:30], raw[:8000])
+                  raw = zf.read(info.filename).decode('utf-8', 'replace')
+                  # Strip head, style, header
+                  idx = raw.find('id="dt_contenedor"')
+                  if idx < 0:
+                      idx = raw.find('</header>')
+                  snippet = raw[max(0, idx):]
+                  # Stop before chat-window / emoji-picker
+                  end_idx = snippet.find('id="chat-container"')
+                  if end_idx > 0:
+                      snippet = snippet[:end_idx]
+                  emit('body_search', snippet)
+                  # Also check inline scripts at the bottom
+                  for m_i, m in enumerate(re.finditer(r'(?s)<script\b[^>]*>(.*?)</script>', raw)):
+                      sc = m.group(1).strip()
+                      if sc and ('cargar' in sc or 'search' in sc or 'buscar' in sc or 'pelicula' in sc or 'serie' in sc or 'fetch' in sc):
+                          emit(f'inline_{m_i}', sc[:6000])
+              elif low.endswith('script.js.download'):
+                  sc = zf.read(info.filename).decode('utf-8', 'replace')
+                  for i, line in enumerate(sc.splitlines(), 1):
+                      pass
+                  # Emit sections mentioning buscar, search, cargarPeliculas, cargarSeries
+                  lines = sc.splitlines()
+                  hits = []
+                  for idx_l, l in enumerate(lines):
+                      if any(w in l.lower() for w in ['cargarseries', 'cargarpeliculas', 'search', 'buscar', 's=', 'ver-serie', 'pelicula']):
+                          hits.append(f'{idx_l+1}: {l}')
+                  emit('script_hits', '\n'.join(hits))
