@@ -22,7 +22,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Preparar sonda exclusiva de WebView API 33 + Media3
+      - name: Preparar sonda limpia de WebView API 33 (Method A + Method B) + Media3
         run: |
           cat > /tmp/run_vsembed_probe.sh <<'SH'
           #!/usr/bin/env bash
@@ -45,7 +45,9 @@ jobs:
           import com.lagradost.cloudstream3.app
           import kotlinx.coroutines.*
           import okhttp3.Request
+          import org.json.JSONObject
           import java.io.BufferedReader
+          import java.io.ByteArrayInputStream
           import java.io.InputStreamReader
           import java.net.InetAddress
           import java.net.ServerSocket
@@ -70,27 +72,35 @@ jobs:
                           val defaultWvUa = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull().orEmpty()
                           Log.i(TAG, "ANDROID_WV_DEFAULT_UA=$defaultWvUa")
                           withTimeout(240_000) {
-                              val r1 = captureWithWebView(context, "WV_BigGirls_DefaultUA", BIG_GIRLS_URL, customUa = null)
-                              Log.i(TAG, "WV_CAPTURE ${r1.label} stream=${r1.streamUrl} verify=${r1.verifyJson} hops=${r1.hops} state=${r1.domState}")
-                              if (r1.streamUrl.isNotBlank()) {
-                                  val origin = r1.origin.ifBlank { "https://stellarconductornexus.com" }
-                                  val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to (r1.ua.ifBlank { defaultWvUa }))
-                                  val pliRes = runCatching { play(context, r1.streamUrl.replaceFirst("/pl/", "/pli/"), hdrs, 1500) }
-                                  Log.i(TAG, "WV_MEDIA3 ${r1.label} mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
-                                  val proxyRes = runCatching { playViaLocalProxy(context, r1.streamUrl, hdrs) }
-                                  Log.i(TAG, "WV_MEDIA3 ${r1.label} mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
+                              // Method A: vsembed.su -> cancel iframe & promote landing to top-level WebView
+                              val r1 = captureWithWebView(
+                                  context, "A_BigGirls_DefaultUA", BIG_GIRLS_URL,
+                                  referer = "https://pelisjuanita.com/", customUa = null, promoteLanding = true
+                              )
+                              Log.i(TAG, "WV_RES ${r1.label} stream=${r1.streamUrl} verify=${r1.verifyHits} hops=${r1.hops} err=${r1.errs} state=${r1.domState}")
+                              tryPlay(context, r1, defaultWvUa)
+
+                              // Method B: OkHttp fetches vsembed -> vs_src -> landing -> playerUrl, then load playerUrl directly in WebView (DefaultUA & DesktopUA)
+                              val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                              val hopB = runCatching { resolvePlayerUrlViaHttp(SKIN_CRAWLER_URL, desktopUa) }
+                              Log.i(TAG, "HTTP_PREFETCH SkinCrawler ok=${hopB.isSuccess} player=${hopB.getOrNull()?.first} err=${hopB.exceptionOrNull()?.message}")
+                              hopB.getOrNull()?.let { (playerUrl, landingRef) ->
+                                  val r2 = captureWithWebView(
+                                      context, "B_SkinCrawler_DefaultUA", playerUrl,
+                                      referer = landingRef, customUa = null, promoteLanding = false
+                                  )
+                                  Log.i(TAG, "WV_RES ${r2.label} stream=${r2.streamUrl} verify=${r2.verifyHits} hops=${r2.hops} err=${r2.errs} state=${r2.domState}")
+                                  tryPlay(context, r2, defaultWvUa)
                               }
 
-                              val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                              val r2 = captureWithWebView(context, "WV_SkinCrawler_DesktopUA", SKIN_CRAWLER_URL, customUa = desktopUa)
-                              Log.i(TAG, "WV_CAPTURE ${r2.label} stream=${r2.streamUrl} verify=${r2.verifyJson} hops=${r2.hops} state=${r2.domState}")
-                              if (r2.streamUrl.isNotBlank()) {
-                                  val origin = r2.origin.ifBlank { "https://stellarconductornexus.com" }
-                                  val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to desktopUa)
-                                  val pliRes = runCatching { play(context, r2.streamUrl.replaceFirst("/pl/", "/pli/"), hdrs, 1500) }
-                                  Log.i(TAG, "WV_MEDIA3 ${r2.label} mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
-                                  val proxyRes = runCatching { playViaLocalProxy(context, r2.streamUrl, hdrs) }
-                                  Log.i(TAG, "WV_MEDIA3 ${r2.label} mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
+                              val hopA = runCatching { resolvePlayerUrlViaHttp(BIG_GIRLS_URL, desktopUa) }
+                              hopA.getOrNull()?.let { (playerUrl, landingRef) ->
+                                  val r3 = captureWithWebView(
+                                      context, "B_BigGirls_DesktopUA", playerUrl,
+                                      referer = landingRef, customUa = desktopUa, promoteLanding = false
+                                  )
+                                  Log.i(TAG, "WV_RES ${r3.label} stream=${r3.streamUrl} verify=${r3.verifyHits} hops=${r3.hops} err=${r3.errs} state=${r3.domState}")
+                                  tryPlay(context, r3, desktopUa)
                               }
 
                               Log.i(TAG, "PASS_VSEMBED_PROBE")
@@ -101,13 +111,41 @@ jobs:
                   }
               }
 
+              private suspend fun tryPlay(context: Context, r: WvResult, fallbackUa: String) {
+                  if (r.streamUrl.isBlank()) return
+                  val origin = r.origin.ifBlank { "https://stellarconductornexus.com" }
+                  val hdrs = mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to (r.ua.ifBlank { fallbackUa }))
+                  val pliRes = runCatching { play(context, r.streamUrl.replaceFirst("/pl/", "/pli/"), hdrs, 1500) }
+                  Log.i(TAG, "WV_MEDIA3 ${r.label} mode=pli ok=${pliRes.isSuccess} err=${pliRes.exceptionOrNull()?.message}")
+                  val proxyRes = runCatching { playViaLocalProxy(context, r.streamUrl, hdrs) }
+                  Log.i(TAG, "WV_MEDIA3 ${r.label} mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
+              }
+
+              private suspend fun resolvePlayerUrlViaHttp(vsembedUrl: String, ua: String): Pair<String, String> = withContext(Dispatchers.IO) {
+                  val h1 = mapOf("User-Agent" to ua, "Referer" to "https://pelisjuanita.com/")
+                  val r1 = app.get(vsembedUrl, headers = h1)
+                  val html1 = r1.text
+                  val apiRel = Regex("""data-api="([^"]+)"""").find(html1)?.groupValues?.get(1)?.replace("&amp;", "&")
+                      ?: error("no data-api in vsembed")
+                  val apiUrl = URI(r1.url).resolve(apiRel).toString()
+                  val r2 = app.get(apiUrl, headers = mapOf("User-Agent" to ua, "Referer" to r1.url))
+                  val landing = JSONObject(r2.text).getString("src")
+                  val r3 = app.get(landing, headers = mapOf("User-Agent" to ua, "Referer" to "https://vsembed.su/"))
+                  val cfgJson = Regex("""window\.CFG\s*=\s*(\{.*?\});""").find(r3.text)?.groupValues?.get(1)
+                      ?: error("no window.CFG in landing (${r3.code})")
+                  val playerRel = JSONObject(cfgJson).getString("playerUrl")
+                  val playerUrl = URI(r3.url).resolve(playerRel).toString()
+                  playerUrl to r3.url
+              }
+
               data class WvResult(
                   val label: String,
                   val streamUrl: String,
                   val origin: String,
                   val ua: String,
-                  val verifyJson: String,
+                  val verifyHits: String,
                   val hops: String,
+                  val errs: String,
                   val domState: String
               )
 
@@ -115,9 +153,12 @@ jobs:
                   context: Context,
                   label: String,
                   startUrl: String,
-                  customUa: String?
+                  referer: String,
+                  customUa: String?,
+                  promoteLanding: Boolean
               ): WvResult {
                   val hops = CopyOnWriteArrayList<String>()
+                  val errs = CopyOnWriteArrayList<String>()
                   var streamUrl = ""
                   var streamOrigin = ""
                   var verifyHits = ""
@@ -139,8 +180,16 @@ jobs:
                   }
                   wv.layout(0, 0, 1080, 1920)
                   val activeUa = wv.settings.userAgentString
-                  var promotedLanding = false
-                  var promotedPlayer = false
+                  var promoted = false
+
+                  wv.webChromeClient = object : WebChromeClient() {
+                      override fun onConsoleMessage(cmMsg: ConsoleMessage): Boolean {
+                          if (cmMsg.messageLevel() == ConsoleMessage.MessageLevel.ERROR && errs.size < 8) {
+                              errs.add("JS:${cmMsg.message().take(80)}")
+                          }
+                          return super.onConsoleMessage(cmMsg)
+                      }
+                  }
 
                   wv.webViewClient = object : WebViewClient() {
                       override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
@@ -155,28 +204,28 @@ jobs:
                                   hops.add("STREAM:${u.take(90)}")
                               }
                           }
-                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("wasm.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh")) {
-                              if (hops.size < 30) hops.add("REQ:${u.take(75)}")
+                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("wasm.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh") || low.contains("disable-devtool")) {
+                              if (hops.size < 25) hops.add("REQ:${u.take(70)}")
                               if (low.contains("verify.php")) verifyHits = "called"
                           }
-                          if (low.contains("stellarconductornexus.com/embed/movie/") && !promotedLanding) {
-                              promotedLanding = true
+                          if (promoteLanding && low.contains("stellarconductornexus.com/embed/movie/") && !promoted && !request.isForMainFrame) {
+                              promoted = true
                               hops.add("HOP_LANDING:${u.take(65)}")
                               view.post { view.loadUrl(u, mapOf("Referer" to "https://vsembed.su/")) }
-                          } else if (customUa != null && low.contains("stellarconductornexus.com/embed/player/") && !promotedPlayer) {
-                              promotedPlayer = true
-                              hops.add("HOP_PLAYER:${u.take(65)}")
-                              val ref = view.url ?: "https://stellarconductornexus.com/"
-                              view.post { view.loadUrl(u, mapOf("Referer" to ref)) }
+                              // Cancel iframe fetch so ?vs= isn't consumed before top-level loadUrl
+                              return WebResourceResponse("text/html", "utf-8", ByteArrayInputStream(ByteArray(0)))
                           }
                           return super.shouldInterceptRequest(view, request)
+                      }
+                      override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                          if (errs.size < 8) errs.add("HTTP_${errorResponse.statusCode}:${request.url.toString().take(60)}")
                       }
                       override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                           handler.proceed()
                       }
                   }
 
-                  wv.loadUrl(startUrl, mapOf("Referer" to "https://pelisjuanita.com/"))
+                  wv.loadUrl(startUrl, mapOf("Referer" to referer))
 
                   var domState = ""
                   val pollJs = """
@@ -202,7 +251,7 @@ jobs:
                       })()
                   """.trimIndent()
 
-                  for (step in 1..45) {
+                  for (step in 1..40) {
                       if (done) break
                       delay(1000)
                       domState = suspendCancellableCoroutine { cont ->
@@ -210,7 +259,7 @@ jobs:
                               if (cont.isActive) cont.resume(v ?: "") {}
                           }
                       }
-                      if (step == 12 || step == 24 || step == 45) {
+                      if (step == 12 || step == 24 || step == 40) {
                           Log.i(TAG, "WV_POLL $label step=$step state=$domState")
                       }
                   }
@@ -220,7 +269,7 @@ jobs:
                       wv.loadUrl("about:blank")
                       wv.destroy()
                   }
-                  return WvResult(label, streamUrl, streamOrigin, activeUa, verifyHits, hops.joinToString("|"), domState)
+                  return WvResult(label, streamUrl, streamOrigin, activeUa, verifyHits, hops.joinToString("|"), errs.joinToString("|"), domState)
               }
 
               private suspend fun play(context: Context, url: String, headers: Map<String, String>, waitMs: Long) = withTimeout(35_000) {
