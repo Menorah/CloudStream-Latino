@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect waaw embed.js, lulu seg 403, playmogo tail
+      - name: Inspect waaw player JS & lulu headers
         run: |
           python3 - <<'PY'
           import re, urllib.request, urllib.parse, urllib.error
@@ -30,82 +30,48 @@ jobs:
               req = urllib.request.Request(url, data=data, headers=h)
               try:
                   with urllib.request.urlopen(req, timeout=timeout) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read()
+                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
               except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), dict(e.headers), e.read()
+                  return e.code, e.geturl(), dict(e.headers), e.read().decode("utf-8", "replace")
               except Exception as e:
-                  return -1, url, {}, repr(e).encode()
+                  return -1, url, {}, repr(e)
 
-          def unpack_dean(html):
-              m = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", html, re.S)
-              if not m:
-                  return ""
-              p, a, c, k = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
-              def enc(num):
-                  chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                  if num == 0:
-                      return "0"
-                  s = ""
-                  while num > 0:
-                      s = chars[num % a] + s
-                      num //= a
-                  return s
-              mapping = {enc(i): (k[i] if i < len(k) and k[i] else enc(i)) for i in range(c)}
-              return re.sub(r"\b\w+\b", lambda x: mapping.get(x.group(0), x.group(0)), p)
-
-          # 1. Waaw inline scripts >= 20 + embed.232.js
           _, _, _, wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
-          wb_s = wb.decode("utf-8", "replace")
-          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb_s, re.S | re.I)
-          tail_sc = [f"[{i}:len={len(s.strip())}] {s.strip()[:300]}" for i, s in enumerate(scripts) if i >= 20 and s.strip()]
-          add_notice("WAAW_TAIL_SC", " || ".join(tail_sc)[:3700])
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
+          long_tail = [(i, s.strip()) for i, s in enumerate(scripts) if i >= 24 and len(s.strip()) > 300]
+          add_notice("WAAW_LT_META", ", ".join(f"{i}:{len(s)}" for i, s in long_tail))
+          for i, s in long_tail:
+              if i == 35:
+                  # show occurrences of key terms in script 35
+                  hits = []
+                  for kw in ["olvideo", "m3u8", "mp4", "player", "video", "src", "get_md5", "ajax", "fetch", "XMLHttpRequest", "ws", "master", "hls", "server", "cdn"]:
+                      for m in re.finditer(re.escape(kw), s):
+                          hits.append(f"[{kw}@{m.start()}]: {s[max(0,m.start()-60):m.start()+140]}")
+                          if len(hits) > 20:
+                              break
+                      if len(hits) > 20:
+                          break
+                  add_notice("WAAW_S35_HEAD", s[:3500])
+                  add_notice("WAAW_S35_TAIL", s[-3500:])
+                  add_notice("WAAW_S35_HITS", " || ".join(hits)[:3700])
+              else:
+                  add_notice(f"WAAW_S{i}", s[:3500])
 
-          c, u, h, ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
-          ejs_s = ejs.decode("utf-8", "replace")
-          add_notice("WAAW_EJS_1", f"c={c} len={len(ejs_s)} head={ejs_s[:3600]}")
-          for idx, start in enumerate([3600, 7200, 10800]):
-              if len(ejs_s) > start:
-                  add_notice(f"WAAW_EJS_{idx+2}", ejs_s[start:start+3600])
+          _, _, _, ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
+          ehits = []
+          for kw in ["get_md5", "load_vtt", "m3u8", "mp4", "olvideo", "hls", "src(", "videojs", "var ws", "cdn", "player.src", "ajax", "fetch("]:
+              for m in re.finditer(re.escape(kw), ejs):
+                  ehits.append(f"[{kw}@{m.start()}]: {ejs[max(0,m.start()-80):m.start()+180]}")
+                  if len(ehits) > 22:
+                      break
+              if len(ehits) > 22:
+                  break
+          add_notice("WAAW_EJS_HITS", " || ".join(ehits)[:3700])
 
-          # 2. Lulustream /dl vs /e + encryption.key + seg 403 detail
-          _, _, _, eb = fetch("https://lplaygo.com/e/zxfcz3pz68ds", {"Referer": "https://pelisjuanita.com/"})
-          eb_s = eb.decode("utf-8", "replace")
-          unp_e = unpack_dean(eb_s)
-          form = urllib.parse.urlencode({"op": "embed", "file_code": "zxfcz3pz68ds", "auto": "1", "referer": "https://pelisjuanita.com/"}).encode()
-          _, _, _, db = fetch("https://lplaygo.com/dl", {"Referer": "https://lplaygo.com/e/zxfcz3pz68ds", "Origin": "https://lplaygo.com", "Content-Type": "application/x-www-form-urlencoded"}, data=form)
-          unp_d = unpack_dean(db.decode("utf-8", "replace"))
-          m3 = re.findall(r'https?://[^\s"\'<>\\]+\.m3u8[^\s"\'<>\\]*', unp_d or unp_e)
-          lulu_info = [f"unp_e={len(unp_e)} unp_d={len(unp_d)} m3={m3[:2]}"]
-          if m3:
-              mc, mu, mh, mb = fetch(m3[0], {"Referer": "https://lplaygo.com/", "Origin": "https://lplaygo.com"})
-              mb_s = mb.decode("utf-8", "replace")
-              sub = [ln.strip() for ln in mb_s.splitlines() if ln.strip() and not ln.startswith("#")]
-              if sub:
-                  su0 = urllib.parse.urljoin(mu, sub[0])
-                  sc, su, sh, sb = fetch(su0, {"Referer": "https://lplaygo.com/", "Origin": "https://lplaygo.com"})
-                  sb_s = sb.decode("utf-8", "replace")
-                  lulu_info.append(f"sub_lines={sb_s[:900]!r}")
-                  key_m = re.search(r'URI="([^"]+)"', sb_s)
-                  if key_m:
-                      kc, _, kh, kb = fetch(key_m.group(1), {"Referer": "https://lplaygo.com/"})
-                      lulu_info.append(f"key c={kc} len={len(kb)} hdrs={dict(list(kh.items())[:8])}")
-                  segs = [ln.strip() for ln in sb_s.splitlines() if ln.strip() and not ln.startswith("#")]
-                  if segs:
-                      segu = urllib.parse.urljoin(su, segs[0])
-                      for hdr_name, hdrs in [
-                          ("ref_lplaygo", {"Referer": "https://lplaygo.com/", "Origin": "https://lplaygo.com"}),
-                          ("ref_lulucdn", {"Referer": "https://lulustream.com/"}),
-                          ("no_ref_desktop_ua", {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}),
-                          ("empty_hdr", {}),
-                      ]:
-                          gc, gu, gh, gb = fetch(segu, hdrs)
-                          lulu_info.append(f"seg({hdr_name}) u={segu[:90]} c={gc} len={len(gb)} gh={dict(list(gh.items())[:6])} body={gb[:120]!r}")
-          add_notice("LULU_DETAIL", " || ".join(lulu_info)[:3800])
-
-          # 3. Playmogo tail
-          _, _, _, pm = fetch("https://playmogo.com/e/kmq8ibge16z1", {"Referer": "https://pelisjuanita.com/"})
-          pm_s = pm.decode("utf-8", "replace")
-          add_notice("PM_TAIL", pm_s[2000:5700])
+          # Also test Savefiles /dl
+          form = urllib.parse.urlencode({"op": "embed", "file_code": "lpkobe2ki65z", "auto": "1", "referer": "https://pelisjuanita.com/"}).encode()
+          c, u, h, sb = fetch("https://savefiles.com/dl", {"Referer": "https://savefiles.com/e/lpkobe2ki65z", "Origin": "https://savefiles.com", "Content-Type": "application/x-www-form-urlencoded"}, data=form)
+          add_notice("SAVEFILES", f"c={c} len={len(sb)} m3={re.findall(r'https?://[^\\s\"\\x27<>\\\\]+\\.m3u8[^\\s\"\\x27<>\\\\]*', sb)} head={sb[:1200]}")
 
           for n in notices[:9]:
               print(f"::notice::{n}")
