@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parallel 5-part lossless extractor for pelisjuanita.com.zip HTML & JS files."""
+"""Parallel fine-grained lossless extractor for pelisjuanita.com.zip HTML & JS files."""
 import argparse
 import base64
 import hashlib
@@ -58,7 +58,6 @@ def emit_chunks(tag: str, obj):
     chunk_size = 3800
     total = (len(b64) + chunk_size - 1) // chunk_size
     if total > 9:
-        # Split safely into a warning + trimmed or error with sizes
         raise RuntimeError(f"{tag} too big: {total} chunks ({len(b64)} b64 chars, {len(raw)} raw)")
     for idx, i in enumerate(range(0, len(b64), chunk_size)):
         print(f"::notice::{tag} {idx + 1}/{total} {b64[i:i+chunk_size]}", flush=True)
@@ -89,7 +88,6 @@ def collapse_repeated_siblings(root: BeautifulSoup, keep_first: int = 3, keep_la
         kids = [c for c in container.find_all(recursive=False) if getattr(c, "name", None)]
         if len(kids) <= keep_first + keep_last + 1:
             continue
-        # Group by (tag, sorted classes)
         sigs = [(k.name, tuple(sorted(k.get("class") or []))) for k in kids]
         dominant = max(set(sigs), key=sigs.count)
         if sigs.count(dominant) >= 5:
@@ -127,7 +125,6 @@ def extract_page(zf: zipfile.ZipFile, filename: str, script_bank: dict, shared_p
                 inline_hashes.append(h)
         sc.decompose()
 
-    # Deduplicate identical <header>, <footer>, <nav>, <select> across pages
     for tagname in ("header", "footer", "nav"):
         for el in soup.find_all(tagname):
             h_html = redact(re.sub(r"\s{2,}", " ", str(el)))
@@ -152,13 +149,11 @@ def extract_page(zf: zipfile.ZipFile, filename: str, script_bank: dict, shared_p
             shared_parts[h] = s_html
 
     if is_detail:
-        # On detail pages, keep server buttons/tabs/seasons intact, collapse only large related carousels (>8 cards)
         for container in soup.find_all(True):
             kids = [c for c in container.find_all(recursive=False) if getattr(c, "name", None)]
             if len(kids) > 10:
                 sigs = [(k.name, tuple(sorted(k.get("class") or []))) for k in kids]
                 dom = max(set(sigs), key=sigs.count)
-                # Don't collapse option lists or episode rows if < 25; collapse huge grids (>12)
                 if sigs.count(dom) > 12:
                     matching = [k for k, s in zip(kids, sigs) if s == dom]
                     for k in matching[3:-1]:
@@ -185,7 +180,7 @@ def extract_page(zf: zipfile.ZipFile, filename: str, script_bank: dict, shared_p
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--download", action="store_true")
-    ap.add_argument("--part", type=int, required=True)
+    ap.add_argument("--part", required=True)
     args = ap.parse_args()
 
     if args.download:
@@ -195,85 +190,92 @@ def main():
         all_names = [i.filename for i in zf.infolist() if not i.is_dir()]
         htmls = [n for n in all_names if n.endswith(".html") and "_files/" not in n]
         inner_htmls = [n for n in all_names if "_files/" in n and n.endswith(".html") and "saved_resource" not in n]
+        movie_pages = sorted([
+            n for n in htmls
+            if any(k in n for k in ("/movies/", "/estrenos/", "/populares/", "/sagas/", "/ultimas agregadas/", "/peliculas "))
+        ])
         script_bank = {}
         shared_parts = {}
+        tag = f"PJP{args.part.upper()}"
 
-        if args.part == 1:
-            movie_pages = [
-                n for n in sorted(htmls)
-                if any(k in n for k in ("/movies/", "/estrenos/", "/populares/", "/sagas/", "/ultimas agregadas/", "/peliculas "))
-            ]
-            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in movie_pages]
-            emit_chunks("PJP1", {"pages": pages, "scripts": script_bank, "shared": shared_parts})
+        if args.part == "1a":
+            pages = [extract_page(zf, n, script_bank, shared_parts) for n in movie_pages[:3]]
+            emit_chunks(tag, {"pages": pages, "scripts": script_bank, "shared": shared_parts})
+        elif args.part == "1b":
+            pages = [extract_page(zf, n, script_bank, shared_parts) for n in movie_pages[3:6]]
+            emit_chunks(tag, {"pages": pages, "scripts": script_bank, "shared": shared_parts})
+        elif args.part == "1c":
+            pages = [extract_page(zf, n, script_bank, shared_parts) for n in movie_pages[6:]]
+            emit_chunks(tag, {"pages": pages, "scripts": script_bank, "shared": shared_parts})
 
-        elif args.part == 2:
-            series_pages = [
-                n for n in sorted(htmls)
-                if "/series" in n or "ultimos episodios" in n or "ultimas series" in n
-            ]
-            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in series_pages]
-            emit_chunks("PJP2", {"pages": pages, "scripts": script_bank, "shared": shared_parts})
+        elif args.part == "3a":
+            targets = [n for n in sorted(htmls) if "pelicula detalle" in n]
+            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=True) for n in targets]
+            emit_chunks(tag, {"pages": pages, "scripts": script_bank, "shared": shared_parts})
+        elif args.part == "3b":
+            targets = [n for n in sorted(htmls) if "serie detalle" in n]
+            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=True) for n in targets]
+            emit_chunks(tag, {"pages": pages, "scripts": script_bank, "shared": shared_parts})
+        elif args.part == "3c":
+            targets = [n for n in sorted(inner_htmls) if "movie.html" in n or "serie.html" in n]
+            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in targets]
+            emit_chunks(tag, {"pages": pages, "scripts": script_bank, "shared": shared_parts})
 
-        elif args.part == 3:
-            detail_pages = [n for n in sorted(htmls) if "pelicula detalle" in n or "serie detalle" in n]
-            player_pages = [n for n in sorted(inner_htmls) if "movie.html" in n or "serie.html" in n]
-            pages = [extract_page(zf, n, script_bank, shared_parts, is_detail=True) for n in detail_pages] + [
-                extract_page(zf, n, script_bank, shared_parts, is_detail=False) for n in player_pages
-            ]
-            emit_chunks("PJP3", {"pages": pages, "scripts": script_bank, "shared": shared_parts})
-
-        elif args.part == 4:
-            js_dump = {}
-            skip_prefixes = ("lottie-player", "jquery.min", "hls.js", "jwplayer", "vast.js", "ima-ad-player", "cast_", "www-widgetapi", "vce701823", "index-v2")
-            for n in sorted(all_names):
-                base = n.rsplit("/", 1)[-1]
-                if any(base.startswith(p) for p in skip_prefixes):
-                    continue
-                if n.endswith((".js.download", "iframe_api", "disable-devtool")) or ("embed-" in base and base.endswith(".html")):
-                    raw = zf.read(n)
-                    sha = hashlib.sha256(raw).hexdigest()[:12]
-                    if sha in js_dump:
-                        continue
-                    txt = redact(raw.decode("utf-8", "replace"))
-                    if "embed-" in base:
-                        soup = clean_soup(txt)
-                        scripts = [redact(sc.get_text().strip()) for sc in soup.find_all("script") if sc.get_text().strip()]
-                        ext = [sc.get("src") for sc in soup.find_all("script") if sc.get("src")]
-                        js_dump[sha] = {
-                            "file": n,
-                            "size": len(txt),
-                            "title": soup.title.get_text(strip=True) if soup.title else "",
-                            "ext": ext,
-                            "scripts": scripts,
-                            "body": redact(re.sub(r"\s{2,}", " ", str(soup.body or ""))),
-                        }
-                    else:
-                        js_dump[sha] = {"file": n, "size": len(txt), "text": txt}
-            emit_chunks("PJP4", js_dump)
-
-        elif args.part == 5:
+        elif args.part == "4a":
             out = {}
             for n in sorted(all_names):
                 base = n.rsplit("/", 1)[-1]
-                if base.startswith("index-v2") or base in ("f.txt", "saved_resource.html", "comments.html"):
-                    raw = zf.read(n)
-                    sha = hashlib.sha256(raw).hexdigest()[:12]
-                    if sha in out:
-                        continue
-                    txt = redact(raw.decode("utf-8", "replace"))
-                    urls = sorted(set(re.findall(r"https?://[^\s\"'<>\\)]+", txt)))[:100]
-                    paths = sorted(set(re.findall(r"['\"](/[a-zA-Z0-9_./?=&%-]{3,100})['\"]", txt)))[:120]
-                    keywords = sorted(set(re.findall(r"[a-zA-Z0-9_$.]*(?:m3u8|master|playlist|source|file|decrypt|token|cipher|aes|key|api|embed|vimeus|juanita)[a-zA-Z0-9_$.]*", txt, re.I)))[:120]
-                    out[sha] = {
-                        "file": n,
-                        "size": len(txt),
-                        "urls": urls,
-                        "paths": paths,
-                        "keywords": keywords,
-                        "head": txt[:6000],
-                        "tail": txt[-4000:] if len(txt) > 6000 else "",
+                if base in ("script.js.download", "ssr.js.download", "reacciones.js.download", "pop.js.download", "iframe_api"):
+                    out[base] = redact(zf.read(n).decode("utf-8", "replace"))
+            emit_chunks(tag, out)
+        elif args.part == "4b":
+            out = {}
+            for n in sorted(all_names):
+                base = n.rsplit("/", 1)[-1]
+                if base in ("video77.js.download", "xd.js.download", "xupload.js.download", "localstorage-slim.js.download", "disable-devtool"):
+                    out[base] = redact(zf.read(n).decode("utf-8", "replace"))
+            emit_chunks(tag, out)
+        elif args.part == "4c":
+            out = {}
+            for n in sorted(all_names):
+                base = n.rsplit("/", 1)[-1]
+                if "embed-h5hdebq7cuvi" in base:
+                    raw = zf.read(n).decode("utf-8", "replace")
+                    soup = clean_soup(raw)
+                    out[base] = {
+                        "saved_url": (re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600]) or [None, ""])[1],
+                        "title": soup.title.get_text(strip=True) if soup.title else "",
+                        "ext": [sc.get("src") for sc in soup.find_all("script") if sc.get("src")],
+                        "scripts": [redact(sc.get_text().strip()) for sc in soup.find_all("script") if sc.get_text().strip()],
+                        "body": redact(re.sub(r"\s{2,}", " ", str(soup.body or ""))),
                     }
-            emit_chunks("PJP5", out)
+            emit_chunks(tag, out)
+        elif args.part == "4d":
+            out = {}
+            for n in sorted(all_names):
+                base = n.rsplit("/", 1)[-1]
+                if "embed-plijzvm8sv3g" in base:
+                    raw = zf.read(n).decode("utf-8", "replace")
+                    soup = clean_soup(raw)
+                    out[base] = {
+                        "saved_url": (re.search(r"saved from url=\(\d+\)([^\s>]+)", raw[:600]) or [None, ""])[1],
+                        "title": soup.title.get_text(strip=True) if soup.title else "",
+                        "ext": [sc.get("src") for sc in soup.find_all("script") if sc.get("src")],
+                        "scripts": [redact(sc.get_text().strip()) for sc in soup.find_all("script") if sc.get_text().strip()],
+                        "body": redact(re.sub(r"\s{2,}", " ", str(soup.body or ""))),
+                    }
+            emit_chunks(tag, out)
+        elif args.part == "4e":
+            out = {}
+            for n in sorted(all_names):
+                base = n.rsplit("/", 1)[-1]
+                if base.startswith("index-v2"):
+                    txt = redact(zf.read(n).decode("utf-8", "replace"))
+                    # Last 65KB holds app-specific Vimeus player logic (first ~340KB is React/Lucide)
+                    out["tail_65k"] = txt[-65000:]
+                    out["size"] = len(txt)
+                    break
+            emit_chunks(tag, out)
 
 
 if __name__ == "__main__":
