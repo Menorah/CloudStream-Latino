@@ -12,4 +12,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/pelisjuanita_probe.py
+      - run: python3 -c "import bs4" 2>/dev/null || python3 -m pip install --break-system-packages -q beautifulsoup4
+      - run: python3 scripts/pelisjuanita_probe.py --download
+      - run: python3 scripts/pelisjuanita_probe.py --part 1
+      - run: python3 scripts/pelisjuanita_probe.py --part 2
+      - run: python3 scripts/pelisjuanita_probe.py --part 3
+      - run: python3 scripts/pelisjuanita_probe.py --part 4
