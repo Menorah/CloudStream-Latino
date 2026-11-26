@@ -1,4 +1,4 @@
-package com.menorah.poseidonhd2bis
+package com.menorah.poseidon
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -11,29 +11,29 @@ import java.nio.charset.StandardCharsets
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-class PoseidonHD2BisDataTest {
+class PoseidonDataTest {
 
     @Test
     fun `buildPagedUrl and slugToPublicUrl handle catalog routes and Next slugs accurately`() {
-        assertEquals("https://www.poseidonhd2.co/peliculas", PoseidonHD2BisData.buildPagedUrl("/peliculas", 1))
-        assertEquals("https://www.poseidonhd2.co/peliculas/page/2", PoseidonHD2BisData.buildPagedUrl("/peliculas", 2))
-        assertEquals("https://www.poseidonhd2.co/genero/ciencia-ficcion/page/3", PoseidonHD2BisData.buildPagedUrl("/genero/ciencia-ficcion", 3))
+        assertEquals("https://www.poseidonhd2.co/peliculas", PoseidonData.buildPagedUrl("/peliculas", 1))
+        assertEquals("https://www.poseidonhd2.co/peliculas/page/2", PoseidonData.buildPagedUrl("/peliculas", 2))
+        assertEquals("https://www.poseidonhd2.co/genero/ciencia-ficcion/page/3", PoseidonData.buildPagedUrl("/genero/ciencia-ficcion", 3))
 
         assertEquals(
             "https://www.poseidonhd2.co/pelicula/603/the-matrix",
-            PoseidonHD2BisData.slugToPublicUrl("movies/603/the-matrix"),
+            PoseidonData.slugToPublicUrl("movies/603/the-matrix"),
         )
         assertEquals(
             "https://www.poseidonhd2.co/serie/84773/la-casa-del-dragon",
-            PoseidonHD2BisData.slugToPublicUrl("series/84773/la-casa-del-dragon"),
+            PoseidonData.slugToPublicUrl("series/84773/la-casa-del-dragon"),
         )
         assertEquals(
             "https://www.poseidonhd2.co/serie/254630/12-12-12/temporada/1/episodio/4",
-            PoseidonHD2BisData.slugToPublicUrl("series/254630/12-12-12/seasons/1/episodes/4"),
+            PoseidonData.slugToPublicUrl("series/254630/12-12-12/seasons/1/episodes/4"),
         )
         assertEquals(
             "https://www.poseidonhd2.co/serie/254630/12-12-12",
-            PoseidonHD2BisData.extractSeriesBaseUrl("https://www.poseidonhd2.co/serie/254630/12-12-12/temporada/1/episodio/4"),
+            PoseidonData.extractSeriesBaseUrl("https://www.poseidonhd2.co/serie/254630/12-12-12/temporada/1/episodio/4"),
         )
     }
 
@@ -65,7 +65,7 @@ class PoseidonHD2BisDataTest {
             </body></html>
         """.trimIndent()
 
-        val catalog = PoseidonHD2BisData.parseCatalogPage(moviesHtml)
+        val catalog = PoseidonData.parseCatalogPage(moviesHtml)
         assertEquals(804, catalog.totalPages)
         assertEquals(2, catalog.items.size)
         assertEquals(PoseidonItemKind.Movie, catalog.items[0].kind)
@@ -95,7 +95,7 @@ class PoseidonHD2BisDataTest {
             </body></html>
         """.trimIndent()
 
-        val epCatalog = PoseidonHD2BisData.parseCatalogPage(episodesHtml)
+        val epCatalog = PoseidonData.parseCatalogPage(episodesHtml)
         assertEquals(3405, epCatalog.totalPages)
         assertEquals(1, epCatalog.items.size)
         assertEquals(PoseidonItemKind.Episode, epCatalog.items[0].kind)
@@ -131,7 +131,7 @@ class PoseidonHD2BisDataTest {
             }</script>
         """.trimIndent()
 
-        val movie = PoseidonHD2BisData.parseMovieDetail(movieHtml, "https://www.poseidonhd2.co/pelicula/603/the-matrix")
+        val movie = PoseidonData.parseMovieDetail(movieHtml, "https://www.poseidonhd2.co/pelicula/603/the-matrix")
         assertNotNull(movie)
         assertEquals("Matrix", movie!!.title)
         assertEquals("https://image.tmdb.org/t/p/original/poster.jpg", movie.posterUrl)
@@ -166,7 +166,7 @@ class PoseidonHD2BisDataTest {
             }</script>
         """.trimIndent()
 
-        val series = PoseidonHD2BisData.parseSeriesDetail(seriesHtml, "https://www.poseidonhd2.co/serie/84773/la-casa-del-dragon")
+        val series = PoseidonData.parseSeriesDetail(seriesHtml, "https://www.poseidonhd2.co/serie/84773/la-casa-del-dragon")
         assertNotNull(series)
         assertEquals(2, series!!.episodes.size)
         assertEquals(1, series.episodes[0].season)
@@ -181,10 +181,10 @@ class PoseidonHD2BisDataTest {
             <script>var ad = 'https://doo.lat/pop.js'; var url = 'https://voe.sx/e/sm8v06z32ntn';</script>
             </body></html>
         """.trimIndent()
-        assertEquals("https://voe.sx/e/sm8v06z32ntn", PoseidonHD2BisData.extractPlayerEmbedUrl(html))
+        assertEquals("https://voe.sx/e/sm8v06z32ntn", PoseidonData.extractPlayerEmbedUrl(html))
 
         val adOnly = """<script>var url = 'https://doo.lat/pop.js';</script>"""
-        assertNull(PoseidonHD2BisData.extractPlayerEmbedUrl(adOnly))
+        assertNull(PoseidonData.extractPlayerEmbedUrl(adOnly))
     }
 
     @Test
@@ -215,7 +215,7 @@ class PoseidonHD2BisDataTest {
         val encodedPayload = PoseidonCrypto.solveAltchaChallenge(challengeJson, maxCounters = 500)
         assertNotNull(encodedPayload)
         val decodedJson = String(PoseidonCrypto.decodeBase64Flexible(encodedPayload!!), StandardCharsets.UTF_8)
-        val tree = PoseidonHD2BisData.jsonMapper.readTree(decodedJson)
+        val tree = PoseidonData.jsonMapper.readTree(decodedJson)
         assertEquals(295, tree.get("solution").get("counter").asInt())
         assertEquals(
             "002443d914be3ca3d667130ca2df65d991d3288b2b5d3d4422fc64c06c693ad3",
@@ -226,7 +226,7 @@ class PoseidonHD2BisDataTest {
             PoseidonCrypto.solveAltchaChallengeSuspend(challengeJson, maxCounters = 500)
         }
         assertNotNull(asyncEncoded)
-        val asyncTree = PoseidonHD2BisData.jsonMapper.readTree(
+        val asyncTree = PoseidonData.jsonMapper.readTree(
             String(PoseidonCrypto.decodeBase64Flexible(asyncEncoded!!), StandardCharsets.UTF_8),
         )
         assertEquals(295, asyncTree.get("solution").get("counter").asInt())

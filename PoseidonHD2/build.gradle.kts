@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -6,12 +6,17 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
 }
+
 cloudstream {
-    description = "Películas y series de PoseidonHD 2 en español."
+    description = "Películas, series y episodios recientes de PoseidonHD 2 (poseidonhd2.co) en español latino, castellano y subtitulado."
     authors = listOf("Menorah")
-    status = 3
+    status = 1
     tvTypes = listOf("Movie", "TvSeries")
     language = "es"
 }
 
-android { defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" } }
+android {
+    defaultConfig {
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+}

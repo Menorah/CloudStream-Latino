@@ -1,114 +1,417 @@
 package com.menorah.poseidon
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.utils.*
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import java.net.URI
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
 import java.util.Collections
 import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 class PoseidonProvider : MainAPI() {
-    override var mainUrl = "https://www.poseidonhd2.co"
+    override var mainUrl = PoseidonData.MAIN_URL
     override var name = "PoseidonHD 2"
     override var lang = "es"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-    override val mainPage = mainPageOf("/peliculas" to "Películas", "/series" to "Series")
 
-    private suspend fun fetch(input: String): Document {
-        val url = URI("$mainUrl/").resolve(input).toString()
-        require(PoseidonMarkup.siteUrl(url)) { "Dirección fuera de PoseidonHD 2" }
-        val res = app.get(url, timeout = 15)
-        if (!res.isSuccessful || !PoseidonMarkup.siteUrl(res.url)) throw IllegalStateException("PoseidonHD 2 no respondió correctamente (HTTP ${res.code}).")
-        return Jsoup.parse(res.text, res.url)
-    }
-    private fun responses(cards: List<Card>): List<SearchResponse> = cards.map { item ->
-        if (item.movie) newMovieSearchResponse(item.title, item.url, TvType.Movie) { posterUrl = item.poster }
-        else newTvSeriesSearchResponse(item.title, item.url, TvType.TvSeries) { posterUrl = item.poster }
-    }
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = fetch(request.data + if (page > 1) "/page/$page" else "")
-        return newHomePageResponse(HomePageList(request.name, responses(PoseidonMarkup.cards(doc))), hasNext = PoseidonMarkup.hasNext(doc, page))
-    }
-    override suspend fun search(query: String): List<SearchResponse> {
-        if (query.isBlank()) return emptyList()
-        return responses(PoseidonMarkup.cards(fetch("/search?q=${URLEncoder.encode(query.trim(), "UTF-8")}")))
-    }
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
-    private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-    override suspend fun load(url: String): LoadResponse? {
-        val doc = fetch(url)
-        val state = PoseidonMarkup.state(doc) ?: return null
-        val movie = URI(url).path.orEmpty().startsWith("/pelicula/")
-        val media = PoseidonMarkup.media(state, movie)
-        val title = media.path("titles").path("name").asText("").takeIf { it.isNotBlank() } ?: return null
-        val poster = media.path("images").path("poster").asText("").takeIf { it.startsWith("https://") }
-        val background = media.path("images").path("backdrop").asText("").takeIf { it.startsWith("https://") }
-        val description = media.path("overview").asText("").takeIf { it.isNotBlank() }
-        if (movie) return newMovieLoadResponse(title, url, TvType.Movie, url) { posterUrl = poster; backgroundPosterUrl = background; plot = description }
-        val all = PoseidonMarkup.episodes(media).toMutableList()
-        // The series page can be stale and contain empty seasons even though
-        // episode pages have a newer complete seasons list. Consult episode 1
-        // of each empty season, but never invent episode counts.
-        val missing = PoseidonMarkup.missingSeasons(media)
-        val seriesUrl = URI(doc.location()).let { "${it.scheme}://${it.authority}${it.path.trimEnd('/')}" }
-        coroutineScope {
-            val permits = Semaphore(4)
-            missing.map { season -> async { permits.withPermit {
-                withTimeoutOrNull(15_000L) {
-                    val detail = attempt { fetch("$seriesUrl/temporada/$season/episodio/1") } ?: return@withTimeoutOrNull emptyList<EpisodeItem>()
-                    val source = PoseidonMarkup.state(detail)?.path("serie") ?: return@withTimeoutOrNull emptyList<EpisodeItem>()
-                    PoseidonMarkup.episodes(source).filter { it.season == season }
-                } ?: emptyList()
-            } } }.awaitAll().forEach { all.addAll(it) }
-        }
-        val episodes = all.distinctBy { it.season to it.number }.sortedWith(compareBy({ it.season }, { it.number })).map { ep ->
-            newEpisode("$seriesUrl/temporada/${ep.season}/episodio/${ep.number}") { name = ep.name; season = ep.season; episode = ep.number; posterUrl = ep.poster }
-        }
-        if (episodes.isEmpty()) return null
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = background; plot = description }
-    }
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val doc = fetch(data)
-        val players = PoseidonMarkup.state(doc)?.let(PoseidonMarkup::players).orEmpty().take(24)
-        val emitted = AtomicBoolean(false); val lock = Any()
-        withTimeoutOrNull(45_000L) {
-            coroutineScope {
-                val permits = Semaphore(5)
-                players.map { player -> async { permits.withPermit {
-                    withTimeoutOrNull(12_000L) {
-                        val target = if (PoseidonMarkup.wrapperUrl(player.url)) {
-                            val response = attempt { app.get(player.url, headers = mapOf("Referer" to doc.location()), timeout = 8) } ?: return@withTimeoutOrNull
-                            if (!response.isSuccessful) return@withTimeoutOrNull
-                            PoseidonMarkup.destination(response.text) ?: return@withTimeoutOrNull
-                        } else player.url
-                        val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                        attempt { loadExtractor(target, player.url, subtitleCallback) { links.add(it) } }
-                        for (link in synchronized(links) { links.toList() }) {
-                            val labelled = label(link, player.language)
-                            synchronized(lock) { emitted.set(true); callback(labelled) }
-                        }
-                    }
-                } } }.awaitAll()
+    override val getMainPageTimeoutMs: Long? = 75_000L
+    override val searchTimeoutMs: Long? = 30_000L
+    override val quickSearchTimeoutMs: Long? = 25_000L
+    override val loadTimeoutMs: Long? = 45_000L
+    override val loadLinksTimeoutMs: Long? = 60_000L
+
+    override val mainPage = mainPageOf(
+        "/peliculas" to "Películas",
+        "/peliculas/estrenos" to "Películas Estrenos",
+        "/peliculas/tendencias/dia" to "Películas Tendencias (Día)",
+        "/peliculas/tendencias/semana" to "Películas Tendencias (Semana)",
+        "/series" to "Series",
+        "/series/estrenos" to "Series Estrenos",
+        "/series/tendencias/dia" to "Series Tendencias (Día)",
+        "/series/tendencias/semana" to "Series Tendencias (Semana)",
+        "/episodios" to "Últimos Episodios",
+        "/genero/accion" to "Acción",
+        "/genero/animacion" to "Animación",
+        "/genero/aventura" to "Aventura",
+        "/genero/ciencia-ficcion" to "Ciencia Ficción",
+        "/genero/comedia" to "Comedia",
+        "/genero/crimen" to "Crimen",
+        "/genero/documental" to "Documental",
+        "/genero/drama" to "Drama",
+        "/genero/familia" to "Familia",
+        "/genero/fantasia" to "Fantasía",
+        "/genero/guerra" to "Guerra",
+        "/genero/historia" to "Historia",
+        "/genero/misterio" to "Misterio",
+        "/genero/musica" to "Música",
+        "/genero/romance" to "Romance",
+        "/genero/suspenso" to "Suspenso",
+        "/genero/terror" to "Terror",
+        "/genero/western" to "Western",
+    )
+
+    private data class CachedEntry(val value: String, val storedAtMs: Long)
+
+    private val htmlCache = ConcurrentHashMap<String, CachedEntry>()
+    private val playerRedirectCache = ConcurrentHashMap<String, CachedEntry>()
+    private val nextRequestAllowedAtMs = AtomicLong(0L)
+    private val siteGate = Semaphore(3)
+    private val linkGate = Semaphore(5)
+
+    private val siteHeaders = mapOf(
+        "User-Agent" to PoseidonData.DEFAULT_USER_AGENT,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
+        "Referer" to "$mainUrl/",
+    )
+
+    private suspend fun getHtml(
+        url: String,
+        referer: String = "$mainUrl/",
+        timeoutSec: Long = 18L,
+        useCache: Boolean = true,
+    ): String? {
+        val now = System.currentTimeMillis()
+        if (useCache) {
+            val cached = htmlCache[url]
+            if (cached != null && now - cached.storedAtMs < 120_000L) {
+                return cached.value
             }
         }
-        return emitted.get()
+
+        for (attempt in 0..3) {
+            val waitUntil = nextRequestAllowedAtMs.get()
+            val delayMs = waitUntil - System.currentTimeMillis()
+            if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+
+            var retryWaitMs = 0L
+            val html = try {
+                siteGate.withPermit {
+                    val cooldown = nextRequestAllowedAtMs.get() - System.currentTimeMillis()
+                    if (cooldown > 0) kotlinx.coroutines.delay(cooldown)
+                    nextRequestAllowedAtMs.updateAndGet { prev ->
+                        maxOf(prev, System.currentTimeMillis() + 80L)
+                    }
+                    val res = app.get(
+                        url,
+                        referer = referer,
+                        headers = siteHeaders,
+                        timeout = timeoutSec,
+                    )
+                    when {
+                        res.isSuccessful -> res.text
+                        res.code == 429 || res.code in 500..599 -> {
+                            val retrySec = res.headers["Retry-After"]?.trim()?.toLongOrNull()
+                            retryWaitMs = ((retrySec?.times(1000L)) ?: (1400L * (attempt + 1)))
+                                .coerceIn(1000L, 6000L)
+                            nextRequestAllowedAtMs.updateAndGet { prev ->
+                                maxOf(prev, System.currentTimeMillis() + retryWaitMs)
+                            }
+                            null
+                        }
+                        else -> null
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                retryWaitMs = 600L * (attempt + 1)
+                null
+            }
+
+            if (html != null) {
+                if (useCache) {
+                    if (htmlCache.size > 96) htmlCache.clear()
+                    htmlCache[url] = CachedEntry(html, System.currentTimeMillis())
+                }
+                return html
+            }
+            if (attempt < 3) {
+                kotlinx.coroutines.delay(if (retryWaitMs > 0) retryWaitMs else 700L * (attempt + 1))
+            }
+        }
+        return null
     }
-    private suspend fun label(link: ExtractorLink, language: String): ExtractorLink {
-        val label = "[$language] ${link.name}"
-        if (link is DrmExtractorLink) return newDrmExtractorLink(link.source, label, link.url, link.type, link.uuid) {
-            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
-            kid = link.kid; key = link.key; kty = link.kty; keyRequestParameters = link.keyRequestParameters; licenseUrl = link.licenseUrl
+
+    private fun toSearchResponse(item: PoseidonCatalogItem): SearchResponse {
+        return when (item.kind) {
+            PoseidonItemKind.Movie -> newMovieSearchResponse(item.title, item.url, TvType.Movie) {
+                this.posterUrl = item.posterUrl
+                this.year = item.year
+            }
+            PoseidonItemKind.Series, PoseidonItemKind.Episode ->
+                newTvSeriesSearchResponse(item.title, item.url, TvType.TvSeries) {
+                    this.posterUrl = item.posterUrl
+                    this.year = item.year
+                }
         }
-        return newExtractorLink(link.source, label, link.url, link.type) {
-            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
+    }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val targetUrl = PoseidonData.buildPagedUrl(request.data, page)
+        val html = getHtml(targetUrl) ?: return newHomePageResponse(request, emptyList(), hasNext = false)
+        val catalog = PoseidonData.parseCatalogPage(html)
+        val responses = catalog.items.map(::toSearchResponse)
+        val hasNext = responses.isNotEmpty() && page < catalog.totalPages
+        return newHomePageResponse(request, responses, hasNext = hasNext)
+    }
+
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty() || page > 1) {
+            return newSearchResponseList(emptyList(), hasNext = false)
         }
+        val encoded = URLEncoder.encode(trimmed, "UTF-8")
+        val targetUrl = "$mainUrl/search?q=$encoded"
+        val html = getHtml(targetUrl) ?: return newSearchResponseList(emptyList(), hasNext = false)
+        val catalog = PoseidonData.parseCatalogPage(html)
+        // Site search (/search?q=...) always returns a single page (up to 24 results) with no server pagination.
+        return newSearchResponseList(catalog.items.map(::toSearchResponse), hasNext = false)
+    }
+
+    override suspend fun search(query: String): List<SearchResponse>? {
+        return search(query, 1)?.items
+    }
+
+    override suspend fun quickSearch(query: String): List<SearchResponse>? {
+        return search(query, 1)?.items
+    }
+
+    override suspend fun load(url: String): LoadResponse? {
+        val normalized = PoseidonData.resolveSiteUrl(url) ?: return null
+        if (PoseidonData.isMovieUrl(normalized)) {
+            val html = getHtml(normalized) ?: return null
+            val movie = PoseidonData.parseMovieDetail(html, normalized) ?: return null
+            return newMovieLoadResponse(movie.title, movie.url, TvType.Movie, movie.url) {
+                this.posterUrl = movie.posterUrl
+                this.backgroundPosterUrl = movie.backgroundPosterUrl
+                this.plot = movie.plot
+                this.year = movie.year
+                this.duration = movie.durationMinutes
+                this.score = Score.from10(movie.rating)
+                if (movie.genres.isNotEmpty()) this.tags = movie.genres
+                if (movie.actors.isNotEmpty()) addActors(movie.actors)
+                if (movie.recommendations.isNotEmpty()) {
+                    this.recommendations = movie.recommendations.map(::toSearchResponse)
+                }
+            }
+        }
+
+        // Episodes opened from /episodios promote cleanly to their parent /serie/<tmdb>/<slug> page.
+        val seriesUrl = PoseidonData.extractSeriesBaseUrl(normalized)
+        val html = getHtml(seriesUrl) ?: return null
+        val series = PoseidonData.parseSeriesDetail(html, seriesUrl) ?: return null
+        val episodes = series.episodes.map { ep ->
+            newEpisode(ep.url) {
+                this.name = ep.title
+                this.season = ep.season
+                this.episode = ep.episode
+                this.posterUrl = ep.posterUrl
+                this.addDate(ep.releaseDate)
+            }
+        }
+        return newTvSeriesLoadResponse(series.title, series.url, TvType.TvSeries, episodes) {
+            this.posterUrl = series.posterUrl
+            this.backgroundPosterUrl = series.backgroundPosterUrl
+            this.plot = series.plot
+            this.year = series.year
+            this.score = Score.from10(series.rating)
+            if (series.genres.isNotEmpty()) this.tags = series.genres
+            if (series.actors.isNotEmpty()) addActors(series.actors)
+        }
+    }
+
+    private suspend fun resolvePlayerRedirect(playerUrl: String, watchReferer: String): String? {
+        val now = System.currentTimeMillis()
+        playerRedirectCache[playerUrl]?.let { cached ->
+            if (now - cached.storedAtMs < 300_000L) return cached.value
+        }
+
+        val playerHtml = getHtml(
+            playerUrl,
+            referer = watchReferer,
+            timeoutSec = 14L,
+            useCache = false,
+        ) ?: return null
+        val embedUrl = PoseidonData.extractPlayerEmbedUrl(playerHtml) ?: return null
+        if (playerRedirectCache.size > 256) playerRedirectCache.clear()
+        playerRedirectCache[playerUrl] = CachedEntry(embedUrl, System.currentTimeMillis())
+        return embedUrl
+    }
+
+    private suspend fun labelExtractorLink(
+        langLabel: String,
+        cyberlocker: String,
+        reportedQuality: String?,
+        link: ExtractorLink,
+    ): ExtractorLink {
+        val cleanSource = link.name.ifBlank { cyberlocker.replaceFirstChar { it.uppercaseChar() } }
+        val taggedName = if (cleanSource.startsWith("[")) cleanSource else "[$langLabel] $cleanSource"
+        val resolvedQuality = if (link.quality != Qualities.Unknown.value) {
+            link.quality
+        } else {
+            getQualityFromName(reportedQuality)
+        }
+
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, taggedName, link.url, link.type, link.uuid) {
+                referer = link.referer
+                quality = resolvedQuality
+                headers = link.headers
+                extractorData = link.extractorData
+                audioTracks = link.audioTracks
+                kid = link.kid
+                key = link.key
+                kty = link.kty
+                keyRequestParameters = link.keyRequestParameters
+                licenseUrl = link.licenseUrl
+            }
+        }
+        return newExtractorLink(link.source, taggedName, link.url, link.type) {
+            referer = link.referer
+            quality = resolvedQuality
+            headers = link.headers
+            extractorData = link.extractorData
+            audioTracks = link.audioTracks
+        }
+    }
+
+    private suspend fun resolveSingleEmbed(
+        source: PoseidonVideoSource,
+        embedUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+    ): List<ExtractorLink> {
+        val collected = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        val sink: (ExtractorLink) -> Unit = { collected.add(it) }
+        val playerReferer = "https://player.poseidonhd2.co/"
+        val lowerUrl = embedUrl.lowercase()
+        val lowerLocker = source.cyberlocker.lowercase()
+
+        try {
+            when {
+                lowerLocker == "voesx" || lowerUrl.contains("voe.") || lowerUrl.contains("caseyseemavoid") -> {
+                    PoseidonVoeExtractor.extract(embedUrl, playerReferer, "Voe", subtitleCallback, sink)
+                }
+                lowerLocker == "vidhide" ||
+                    lowerUrl.contains("vidhide") ||
+                    lowerUrl.contains("callistanise") ||
+                    lowerUrl.contains("peytonepre") ||
+                    lowerUrl.contains("smoothpre") ||
+                    lowerUrl.contains("ryderjet") ||
+                    lowerUrl.contains("dhtpre") ||
+                    lowerUrl.contains("dinisglows") ||
+                    lowerUrl.contains("mivalyo") ||
+                    lowerUrl.contains("movearnpre") -> {
+                    PoseidonVidHideExtractor.extract(embedUrl, playerReferer, "VidHide", subtitleCallback, sink)
+                }
+                lowerLocker == "streamwish" ||
+                    lowerUrl.contains("streamwish") ||
+                    lowerUrl.contains("hglink") ||
+                    lowerUrl.contains("medixiru") ||
+                    lowerUrl.contains("vsembed") ||
+                    lowerUrl.contains("flaswish") ||
+                    lowerUrl.contains("hlswish") -> {
+                    PoseidonStreamWishExtractor.extract(embedUrl, playerReferer, "StreamWish", subtitleCallback, sink)
+                }
+                lowerUrl.contains("bysejikuar") -> {
+                    PoseidonByseExtractor().getUrl(embedUrl, playerReferer, subtitleCallback, sink)
+                    if (collected.isEmpty()) {
+                        loadExtractor(embedUrl, playerReferer, subtitleCallback, sink)
+                    }
+                }
+                else -> {
+                    loadExtractor(embedUrl, playerReferer, subtitleCallback, sink)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+
+        return synchronized(collected) { collected.toList() }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val watchUrl = PoseidonData.resolveSiteUrl(data) ?: return false
+        val html = getHtml(watchUrl) ?: return false
+        val rawVideos = PoseidonData.parseWatchPageVideos(html)
+        if (rawVideos.isEmpty()) return false
+
+        val langPriority = mapOf(
+            "Latino" to 0,
+            "Español" to 1,
+            "Subtitulado" to 2,
+        )
+        val serverPriority = mapOf(
+            "vidhide" to 0,
+            "voesx" to 1,
+            "vidara" to 2,
+            "doodstream" to 3,
+            "streamwish" to 4,
+            "hglink" to 5,
+            "filemoon" to 6,
+            "streamtape" to 7,
+            "netu" to 99,
+        )
+
+        val orderedVideos = rawVideos
+            .filterNot { it.cyberlocker == "netu" }
+            .sortedWith(
+                compareBy<PoseidonVideoSource> { langPriority[it.languageLabel] ?: 3 }
+                    .thenBy { serverPriority[it.cyberlocker] ?: 20 },
+            )
+            .ifEmpty { rawVideos }
+
+        val collectedResults = Collections.synchronizedList(mutableListOf<Pair<Int, ExtractorLink>>())
+        withTimeoutOrNull(36_000L) {
+            coroutineScope {
+                orderedVideos.mapIndexed { idx, video ->
+                    async(Dispatchers.IO) {
+                        linkGate.withPermit {
+                            withTimeoutOrNull(14_000L) {
+                                val embedUrl = resolvePlayerRedirect(video.playerUrl, watchUrl) ?: return@withTimeoutOrNull
+                                val links = resolveSingleEmbed(video, embedUrl, subtitleCallback)
+                                for (link in links) {
+                                    collectedResults.add(
+                                        idx to labelExtractorLink(
+                                            video.languageLabel,
+                                            video.cyberlocker,
+                                            video.quality,
+                                            link,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+
+        val seenKeys = hashSetOf<String>()
+        var emitted = false
+        for ((_, link) in collectedResults.sortedBy { it.first }) {
+            val dedupKey = "${link.name}|${link.url}"
+            if (seenKeys.add(dedupKey)) {
+                callback(link)
+                emitted = true
+            }
+        }
+        return emitted
     }
 }

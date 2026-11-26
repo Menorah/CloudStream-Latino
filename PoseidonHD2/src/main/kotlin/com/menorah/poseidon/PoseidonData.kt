@@ -1,4 +1,4 @@
-package com.menorah.poseidonhd2bis
+package com.menorah.poseidon
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -210,7 +210,7 @@ internal data class PoseidonRawEpisodeDetail(
     val videos: Map<String, List<PoseidonRawVideoEntry>>? = null,
 )
 
-internal object PoseidonHD2BisData {
+internal object PoseidonData {
     const val MAIN_URL = "https://www.poseidonhd2.co"
     const val PLAYER_REFERER = "$MAIN_URL/"
     const val DEFAULT_USER_AGENT =

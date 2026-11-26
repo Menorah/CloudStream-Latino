@@ -23,14 +23,14 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compilar y probar los doce complementos
+      - name: Compilar y probar los once complementos
         shell: bash
         run: |
           set +e
           ./gradlew \
             :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest \
             :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest \
-            :PoseidonHD2:testDebugUnitTest :PoseidonHD2Bis:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :PeliCineHD:testDebugUnitTest \
+            :PoseidonHD2:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :PeliCineHD:testDebugUnitTest \
             :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
           tail -40 build-log.txt
@@ -53,7 +53,6 @@ jobs:
           cp CinecalidadMY/build/CinecalidadMY.cs3 output/
           cp RePelisHD/build/RePelisHD.cs3 output/
           cp PoseidonHD2/build/PoseidonHD2.cs3 output/
-          cp PoseidonHD2Bis/build/PoseidonHD2Bis.cs3 output/
           cp RePelis24Shop/build/RePelis24Shop.cs3 output/
           cp PeliCineHD/build/PeliCineHD.cs3 output/
           cp CinecalidadOrg/build/CinecalidadOrg.cs3 output/
@@ -72,7 +71,7 @@ jobs:
           names = {pathlib.Path(p['url']).name for p in plugins}
           expected = {
               'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
-              'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'PoseidonHD2Bis.cs3', 'RePelis24Shop.cs3',
+              'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3',
               'PeliCineHD.cs3', 'CinecalidadOrg.cs3', 'Cuevana3v.cs3',
           }
           assert names == expected, (sorted(names), sorted(expected))

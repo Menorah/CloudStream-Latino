@@ -1,4 +1,4 @@
-package com.menorah.poseidonhd2bis
+package com.menorah.poseidon
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
@@ -354,7 +354,7 @@ internal object PoseidonCrypto {
 
     fun solveAltchaChallenge(challengeJson: String, maxCounters: Int = 8000): String? {
         val root = runCatching {
-            PoseidonHD2BisData.jsonMapper.readTree(challengeJson)
+            PoseidonData.jsonMapper.readTree(challengeJson)
         }.getOrNull() ?: return null
 
         val params = root.get("parameters")
@@ -366,7 +366,7 @@ internal object PoseidonCrypto {
 
     suspend fun solveAltchaChallengeSuspend(challengeJson: String, maxCounters: Int = 8000): String? {
         val root = runCatching {
-            PoseidonHD2BisData.jsonMapper.readTree(challengeJson)
+            PoseidonData.jsonMapper.readTree(challengeJson)
         }.getOrNull() ?: return null
 
         val params = root.get("parameters")
@@ -429,7 +429,7 @@ internal object PoseidonCrypto {
                                         "time" to elapsedMs,
                                     ),
                                 )
-                                val jsonBytes = PoseidonHD2BisData.jsonMapper.writeValueAsBytes(payload)
+                                val jsonBytes = PoseidonData.jsonMapper.writeValueAsBytes(payload)
                                 winner.compareAndSet(null, encodeBase64(jsonBytes))
                             }
                             break
@@ -499,7 +499,7 @@ internal object PoseidonCrypto {
                         "time" to elapsedMs,
                     ),
                 )
-                val jsonBytes = PoseidonHD2BisData.jsonMapper.writeValueAsBytes(payload)
+                val jsonBytes = PoseidonData.jsonMapper.writeValueAsBytes(payload)
                 return encodeBase64(jsonBytes)
             }
         }
@@ -534,7 +534,7 @@ internal object PoseidonCrypto {
                     "signature" to signature,
                     "took" to elapsedMs,
                 )
-                return encodeBase64(PoseidonHD2BisData.jsonMapper.writeValueAsBytes(payload))
+                return encodeBase64(PoseidonData.jsonMapper.writeValueAsBytes(payload))
             }
         }
         return null
@@ -572,7 +572,7 @@ internal object PoseidonVoeCrypto {
                 .reversed()
             val finalJsonBytes = PoseidonCrypto.decodeBase64Flexible(step5)
             val jsonText = String(finalJsonBytes, StandardCharsets.UTF_8)
-            PoseidonHD2BisData.jsonMapper.readValue(jsonText, VoeDecryptedPayload::class.java)
+            PoseidonData.jsonMapper.readValue(jsonText, VoeDecryptedPayload::class.java)
         }.getOrNull()
     }
 
@@ -761,7 +761,7 @@ internal object PoseidonVidHideParser {
             for (match in LINKS_REGEX.findAll(block)) {
                 val rawObj = match.groupValues[1].replace("\\/", "/")
                 val parsed = runCatching {
-                    PoseidonHD2BisData.jsonMapper.readValue(
+                    PoseidonData.jsonMapper.readValue(
                         rawObj,
                         object : TypeReference<Map<String, String>>() {},
                     )
@@ -775,7 +775,7 @@ internal object PoseidonVidHideParser {
             for (match in SOURCES_REGEX.findAll(block)) {
                 val arrText = match.groupValues[1].replace("\\/", "/")
                 val entries = runCatching {
-                    PoseidonHD2BisData.jsonMapper.readValue(
+                    PoseidonData.jsonMapper.readValue(
                         arrText,
                         object : TypeReference<List<Map<String, Any?>>>() {},
                     )
@@ -791,7 +791,7 @@ internal object PoseidonVidHideParser {
             for (match in TRACKS_REGEX.findAll(block)) {
                 val arrText = match.groupValues[1].replace("\\/", "/")
                 val entries = runCatching {
-                    PoseidonHD2BisData.jsonMapper.readValue(
+                    PoseidonData.jsonMapper.readValue(
                         arrText,
                         object : TypeReference<List<Map<String, Any?>>>() {},
                     )
@@ -872,7 +872,7 @@ class PoseidonVoeExtractor : ExtractorApi() {
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             val baseHeaders = mapOf(
-                "User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT,
+                "User-Agent" to PoseidonData.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
@@ -1067,7 +1067,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             val baseHeaders = mapOf(
-                "User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT,
+                "User-Agent" to PoseidonData.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
@@ -1135,7 +1135,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                     origin,
                     { jwFound = true; callback(it) },
                     subtitleCallback,
-                    mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT),
+                    mapOf("Origin" to origin, "Referer" to "$origin/", "User-Agent" to PoseidonData.DEFAULT_USER_AGENT),
                 )
                 if (jwFound) return true
             }
@@ -1156,7 +1156,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             if (shortCode.isEmpty()) return false
 
             val apiHeaders = mapOf(
-                "User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT,
+                "User-Agent" to PoseidonData.DEFAULT_USER_AGENT,
                 "Accept" to "application/json, text/plain, */*",
                 "Referer" to pageUrl,
             )
@@ -1193,7 +1193,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             }
 
             val jsonText = decryptedJson ?: return false
-            val root = runCatching { PoseidonHD2BisData.jsonMapper.readTree(jsonText) }.getOrNull() ?: return false
+            val root = runCatching { PoseidonData.jsonMapper.readTree(jsonText) }.getOrNull() ?: return false
             val streamNode = root.get("stream") ?: root
             val hlsUrl = streamNode.get("hls")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
             val tiktokUrl = streamNode.get("tiktok")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
@@ -1236,7 +1236,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                 runCatching {
                     val streamInfoRes = app.get("$origin/api/stream?s=$shortCode&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 6L)
                     if (streamInfoRes.isSuccessful) {
-                        val dataNode = PoseidonHD2BisData.jsonMapper.readTree(streamInfoRes.text).get("data")
+                        val dataNode = PoseidonData.jsonMapper.readTree(streamInfoRes.text).get("data")
                         val subsNode = dataNode?.get("subtitles")
                         if (subsNode != null && subsNode.isArray) {
                             for (sub in subsNode) {
@@ -1257,7 +1257,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             val match = Regex("""this\.$fieldName=(\[[^\]]+\])""").find(bundleText)?.groupValues?.getOrNull(1)
                 ?: return null
             return runCatching {
-                PoseidonHD2BisData.jsonMapper.readValue(match, object : TypeReference<List<String>>() {})
+                PoseidonData.jsonMapper.readValue(match, object : TypeReference<List<String>>() {})
             }.getOrNull()
         }
 
@@ -1362,7 +1362,7 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
             }
 
             val reqHeaders = mapOf(
-                "User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT,
+                "User-Agent" to PoseidonData.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )

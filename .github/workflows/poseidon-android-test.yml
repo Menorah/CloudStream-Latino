@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['PoseidonHD2/**', '.github/workflows/poseidon-android-test.yml']
+    paths: ['PoseidonHD2/**', 'scripts/run_poseidon_android.sh', '.github/workflows/poseidon-android-test.yml']
 permissions:
   contents: read
 jobs:
