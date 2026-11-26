@@ -635,14 +635,16 @@ class PoseidonVoeExtractor : ExtractorApi() {
             var emitted = false
             val m3u8Url = decrypted.source?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
             if (m3u8Url != null) {
-                val links = runCatching {
-                    M3u8Helper.generateM3u8(
-                        sourceName,
-                        m3u8Url,
-                        "$origin/",
-                        headers = streamHeaders,
-                    )
-                }.getOrElse { emptyList() }
+                val links = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                    runCatching {
+                        M3u8Helper.generateM3u8(
+                            sourceName,
+                            m3u8Url,
+                            "$origin/",
+                            headers = streamHeaders,
+                        )
+                    }.getOrElse { emptyList() }
+                }.orEmpty()
                 if (links.isNotEmpty()) {
                     links.forEach {
                         callback(it)
@@ -877,9 +879,11 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
 
             var emitted = false
             if (hlsUrl != null) {
-                val generated = runCatching {
-                    M3u8Helper.generateM3u8(sourceName, hlsUrl, "$origin/", headers = streamHeaders)
-                }.getOrElse { emptyList() }
+                val generated = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                    runCatching {
+                        M3u8Helper.generateM3u8(sourceName, hlsUrl, "$origin/", headers = streamHeaders)
+                    }.getOrElse { emptyList() }
+                }.orEmpty()
                 if (generated.isNotEmpty()) {
                     generated.forEach {
                         callback(it)
@@ -923,9 +927,11 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             var emitted = false
             for (stream in parsed.streams) {
                 if (stream.key == "hls3" && emitted) continue
-                val generated = runCatching {
-                    M3u8Helper.generateM3u8(sourceName, stream.url, "${parsed.origin}/", headers = streamHeaders)
-                }.getOrElse { emptyList() }
+                val generated = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                    runCatching {
+                        M3u8Helper.generateM3u8(sourceName, stream.url, "${parsed.origin}/", headers = streamHeaders)
+                    }.getOrElse { emptyList() }
+                }.orEmpty()
                 if (generated.isNotEmpty()) {
                     generated.forEach {
                         callback(it)
@@ -1045,14 +1051,16 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
                 if (stream.key == "hls3" && result.streams.any { it.key == "hls2" || it.key == "hls" }) {
                     continue
                 }
-                val links = runCatching {
-                    M3u8Helper.generateM3u8(
-                        sourceName,
-                        stream.url,
-                        "${result.origin}/",
-                        headers = streamHeaders,
-                    )
-                }.getOrElse { emptyList() }
+                val links = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                    runCatching {
+                        M3u8Helper.generateM3u8(
+                            sourceName,
+                            stream.url,
+                            "${result.origin}/",
+                            headers = streamHeaders,
+                        )
+                    }.getOrElse { emptyList() }
+                }.orEmpty()
                 if (links.isNotEmpty()) {
                     links.forEach(callback)
                     return true

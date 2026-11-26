@@ -66,7 +66,7 @@ class PoseidonHD2BisProvider : MainAPI() {
     private val playerRedirectCache = ConcurrentHashMap<String, CachedEntry>()
     private val nextRequestAllowedAtMs = AtomicLong(0L)
     private val siteGate = Semaphore(3)
-    private val linkGate = Semaphore(4)
+    private val linkGate = Semaphore(5)
 
     private val siteHeaders = mapOf(
         "User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT,
@@ -369,18 +369,21 @@ class PoseidonHD2BisProvider : MainAPI() {
             "netu" to 99,
         )
 
-        val orderedVideos = rawVideos.sortedWith(
-            compareBy<PoseidonVideoSource> { langPriority[it.languageLabel] ?: 3 }
-                .thenBy { serverPriority[it.cyberlocker] ?: 20 },
-        )
+        val orderedVideos = rawVideos
+            .filterNot { it.cyberlocker == "netu" }
+            .sortedWith(
+                compareBy<PoseidonVideoSource> { langPriority[it.languageLabel] ?: 3 }
+                    .thenBy { serverPriority[it.cyberlocker] ?: 20 },
+            )
+            .ifEmpty { rawVideos }
 
         val collectedResults = Collections.synchronizedList(mutableListOf<Pair<Int, ExtractorLink>>())
-        withTimeoutOrNull(48_000L) {
+        withTimeoutOrNull(36_000L) {
             coroutineScope {
                 orderedVideos.mapIndexed { idx, video ->
                     async(Dispatchers.IO) {
                         linkGate.withPermit {
-                            withTimeoutOrNull(18_000L) {
+                            withTimeoutOrNull(14_000L) {
                                 val embedUrl = resolvePlayerRedirect(video.playerUrl, watchUrl) ?: return@withTimeoutOrNull
                                 val links = resolveSingleEmbed(video, embedUrl, subtitleCallback)
                                 for (link in links) {

@@ -35,7 +35,7 @@ adb shell mkdir -p /sdcard/Cloudstream3/plugins
 adb push PoseidonHD2Bis/build/PoseidonHD2Bis.cs3 /sdcard/Cloudstream3/plugins/PoseidonHD2Bis.cs3
 adb logcat -c
 adb shell monkey -p "$package" 1
-for i in $(seq 1 155); do
+for i in $(seq 1 95); do
   sleep 5
   log=$(adb logcat -d -s CSPlaybackProbe:I '*:S')
   if echo "$log" | grep -q 'PASS all'; then
@@ -52,6 +52,7 @@ for i in $(seq 1 155); do
     exit 1
   fi
 done
+adb logcat -d -s CSPlaybackProbe:I '*:S' | sed -e 's/%/%25/g' -e 's/^/::notice::/' | tail -80
 adb logcat -d -s CSPlaybackProbe:I PluginManager:D '*:S' | tail -150
 echo '::error::La prueba no terminó; comprobar si CloudStream cargó el plugin local'
 exit 1

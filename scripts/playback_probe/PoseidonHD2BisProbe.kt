@@ -169,37 +169,45 @@ object PlaybackProbe {
     }
 
     private suspend fun diagnoseWatchPage(tag: String, url: String) = withContext(Dispatchers.IO) {
-        runCatching {
-            val html = app.get(url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 15L).text
-            val vids = PoseidonHD2BisData.parseWatchPageVideos(html)
-            val summary = vids.take(6).map { v ->
-                val pRes = runCatching {
-                    app.get(v.playerUrl, referer = url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 10L)
-                }.getOrNull()
-                val emb = pRes?.let { PoseidonHD2BisData.extractPlayerEmbedUrl(it.text) }
-                val extCount = if (emb != null) {
-                    val c = mutableListOf<String>()
-                    runCatching {
-                        val lower = emb.lowercase()
-                        when {
-                            v.cyberlocker == "voesx" || lower.contains("voe") ->
-                                PoseidonVoeExtractor.extract(emb, "https://player.poseidonhd2.co/", "Voe", {}) { c += it.url }
-                            v.cyberlocker == "vidhide" || lower.contains("vidhide") || lower.contains("callistanise") ->
-                                PoseidonVidHideExtractor.extract(emb, "https://player.poseidonhd2.co/", "VidHide", {}) { c += it.url }
-                            v.cyberlocker == "streamwish" || lower.contains("streamwish") || lower.contains("hglink") ->
-                                PoseidonStreamWishExtractor.extract(emb, "https://player.poseidonhd2.co/", "StreamWish", {}) { c += it.url }
-                            else ->
-                                loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += "${it.name}:${it.url.take(60)}" }
+        withTimeoutOrNull(22_000L) {
+            runCatching {
+                val html = app.get(url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 10L).text
+                val vids = PoseidonHD2BisData.parseWatchPageVideos(html)
+                val summary = coroutineScope {
+                    vids.filterNot { it.cyberlocker == "netu" }.take(6).map { v ->
+                        async {
+                            withTimeoutOrNull(8_000L) {
+                                val pRes = runCatching {
+                                    app.get(v.playerUrl, referer = url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 6L)
+                                }.getOrNull()
+                                val emb = pRes?.let { PoseidonHD2BisData.extractPlayerEmbedUrl(it.text) }
+                                val c = mutableListOf<String>()
+                                var err: String? = null
+                                if (emb != null) {
+                                    runCatching {
+                                        val lower = emb.lowercase()
+                                        when {
+                                            v.cyberlocker == "voesx" || lower.contains("voe") ->
+                                                PoseidonVoeExtractor.extract(emb, "https://player.poseidonhd2.co/", "Voe", {}) { c += it.url }
+                                            v.cyberlocker == "vidhide" || lower.contains("vidhide") || lower.contains("callistanise") ->
+                                                PoseidonVidHideExtractor.extract(emb, "https://player.poseidonhd2.co/", "VidHide", {}) { c += it.url }
+                                            v.cyberlocker == "streamwish" || lower.contains("streamwish") || lower.contains("hglink") ->
+                                                PoseidonStreamWishExtractor.extract(emb, "https://player.poseidonhd2.co/", "StreamWish", {}) { c += it.url }
+                                            else ->
+                                                loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += "${it.name}:${it.url.take(45)}" }
+                                        }
+                                    }.onFailure { err = it.javaClass.simpleName }
+                                }
+                                "${v.languageLabel}/${v.cyberlocker}:p=${pRes?.code}:e=${emb?.take(42)}:n=${c.size}${if (err != null) "($err)" else ""}"
+                            } ?: "${v.languageLabel}/${v.cyberlocker}:TO"
                         }
-                    }
-                    c.size
-                } else -1
-                "${v.languageLabel}/${v.cyberlocker}:p=${pRes?.code}:e=${emb?.take(45)}:n=$extCount"
+                    }.awaitAll()
+                }
+                Log.i("CSPlaybackProbe", "$tag total=${vids.size} -> $summary")
+            }.onFailure {
+                Log.i("CSPlaybackProbe", "$tag err=${it.message}")
             }
-            Log.i("CSPlaybackProbe", "$tag total=${vids.size} -> $summary")
-        }.onFailure {
-            Log.i("CSPlaybackProbe", "$tag err=${it.message}")
-        }
+        } ?: Log.i("CSPlaybackProbe", "$tag overall TO")
     }
 
     private suspend fun verifyServerCoverage(
