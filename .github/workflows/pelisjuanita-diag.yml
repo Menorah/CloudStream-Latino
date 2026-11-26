@@ -11,19 +11,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe hosts
+      - name: Probe waaw, lulustream, oisauh, playmogo
         run: |
           python3 - <<'PY'
-          import re, time, urllib.request, urllib.parse, urllib.error
+          import json, re, time, urllib.request, urllib.parse, urllib.error
 
           UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
           notices = []
 
           def add_notice(tag, msg):
               s = f"{tag}: {msg}".replace("%", "%25").replace("\r", "").replace("\n", " | ")
-              notices.append(s[:3900])
+              notices.append(s[:3800])
 
-          def fetch(url, headers=None, data=None, timeout=9):
+          def fetch(url, headers=None, data=None, timeout=10):
               h = {"User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9,en;q=0.8"}
               if headers:
                   h.update(headers)
@@ -39,85 +39,86 @@ jobs:
               except Exception as e:
                   return -1, url, {}, repr(e), round(time.time() - t0, 2)
 
-          # 1. Waaw / Netu
-          c, u, h, b, dt = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
-          add_notice("WAAW_1", f"code={c} url={u} dt={dt} len={len(b)} body={b[:3700]}")
-          if len(b) > 3700:
-              add_notice("WAAW_2", b[3700:7500])
-          if len(b) > 7500:
-              add_notice("WAAW_3", b[7500:11300])
+          def unpack_dean(html):
+              m = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", html, re.S)
+              if not m:
+                  return ""
+              p, a, c, k = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
+              def enc(num):
+                  chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                  if num == 0:
+                      return "0"
+                  s = ""
+                  while num > 0:
+                      s = chars[num % a] + s
+                      num //= a
+                  return s
+              mapping = {enc(i): (k[i] if i < len(k) and k[i] else enc(i)) for i in range(c)}
+              return re.sub(r"\b\w+\b", lambda x: mapping.get(x.group(0), x.group(0)), p)
 
-          # 2. Lulustream / Lplaygo
+          # 1. Waaw script analysis
+          _, _, _, wb, _ = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
+          script_info = []
+          for idx, sc in enumerate(scripts):
+              s_strip = sc.strip()
+              if not s_strip:
+                  continue
+              script_info.append(f"[{idx}:len={len(s_strip)}] {s_strip[:260]}")
+          script_srcs = re.findall(r"<script[^>]+src=['\"]([^'\"]+)['\"]", wb, re.I)
+          add_notice("WAAW_SCRIPTS", f"srcs={script_srcs} count={len(scripts)} -> " + " || ".join(script_info)[:3400])
+          long_scripts = [(i, sc.strip()) for i, sc in enumerate(scripts) if len(sc.strip()) > 300]
+          for idx, sc in long_scripts[:3]:
+              add_notice(f"WAAW_LONG_{idx}", f"len={len(sc)} head={sc[:1900]} tail={sc[-1800:]}")
+
+          # 2. Lulustream / Lplaygo unpacked + M3U8 + segment test
           lulu_logs = []
-          for origin in ["https://lplaygo.com", "https://lulustream.com", "https://luluvdo.com"]:
+          for origin in ["https://lplaygo.com", "https://lulustream.com"]:
               form = urllib.parse.urlencode({
                   "op": "embed", "file_code": "zxfcz3pz68ds", "auto": "1", "referer": "https://pelisjuanita.com/"
               }).encode()
-              c, u, h, b, dt = fetch(f"{origin}/dl", {"Referer": "https://lulustream.com/e/zxfcz3pz68ds", "Origin": origin, "Content-Type": "application/x-www-form-urlencoded"}, data=form)
-              m3 = re.findall(r'https?://[^\s"\'<>\\]+\.m3u8[^\s"\'<>\\]*', b)
-              lulu_logs.append(f"{origin}/dl code={c} dt={dt} len={len(b)} m3={m3} body={b[:500]}")
-              if m3:
-                  for ref_try in [f"{origin}/", "https://lulustream.com/", ""]:
+              c, u, h, b, dt = fetch(f"{origin}/dl", {"Referer": f"{origin}/e/zxfcz3pz68ds", "Origin": origin, "Content-Type": "application/x-www-form-urlencoded"}, data=form)
+              unp = unpack_dean(b)
+              urls = re.findall(r'https?://[^\s"\'<>\\]+', unp or b)
+              m3s = [x for x in urls if ".m3u8" in x or "master" in x or "v.mp4" in x]
+              lulu_logs.append(f"{origin}: c={c} packed={bool(unp)} unp_snippet={unp[:400]!r} urls={m3s[:5]}")
+              if m3s:
+                  m3_url = m3s[0]
+                  for ref_try in [f"{origin}/", "https://lulustream.com/", "https://lplaygo.com/", ""]:
                       hdrs = {"Referer": ref_try, "Origin": ref_try.rstrip("/")} if ref_try else {}
-                      mc, mu, mh, mb, mdt = fetch(m3[0], hdrs, timeout=8)
-                      lulu_logs.append(f"  m3u8 ref={ref_try!r} code={mc} len={len(mb)} head={mb[:200]}")
+                      mc, mu, mh, mb, mdt = fetch(m3_url, hdrs, timeout=8)
+                      lulu_logs.append(f"  m3u8({ref_try!r}) c={mc} ct={mh.get('Content-Type')} len={len(mb)} head={mb[:250]!r}")
                       if mc == 200 and "#EXT" in mb:
-                          sub_line = [ln.strip() for ln in mb.splitlines() if ln.strip() and not ln.startswith("#")]
-                          if sub_line:
-                              sub_u = urllib.parse.urljoin(mu, sub_line[0])
-                              sc, su, sh, sb, sdt = fetch(sub_u, hdrs, timeout=8)
-                              lulu_logs.append(f"  sub code={sc} len={len(sb)} head={sb[:180]}")
+                          sub = [ln.strip() for ln in mb.splitlines() if ln.strip() and not ln.startswith("#")]
+                          if sub:
+                              su0 = urllib.parse.urljoin(mu, sub[0])
+                              sc, su, sh, sb, _ = fetch(su0, hdrs, timeout=8)
+                              lulu_logs.append(f"  sub c={sc} head={sb[:220]!r}")
                               if sc == 200:
                                   segs = [ln.strip() for ln in sb.splitlines() if ln.strip() and not ln.startswith("#")]
                                   if segs:
-                                      seg_u = urllib.parse.urljoin(su, segs[0])
-                                      req = urllib.request.Request(seg_u, headers={**{"User-Agent": UA}, **hdrs})
+                                      segu = urllib.parse.urljoin(su, segs[0])
+                                      req = urllib.request.Request(segu, headers={**{"User-Agent": UA}, **hdrs})
                                       try:
                                           with urllib.request.urlopen(req, timeout=8) as r:
-                                              lulu_logs.append(f"  seg code={r.status} ct={r.headers.get('Content-Type')} bytes={len(r.read(2048))}")
+                                              chunk = r.read(1024)
+                                              lulu_logs.append(f"  seg c={r.status} ct={r.headers.get('Content-Type')} b0={chunk[:16].hex()}")
                                       except Exception as ex:
                                           lulu_logs.append(f"  seg ERR={ex!r}")
-          lulu_all = " || ".join(lulu_logs)
-          add_notice("LULU_1", lulu_all[:3800])
-          if len(lulu_all) > 3800:
-              add_notice("LULU_2", lulu_all[3800:7600])
+          lulu_txt = " || ".join(lulu_logs)
+          add_notice("LULU_1", lulu_txt[:3800])
+          if len(lulu_txt) > 3800:
+              add_notice("LULU_2", lulu_txt[3800:7600])
 
-          # 3. Dood mirrors
-          dood_hosts = [
-              "https://playmogo.com", "https://doodstream.com", "https://doods.pro",
-              "https://dsvplay.com", "https://d0000d.com", "https://d000d.com",
-              "https://dood.wf", "https://dood.pm", "https://dood.to",
-              "https://dood.so", "https://dood.ws", "https://dood.yt",
-              "https://dood.watch", "https://vide0.net", "https://myvidplay.com",
-              "https://ds2play.com",
-          ]
-          dood_res = []
-          for dh in dood_hosts:
-              c, u, h, b, dt = fetch(f"{dh}/e/kmq8ibge16z1", {"Referer": "https://pelisjuanita.com/"}, timeout=6)
-              dood_res.append(f"{dh}->{c} {u} dt={dt} len={len(b)} md5={'/pass_md5/' in b} ts={'turnstile' in b.lower()}")
-          add_notice("DOOD", " ; ".join(dood_res))
-
-          # 4. Other hosts status + timing
-          host_res = []
-          for label, u in [
-              ("VIDARA", "https://vidara.to/e/HnuAfGnH5Z97l"),
-              ("OISAUH", "https://oisauh.com/e/HnuAfGnH5Z97l"),
-              ("SW_TO", "https://streamwish.to/e/k9u77dklzfob"),
-              ("HGLINK", "https://hglink.to/e/u8jqwoe4cnpt"),
-              ("MEDIXIRU", "https://medixiru.com/e/k9u77dklzfob"),
-              ("MORENCIUS", "https://morencius.com/embed/036yf8jywyhr"),
-              ("CALLISTANISE", "https://callistanise.com/v/lg0w6ezhvyd8"),
-              ("MIXDROP_TOP", "https://mixdrop.top/e/q11gg30obxxogvn"),
-              ("MXDROP_CLICK", "https://mxdrop.click/e/q11gg30obxxogvn"),
-              ("VOE", "https://voe.sx/e/ltvamjdzsvxv"),
-              ("BYSE", "https://bysesukior.com/api/videos/92rgcn88ka85/embed/details"),
-          ]:
-              c, fu, h, b, dt = fetch(u, {"Referer": "https://pelisjuanita.com/"}, timeout=7)
-              host_res.append(f"{label}: c={c} u={fu} dt={dt} len={len(b)} h={b[:140]!r}")
-          hosts_all = " || ".join(host_res)
-          add_notice("HOSTS_1", hosts_all[:3800])
-          if len(hosts_all) > 3800:
-              add_notice("HOSTS_2", hosts_all[3800:7600])
+          # 3. Oisauh vs Vidara /api/stream + Playmogo HTML
+          vid_logs = []
+          for origin in ["https://oisauh.com", "https://vidara.to"]:
+              payload = json.dumps({"filecode": "HnuAfGnH5Z97l", "device": "desktop"}).encode()
+              c, u, h, b, dt = fetch(f"{origin}/api/stream", {"Referer": f"{origin}/e/HnuAfGnH5Z97l", "Origin": origin, "Content-Type": "application/json"}, data=payload)
+              vid_logs.append(f"{origin}: c={c} dt={dt} body={b[:500]}")
+          _, _, _, pm_b, _ = fetch("https://playmogo.com/e/kmq8ibge16z1", {"Referer": "https://pelisjuanita.com/"})
+          vid_logs.append(f"PLAYMOGO len={len(pm_b)} body={pm_b[:2200]}")
+          add_notice("VID_PM", " || ".join(vid_logs)[:3800])
 
           for n in notices[:9]:
               print(f"::notice::{n}")
