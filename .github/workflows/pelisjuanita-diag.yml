@@ -1,4 +1,4 @@
-name: Sonda vsembed, StreamWish main.js, Voe y Vidara Diag
+name: Sonda StreamWish main.js Strings y vsembed M3U8 Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify vsembed tracking, streamwish main.js URLs, Voe 747b, Vidara API
+      - name: Decode streamwish main.js strings and test vsembed master.txt
         shell: bash
         run: |
           python3 - <<'PY'
@@ -24,61 +24,56 @@ jobs:
                   print(f'::notice title={title}_{i//3500}::{chunk}')
 
           ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          def req(url, ref='https://pelisjuanita.com/', method='GET', hdrs=None, body=None):
-              try:
-                  h = {'User-Agent': ua, 'Referer': ref}
-                  if hdrs: h.update(hdrs)
-                  r = urllib.request.urlopen(urllib.request.Request(url, data=body, headers=h, method=method), timeout=15)
-                  return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
-              except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), dict(e.headers), e.read().decode('utf-8', 'replace')
-              except Exception as e:
-                  return -1, url, {}, repr(e)
+          def req(url, ref='https://pelisjuanita.com/'):
+              r = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': ua, 'Referer': ref}), timeout=15)
+              return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
 
-          # 1. Test vsembed crypto with new keyChars & saltChars
+          _, _, _, sw = req('https://streamwish.to/main.js?v=1.1.9', 'https://streamwish.to/e/k9u77dklzfob')
+          open('/tmp/sw.js', 'w').write(sw)
+          res = subprocess.run(['node', '-e', """
+            const fs = require('fs');
+            const sw = fs.readFileSync('/tmp/sw.js', 'utf8');
+            const m = sw.match(/function _0x140d\\(\\)\\{.*?\\}\\s*function _0x5447/s) || sw.match(/function _0x140d\\(\\)\\{[\\s\\S]*?return _0x140d\\(\\);\\}/);
+            // Actually eval ONLY the string array function _0x140d
+            const idx = sw.indexOf('function _0x140d()');
+            const end = sw.indexOf('return _0x140d();}', idx) + 'return _0x140d();}'.length;
+            const fnCode = sw.slice(idx, end);
+            const vm = require('vm');
+            const sb = {};
+            vm.runInNewContext(fnCode + '; this.arr = _0x140d();', sb);
+            const interesting = sb.arr.filter(s => typeof s === 'string' && /http|medix|wish|embed|vsembed|hlswish|hglink|location|replace|iframe|script|fetch|\/e\//i.test(s));
+            console.log('COUNT=', sb.arr.length, 'INTERESTING=', JSON.stringify(interesting));
+            console.log('ALL_DOMAINS=', JSON.stringify(sb.arr.filter(s => /\.[a-z]{2,6}\b/i.test(s) && s.length < 60)));
+          """], capture_output=True, text=True)
+          emit('sw_decoded', res.stdout + '\nERR:' + res.stderr)
+
+          # Also test fetching vsembed master.txt URLs & medixiru.com
           key_chars = ["𝕊","𝔼","𝕮","𝚁","𝔼","𝚃","𝓚","𝓔","𝓨","𝟙","𝟚","𝟛"]
           salt_chars = ["🔐","🗝️","🔑","🚪","🛡️","⚡"]
           khex = (''.join(f'{ord(c[0]):x}' for c in key_chars) + f'{int(time.time()//86400):x}')[:32].ljust(32, '0')
           ivhex = (''.join(f'{ord(c[0]):x}' for c in salt_chars) + 'vsembed.com'.encode().hex())[:32].ljust(32, '0')
           kbytes, ivbytes = bytes.fromhex(khex), bytes.fromhex(ivhex)
           padder = padding.PKCS7(128).padder()
+          c_param = (Cipher(algorithms.AES(kbytes), modes.CBC(ivbytes)).encryptor().update(padder.update(b'cjvk') + padder.finalize())).hex()
+          # wait use full finalize
           enc = Cipher(algorithms.AES(kbytes), modes.CBC(ivbytes)).encryptor()
+          padder = padding.PKCS7(128).padder()
           c_param = (enc.update(padder.update(b'cjvk') + padder.finalize()) + enc.finalize()).hex()
-          sc, su, sh, sb = req(f'https://vsembed.com/api/stream/tracking?c={c_param}&ld=1', 'https://vsembed.com/cjvk', 'GET', {'Accept': 'application/json, text/plain, */*'})
+          _, _, sh, _ = req(f'https://vsembed.com/api/stream/tracking?c={c_param}&ld=1', 'https://vsembed.com/cjvk')
           xt = sh.get('x-tracking') or sh.get('X-Tracking') or ''
-          dec_str = ''
-          if xt:
+          dec = Cipher(algorithms.AES(kbytes), modes.CBC(ivbytes)).decryptor()
+          pt = dec.update(bytes.fromhex(xt)) + dec.finalize()
+          unp = padding.PKCS7(128).unpadder()
+          j = json.loads((unp.update(pt) + unp.finalize()).decode('utf-8'))
+          hls = j['stream']['hls']
+          tt = j['stream']['tiktok']
+          out = []
+          for label, mu in [('hls', hls), ('tiktok', tt)]:
               try:
-                  dec = Cipher(algorithms.AES(kbytes), modes.CBC(ivbytes)).decryptor()
-                  pt = dec.update(bytes.fromhex(xt)) + dec.finalize()
-                  unp = padding.PKCS7(128).unpadder()
-                  dec_str = (unp.update(pt) + unp.finalize()).decode('utf-8', 'replace')
+                  r = urllib.request.urlopen(urllib.request.Request(mu, headers={'User-Agent': ua, 'Referer': 'https://vsembed.com/', 'Origin': 'https://vsembed.com'}), timeout=15)
+                  body = r.read().decode('utf-8', 'replace')
+                  out.append(f'{label}: {r.status} len={len(body)} head={body[:300]}')
               except Exception as e:
-                  dec_str = f'DEC_ERR:{e!r}'
-          emit('vsembed_test', f'sc={sc} khex={khex} ivhex={ivhex} xt_len={len(xt)} sb={sb[:200]} dec={dec_str[:500]}')
-
-          # 2. Extract rotated string table from streamwish.to/main.js safely via node
-          _, _, _, sw = req('https://streamwish.to/main.js?v=1.1.9', 'https://streamwish.to/e/k9u77dklzfob')
-          open('/tmp/sw.js', 'w').write(sw)
-          sw_out = subprocess.run(['node', '-e', """
-            const fs = require('fs');
-            const sw = fs.readFileSync('/tmp/sw.js', 'utf8');
-            // Find the initial string table & decoder IIFE before const _0x4218fa
-            const splitAt = sw.indexOf('const _0x4218fa');
-            const prefix = sw.slice(0, splitAt);
-            const vm = require('vm');
-            const sandbox = { console };
-            vm.runInNewContext(prefix + '; this._dump = _0x140d();', sandbox);
-            const strs = sandbox._dump.filter(s => /http|embed|wish|medix|player|m3u8|redirect|location|eval|iframe|src|\/e\//i.test(s));
-            console.log('MATCHING_STRS:', JSON.stringify(strs.slice(0, 80)));
-          """], capture_output=True, text=True)
-          emit('sw_strs', sw_out.stdout + '\nERR:' + sw_out.stderr)
-
-          # 3. Voe full 747b + follow redirect
-          vc, vu, _, vb = req('https://voe.sx/e/ltvamjdzsvxv')
-          emit('voe_full', f'{vc} {vu}\n{vb}')
-
-          # 4. Vidara POST /api/stream
-          vidc, vidu, _, vidb = req('https://vidara.to/api/stream', 'https://vidara.to/e/HnuAfGnH5Z97l', 'POST', {'Content-Type': 'application/json', 'Origin': 'https://vidara.to'}, json.dumps({'filecode': 'HnuAfGnH5Z97l', 'device': 'web'}).encode())
-          emit('vidara_api', f'{vidc} {vidu}\n{vidb[:600]}')
+                  out.append(f'{label}: ERR {e!r}')
+          emit('vsembed_m3u8', '\n'.join(out))
           PY
