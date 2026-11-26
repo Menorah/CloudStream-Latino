@@ -2,15 +2,17 @@
 """Read-only inventory of the user-provided pelisjuanita.com.zip archive."""
 import base64
 import hashlib
+import http.cookiejar
 import json
 import re
+import traceback
 import urllib.request
 import zipfile
 import zlib
 
 LANDING_URL = "https://tmpfiles.org/wWAbv7KYPalL/pelisjuanita.com.zip"
 DIRECT_URL = "https://tmpfiles.org/dl/1795713591.6839d95d581e3261/wWAbv7KYPalL/pelisjuanita.com.zip"
-UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
 def redact(s: str) -> str:
@@ -21,26 +23,42 @@ def redact(s: str) -> str:
 
 
 def download_zip(dest_path):
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    errors = []
+    # First visit landing page to obtain cookies + fresh download link
+    try:
+        req = urllib.request.Request(LANDING_URL, headers={"User-Agent": UA, "Accept": "text/html,*/*"})
+        with opener.open(req, timeout=30) as r:
+            html = r.read().decode("utf-8", "replace")
+        m = re.search(r"https://tmpfiles\.org/dl/[^\"'\s<>]+", html)
+        dl = m.group(0) if m else DIRECT_URL
+        req2 = urllib.request.Request(dl, headers={"User-Agent": UA, "Referer": LANDING_URL, "Accept": "*/*"})
+        with opener.open(req2, timeout=180) as r2:
+            data = r2.read()
+            if data[:2] == b"PK":
+                open(dest_path, "wb").write(data)
+                return len(data), dl
+            errors.append(f"non-zip status={r2.status} ct={r2.headers.get('Content-Type')} head={data[:120]!r}")
+    except Exception as e:
+        errors.append(f"landing flow: {e!r}")
+
+    # Fallback: curl via subprocess in case TLS fingerprint matters
+    import subprocess
     for url in (DIRECT_URL,):
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        proc = subprocess.run(
+            ["curl", "-sSL", "-A", UA, "-e", LANDING_URL, "-o", dest_path, "-w", "%{http_code} %{size_download}", url],
+            capture_output=True, text=True, timeout=180
+        )
+        errors.append(f"curl({proc.returncode}): {proc.stdout} {proc.stderr[:120]}")
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                data = r.read()
-                if data[:2] == b"PK":
-                    open(dest_path, "wb").write(data)
-                    return len(data), url
-        except Exception as e:
-            print("direct err:", e)
-    req = urllib.request.Request(LANDING_URL, headers={"User-Agent": UA})
-    html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-    m = re.search(r"https://tmpfiles\.org/dl/[^\"'\s<>]+", html)
-    if not m:
-        raise RuntimeError("Could not find download URL on tmpfiles.org")
-    dl = m.group(0)
-    req2 = urllib.request.Request(dl, headers={"User-Agent": UA, "Referer": LANDING_URL})
-    data = urllib.request.urlopen(req2, timeout=120).read()
-    open(dest_path, "wb").write(data)
-    return len(data), dl
+            with open(dest_path, "rb") as f:
+                if f.read(2) == b"PK":
+                    import os
+                    return os.path.getsize(dest_path), url
+        except Exception:
+            pass
+    raise RuntimeError(" | ".join(errors))
 
 
 def main():
@@ -86,4 +104,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        msg = f"{exc!r} | {traceback.format_exc()}".replace("\n", " ")[:1500]
+        print(f"::error::{msg}", flush=True)
+        raise
