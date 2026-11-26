@@ -1,4 +1,4 @@
-name: Sonda Busqueda y Skin Crawler Diag
+name: Sonda Hosts PelisJuanita Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Extraer pagination y script_hits de busqueda.zip
+      - name: Probar hosts y reverse-engineer Byse/Dood/StreamWish/MixDrop
         shell: python3 {0}
         run: |
-          import io, re, urllib.request, http.cookiejar, zipfile
+          import json, re, urllib.request, urllib.error, http.cookiejar
 
           def emit(title, text):
               for i in range(0, len(text), 3500):
@@ -22,26 +22,46 @@ jobs:
 
           cj = http.cookiejar.CookieJar()
           opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-          opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36')]
+          ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          opener.addheaders = [('User-Agent', ua), ('Accept-Language', 'es-MX,es;q=0.9,en;q=0.8')]
 
-          landing = opener.open('https://tmpfiles.org/w5Azv6U6dMIa/busqueda.zip', timeout=30).read().decode('utf-8', 'replace')
-          dl_url = re.search(r'https://tmpfiles\.org/dl/[^\s"\'<>]+', landing).group(0)
-          zf = zipfile.ZipFile(io.BytesIO(opener.open(dl_url, timeout=60).read()))
+          def fetch(url, referer='https://pelisjuanita.com/'):
+              try:
+                  req = urllib.request.Request(url, headers={'Referer': referer, 'User-Agent': ua})
+                  r = opener.open(req, timeout=15)
+                  return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.geturl(), dict(e.headers), e.read().decode('utf-8', 'replace')
+              except Exception as e:
+                  return -1, url, {}, repr(e)
 
-          for info in zf.infolist():
-              low = info.filename.lower()
-              if low.endswith('.html') or low.endswith('.htm'):
-                  raw = zf.read(info.filename).decode('utf-8', 'replace')
-                  # Extract tail after grid-container items
-                  pag_idx = raw.find('class="pagination"')
-                  if pag_idx > 0:
-                      emit('pag_html', raw[pag_idx-200:pag_idx+2500])
-                  for m_i, m in enumerate(re.finditer(r'(?s)<script\b[^>]*>(.*?)</script>', raw)):
-                      sc = m.group(1).strip()
-                      if sc and any(w in sc.lower() for w in ['cargar', 'search', 'buscar', 'pelicula', 'serie', 'fetch', 'movieinfo', 'serieinfo']):
-                          emit(f'inline_{m_i}', sc[:6000])
-              elif low.endswith('script.js.download'):
-                  sc = zf.read(info.filename).decode('utf-8', 'replace')
-                  lines = sc.splitlines()
-                  hits = [f'{i+1}: {l}' for i, l in enumerate(lines) if any(w in l.lower() for w in ['cargarseries', 'cargarpeliculas', 'search', 'buscar', 's=', 'ver-serie', 'pelicula', 'movieinfo', 'serieinfo', 'data-url', 'idioma', 'subt'])]
-                  emit('script_hits', '\n'.join(hits))
+          # 1. Byse / n1mwq.org inspect JS bundle for playback endpoint!
+          c, u, h, b = fetch('https://bysesukior.com/api/videos/92rgcn88ka85/embed/details', 'https://bysesukior.com/e/92rgcn88ka85')
+          emit('byse_details', f'code={c} url={u}\n{b[:2000]}')
+          try:
+              frame_url = json.loads(b)['embed_frame_url']
+              c2, u2, h2, b2 = fetch(frame_url, 'https://bysesukior.com/e/92rgcn88ka85')
+              emit('byse_frame', f'code={c2} url={u2}\n{b2[:3000]}')
+              for js_path in re.findall(r'src=["\']([^"\']+\.js[^"\']*)["\']', b2):
+                  js_url = urllib.parse.urljoin(u2, js_path)
+                  c3, u3, h3, b3 = fetch(js_url, u2)
+                  hits = []
+                  for m in re.finditer(r'.{0,120}(?:playback|embed|details|key_parts|payload|sources|fetch\(|axios).{0,120}', b3):
+                      s = m.group(0)
+                      if 'playback' in s or 'embed' in s or 'key_parts' in s or 'decrypt' in s or '/api/' in s:
+                          hits.append(s)
+                  emit('byse_js', f'js={js_url} code={c3} len={len(b3)}\nhits:\n' + '\n---\n'.join(hits[:25]))
+          except Exception as e:
+              emit('byse_err', repr(e))
+
+          # 2. Dood / Playmogo / StreamWish / MixDrop / Morencius
+          for name, url in [
+              ('playmogo', 'https://playmogo.com/e/kmq8ibge16z1'),
+              ('doodstream', 'https://doodstream.com/e/8dl5bxs3pzrv'),
+              ('streamwish', 'https://streamwish.to/e/k9u77dklzfob'),
+              ('mixdrop', 'https://mixdrop.top/e/q11gg30obxxogvn'),
+              ('morencius', 'https://morencius.com/embed/036yf8jywyhr'),
+              ('waaw', 'https://waaw.to/f/ALdJ0Jeeqk66'),
+          ]:
+              c, u, h, b = fetch(url)
+              emit(f'host_{name}', f'code={c} url={u} len={len(b)}\n{b[:3000]}')
