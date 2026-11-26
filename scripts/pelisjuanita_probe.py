@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only diagnostic probe for pelisjuanita.com (no forms submitted, no CAPTCHA solved)."""
+"""Read-only probe of pelisjuanita.com/tv/app/ and public routes (no forms/captchas)."""
 import base64
 import json
 import re
@@ -7,7 +7,9 @@ import urllib.error
 import urllib.request
 import zlib
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+UA_CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+UA_DALVIK = "Dalvik/2.1.0 (Linux; U; Android 13; Pixel 7 Build/TQ3A.230901.001)"
+UA_OKHTTP = "okhttp/4.12.0"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -15,51 +17,34 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch(url, headers=None, follow_redirects=False, max_bytes=300_000):
+def fetch(url, headers=None, follow_redirects=True, max_bytes=300_000, method="GET", data=None):
     opener = urllib.request.build_opener() if follow_redirects else urllib.request.build_opener(NoRedirect())
     req = urllib.request.Request(
         url,
+        data=data,
+        method=method,
         headers={
-            "User-Agent": UA,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": UA_CHROME,
+            "Accept": "*/*",
             "Accept-Language": "es-419,es;q=0.9",
             **(headers or {}),
         },
     )
     try:
-        with opener.open(req, timeout=25) as r:
+        with opener.open(req, timeout=20) as r:
             raw = r.read(max_bytes)
-            return {
-                "status": r.status,
-                "url": r.url,
-                "headers": {k.lower(): v for k, v in r.headers.items()},
-                "set_cookies": sanitize_cookies(r.headers.get_all("Set-Cookie") or []),
-                "len": len(raw),
-                "text": raw.decode("utf-8", "replace"),
-            }
+            return {"status": r.status, "url": r.url, "len": len(raw), "text": raw.decode("utf-8", "replace")}
     except urllib.error.HTTPError as e:
         raw = e.read(max_bytes)
         return {
             "status": e.code,
             "url": e.geturl(),
             "location": e.headers.get("Location"),
-            "headers": {k.lower(): v for k, v in e.headers.items()},
-            "set_cookies": sanitize_cookies(e.headers.get_all("Set-Cookie") or []),
             "len": len(raw),
             "text": raw.decode("utf-8", "replace"),
         }
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
-
-
-def sanitize_cookies(cookies):
-    out = []
-    for c in cookies:
-        parts = [p.strip() for p in c.split(";")]
-        name = parts[0].split("=", 1)[0] if parts else ""
-        attrs = [p for p in parts[1:]]
-        out.append({"name": name, "attrs": attrs})
-    return out
 
 
 def emit_compressed(tag, obj):
@@ -68,73 +53,68 @@ def emit_compressed(tag, obj):
     b64 = base64.b64encode(comp).decode("ascii")
     chunk_size = 3200
     parts = [b64[i:i + chunk_size] for i in range(0, len(b64), chunk_size)]
-    for idx, part in enumerate(parts[:8]):
+    for idx, part in enumerate(parts[:9]):
         print(f"::notice::{tag} {idx + 1}/{len(parts)} {part}", flush=True)
 
 
 def main():
     report = {}
 
-    for label, url in [
-        ("movies_root", "https://pelisjuanita.com/movies/"),
-        ("series_root", "https://pelisjuanita.com/series/"),
-        ("inicio_gate", "https://pelisjuanita.com/inicio.php?redirect=%2Fmovies%2F"),
-        ("captcha_head", "https://pelisjuanita.com/inicio.php?captcha=1"),
-        ("sitemap", "https://pelisjuanita.com/sitemaps/sitemap.php"),
-        ("tv_app_home", "https://pelisjuanita.com/tv/app/home.php"),
-        ("tv_app_movies", "https://pelisjuanita.com/tv/app/movies.php"),
-        ("tv_app_series", "https://pelisjuanita.com/tv/app/series.php"),
-        ("tv_app_buscar", "https://pelisjuanita.com/tv/app/buscar.php?q=shrek"),
-    ]:
-        res = fetch(
-            url,
-            follow_redirects=(label in {"sitemap", "tv_app_home", "tv_app_movies", "tv_app_series", "tv_app_buscar"}),
-        )
-        if label == "captcha_head":
-            res = {
-                "status": res.get("status"),
-                "content_type": (res.get("headers") or {}).get("content-type"),
-                "len": res.get("len"),
-                "set_cookies": res.get("set_cookies"),
-            }
-        elif label == "inicio_gate":
-            # Strip binary/base64 bloat if any, keep complete form/script markup
-            res["text"] = res.get("text", "")[:24000]
-        elif label == "tv_app_home":
-            res["text"] = res.get("text", "")[:12000]
-        elif label == "sitemap":
-            res["text"] = res.get("text", "")[:8000]
-        else:
-            res["text"] = res.get("text", "")[:1500]
-        # Keep key HTTP headers only to avoid bloat
-        hdrs = res.get("headers") or {}
-        if isinstance(hdrs, dict):
-            res["headers"] = {k: hdrs[k] for k in sorted(hdrs) if k in {"server", "location", "content-type", "cf-ray", "cf-cache-status", "cache-control", "x-powered-by"}}
-        report[label] = res
+    tv_app_page = fetch("https://pelisjuanita.com/tv/app/", follow_redirects=False)
+    report["tv_app_page_links"] = sorted(set(re.findall(r"""(?:href|src)=["']([^"']+)["']""", tv_app_page.get("text", ""))))
+    report["tv_app_page_text"] = tv_app_page.get("text", "")[:22000]
 
-    inicio_html = report["inicio_gate"].get("text", "")
-    report["inicio_assets"] = sorted(set(re.findall(r"""(?:src|href)=["']([^"']+)["']""", inicio_html)))
+    # Check Chrome-like navigate headers on /movies/
+    nav_headers = {
+        "User-Agent": UA_CHROME,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    report["movies_nav"] = fetch("https://pelisjuanita.com/movies/", headers=nav_headers, follow_redirects=False)
+    report["movies_nav"]["text"] = (report["movies_nav"].get("text") or "")[:1000]
 
-    static_probes = {}
-    for path in [
-        "https://pelisjuanita.com/movies/js/app.js",
-        "https://pelisjuanita.com/movies/js/main.js",
-        "https://pelisjuanita.com/movies/js/scripts.js",
-        "https://pelisjuanita.com/tv/app/config.php",
-        "https://pelisjuanita.com/tv/app/",
-        "https://pelisjuanita.com/sitemaps/",
+    # Check buscar.php with various parameters
+    buscar_checks = {}
+    for label, q in [
+        ("empty", "https://pelisjuanita.com/tv/app/buscar.php?q="),
+        ("space", "https://pelisjuanita.com/tv/app/buscar.php?q=%20"),
+        ("a", "https://pelisjuanita.com/tv/app/buscar.php?q=a"),
+        ("e_p2", "https://pelisjuanita.com/tv/app/buscar.php?q=e&pagina=2"),
+        ("shrek_full", "https://pelisjuanita.com/tv/app/buscar.php?q=shrek"),
+        ("dark", "https://pelisjuanita.com/tv/app/buscar.php?q=dark"),
+        ("culpa", "https://pelisjuanita.com/tv/app/buscar.php?q=culpa"),
     ]:
-        r = fetch(path, follow_redirects=False, max_bytes=30_000)
-        static_probes[path] = {
+        r = fetch(q)
+        buscar_checks[label] = {
             "status": r.get("status"),
-            "location": r.get("location"),
-            "content_type": (r.get("headers") or {}).get("content-type"),
             "len": r.get("len"),
-            "head": (r.get("text") or "")[:400],
+            "text": r.get("text", "")[:1500] if label != "shrek_full" and label != "dark" else r.get("text", ""),
         }
-    report["static_probes"] = static_probes
+    report["buscar_checks"] = buscar_checks
 
-    emit_compressed("PJPROBE", report)
+    # Probe other /tv/app/*.php files and Dalvik/OkHttp UA
+    app_probes = {}
+    for name in [
+        "home.php", "movies.php", "movies.php?id=5437", "movies.php?slug=gato-con-botas",
+        "series.php", "series.php?id=1", "series.php?slug=dark",
+        "pelicula.php", "peliculas.php", "serie.php", "detalle.php", "ver.php",
+        "estrenos.php", "populares.php", "generos.php", "categorias.php",
+        "canales.php", "tv.php", "live.php", "player.php", "api.php",
+    ]:
+        url = f"https://pelisjuanita.com/tv/app/{name}"
+        r1 = fetch(url)
+        r2 = fetch(url, headers={"User-Agent": UA_OKHTTP})
+        app_probes[name] = {
+            "chrome": {"status": r1.get("status"), "len": r1.get("len"), "head": (r1.get("text") or "")[:300]},
+            "okhttp": {"status": r2.get("status"), "len": r2.get("len"), "head": (r2.get("text") or "")[:300]},
+        }
+    report["app_probes"] = app_probes
+
+    emit_compressed("PJPROBE2", report)
 
 
 if __name__ == "__main__":
