@@ -40,14 +40,14 @@ for i in $(seq 1 155); do
   log=$(adb logcat -d -s CSPlaybackProbe:I '*:S')
   if echo "$log" | grep -q 'PASS all'; then
     echo "$log"
-    summary=$(echo "$log" | grep -E 'home sections=|PASS pagination|PASS coil posters=|PASS .* frame|server coverage|PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g')
+    summary=$(echo "$log" | grep -E 'home sections=|PASS pagination|PASS coil posters=|diag-|PASS .* frame|PASS server |server coverage|PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g')
     echo "::notice::$summary"
     echo '::notice::CloudStream comprobó PoseidonHD2 bis y reprodujo las muestras con Media3'
     exit 0
   fi
   if echo "$log" | grep -q 'FAIL '; then
     echo "$log"
-    echo "$log" | grep -E 'home sections=|PASS pagination|PASS coil posters=|extracted=|PASS .* frame|server coverage' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
+    echo "$log" | grep -E 'home sections=|PASS pagination|PASS coil posters=|diag-|extracted=|PASS .* frame|PASS server |server coverage' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
     echo "::error::$(echo "$log" | grep 'FAIL ' | tail -1 | sed 's/%/%25/g')"
     exit 1
   fi

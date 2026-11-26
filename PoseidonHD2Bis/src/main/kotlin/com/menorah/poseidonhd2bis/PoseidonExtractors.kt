@@ -1008,17 +1008,24 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
             var parsed: PoseidonVidHideParsed? = null
             for (candidate in candidateUrls) {
                 val res = try {
-                    app.get(candidate, referer = effReferer, headers = reqHeaders, timeout = 14L)
+                    app.get(candidate, referer = effReferer, headers = reqHeaders, timeout = 8L)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
                     null
                 } ?: continue
+                if (res.code == 404 || res.code == 410) break
                 if (!res.isSuccessful) continue
 
                 val attempt = PoseidonVidHideParser.parse(res.text, res.url)
                 if (attempt.streams.isNotEmpty()) {
                     parsed = attempt
+                    break
+                }
+                if (res.text.contains("File was deleted", ignoreCase = true) ||
+                    res.text.contains("File not found", ignoreCase = true) ||
+                    res.text.contains("no longer available", ignoreCase = true)
+                ) {
                     break
                 }
             }

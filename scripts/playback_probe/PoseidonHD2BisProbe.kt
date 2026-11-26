@@ -19,8 +19,10 @@ import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.USER_AGENT
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.loadExtractor
 import kotlinx.coroutines.*
 
 // Added to a temporary build only; never part of the published plugin.
@@ -87,7 +89,7 @@ object PlaybackProbe {
                     check(hotdLoad.episodes.size >= 10) { "expected >= 10 episodes on La Casa del Dragón" }
                     check(hotdLoad.episodes.all { (it.season ?: 0) > 0 }) { "empty season 0 leaked into episodes" }
 
-                    // Classic Movie check (Matrix)
+                    // Classic Movie check (Matrix) & Hunger Games & Warrior
                     val matrixUrl = "${PoseidonHD2BisData.MAIN_URL}/pelicula/603/the-matrix"
                     val matrixLoad = provider.load(matrixUrl) as? MovieLoadResponse
                         ?: error("Matrix load failed")
@@ -95,11 +97,20 @@ object PlaybackProbe {
                     check(matrixLoad.duration != null && matrixLoad.duration!! > 100) { "missing Matrix duration" }
                     check(!matrixLoad.recommendations.isNullOrEmpty()) { "missing Matrix recommendations" }
 
+                    val warriorUrl = "${PoseidonHD2BisData.MAIN_URL}/pelicula/1280115/el-camino-del-pequeno-guerrero"
+                    val warriorLoad = provider.load(warriorUrl) as? MovieLoadResponse
+
                     // Recent Movie from Home
                     val latestMovieCard = movieCards.first()
                     val latestMovieLoad = provider.load(latestMovieCard.url) as? MovieLoadResponse
                         ?: error("latest movie load failed for ${latestMovieCard.url}")
                     check(!latestMovieLoad.posterUrl.isNullOrBlank()) { "missing latest movie poster" }
+
+                    // Diagnostic trace for embed resolution
+                    diagnoseWatchPage("diag-warrior", warriorUrl)
+                    diagnoseWatchPage("diag-matrix", matrixLoad.dataUrl)
+                    diagnoseWatchPage("diag-latest-movie", latestMovieLoad.dataUrl)
+                    diagnoseWatchPage("diag-latest-ep", epParentLoad.episodes.last().data)
 
                     // Verify Coil image loading across home, search, and load responses
                     val posterChecks = mutableListOf<Triple<String, String?, Map<String, String>?>>()
@@ -119,12 +130,14 @@ object PlaybackProbe {
                     }
                     Log.i("CSPlaybackProbe", "PASS coil posters=${posterChecks.size}")
 
-                    val targets = listOf(
+                    val targets = mutableListOf(
                         "latest ep (${firstEpCardUrl.substringAfter("/serie/")})" to epParentLoad.episodes.last().data,
                         "hotd s1e1" to hotdLoad.episodes.first().data,
                         "latest movie (${latestMovieCard.name})" to latestMovieLoad.dataUrl,
-                        "matrix" to matrixLoad.dataUrl,
                     )
+                    if (warriorLoad != null) {
+                        targets += "warrior" to warriorLoad.dataUrl
+                    }
 
                     val errors = mutableListOf<String>()
                     for ((label, data) in targets) {
@@ -139,8 +152,12 @@ object PlaybackProbe {
                         }
                     }
 
-                    // Per-server Media3 verification across latest movie + Matrix
-                    verifyServerCoverage(context, provider, listOf(latestMovieLoad.dataUrl, matrixLoad.dataUrl))
+                    val coverageData = listOfNotNull(
+                        latestMovieLoad.dataUrl,
+                        warriorLoad?.dataUrl,
+                        epParentLoad.episodes.last().data,
+                    )
+                    verifyServerCoverage(context, provider, coverageData)
 
                     check(errors.isEmpty()) { "playback failures: $errors" }
                 }
@@ -148,6 +165,40 @@ object PlaybackProbe {
             } catch (t: Throwable) {
                 Log.e("CSPlaybackProbe", "FAIL ${t.javaClass.simpleName}: ${t.message}", t)
             }
+        }
+    }
+
+    private suspend fun diagnoseWatchPage(tag: String, url: String) = withContext(Dispatchers.IO) {
+        runCatching {
+            val html = app.get(url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 15L).text
+            val vids = PoseidonHD2BisData.parseWatchPageVideos(html)
+            val summary = vids.take(6).map { v ->
+                val pRes = runCatching {
+                    app.get(v.playerUrl, referer = url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 10L)
+                }.getOrNull()
+                val emb = pRes?.let { PoseidonHD2BisData.extractPlayerEmbedUrl(it.text) }
+                val extCount = if (emb != null) {
+                    val c = mutableListOf<String>()
+                    runCatching {
+                        val lower = emb.lowercase()
+                        when {
+                            v.cyberlocker == "voesx" || lower.contains("voe") ->
+                                PoseidonVoeExtractor.extract(emb, "https://player.poseidonhd2.co/", "Voe", {}) { c += it.url }
+                            v.cyberlocker == "vidhide" || lower.contains("vidhide") || lower.contains("callistanise") ->
+                                PoseidonVidHideExtractor.extract(emb, "https://player.poseidonhd2.co/", "VidHide", {}) { c += it.url }
+                            v.cyberlocker == "streamwish" || lower.contains("streamwish") || lower.contains("hglink") ->
+                                PoseidonStreamWishExtractor.extract(emb, "https://player.poseidonhd2.co/", "StreamWish", {}) { c += it.url }
+                            else ->
+                                loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += "${it.name}:${it.url.take(60)}" }
+                        }
+                    }
+                    c.size
+                } else -1
+                "${v.languageLabel}/${v.cyberlocker}:p=${pRes?.code}:e=${emb?.take(45)}:n=$extCount"
+            }
+            Log.i("CSPlaybackProbe", "$tag total=${vids.size} -> $summary")
+        }.onFailure {
+            Log.i("CSPlaybackProbe", "$tag err=${it.message}")
         }
     }
 
