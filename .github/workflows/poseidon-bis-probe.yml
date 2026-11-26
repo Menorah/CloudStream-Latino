@@ -9,5 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test vsembed AES-CBC decryption safely
+      - name: Verify live vsembed StreamWish AES-CBC extraction and segments
         run: python3 scripts/poseidon_bis_probe.py
