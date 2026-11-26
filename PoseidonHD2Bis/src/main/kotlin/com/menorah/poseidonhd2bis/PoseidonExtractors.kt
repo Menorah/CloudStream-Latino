@@ -1204,7 +1204,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
 
             var emitted = false
             for (candidate in listOfNotNull(hlsUrl, tiktokUrl).distinct()) {
-                val generated = withTimeoutOrNull(4_500L) {
+                val generated = withTimeoutOrNull(3_000L) {
                     runCatching {
                         M3u8Helper.generateM3u8(sourceName, candidate, "$origin/", headers = streamHeaders)
                     }.getOrElse { emptyList() }

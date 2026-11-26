@@ -19,10 +19,8 @@ import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.USER_AGENT
-import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.loadExtractor
 import kotlinx.coroutines.*
 
 // Added to a temporary build only; never part of the published plugin.
@@ -106,9 +104,6 @@ object PlaybackProbe {
                         ?: error("latest movie load failed for ${latestMovieCard.url}")
                     check(!latestMovieLoad.posterUrl.isNullOrBlank()) { "missing latest movie poster" }
 
-                    // Diagnostic trace for embed resolution (single movie to avoid rate limits)
-                    diagnoseWatchPage("diag-warrior", warriorUrl)
-
                     // Verify Coil image loading across home, search, and load responses
                     val posterChecks = mutableListOf<Triple<String, String?, Map<String, String>?>>()
                     recentEpCards.take(2).forEachIndexed { i, c -> posterChecks.add(Triple("home-ep-$i", c.posterUrl, c.posterHeaders)) }
@@ -161,69 +156,6 @@ object PlaybackProbe {
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
                 Log.e("CSPlaybackProbe", "FAIL ${t.javaClass.simpleName}: ${t.message}", t)
-            }
-        }
-    }
-
-    private suspend fun diagnoseWatchPage(tag: String, url: String) = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(45_000L) {
-            runCatching {
-                val html = app.get(url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 12L).text
-                val vids = PoseidonHD2BisData.parseWatchPageVideos(html)
-                val summary = vids.filterNot { it.cyberlocker == "netu" }.take(5).map { v ->
-                    withTimeoutOrNull(14_000L) {
-                        val pRes = runCatching {
-                            app.get(v.playerUrl, referer = url, headers = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT), timeout = 8L)
-                        }.getOrNull()
-                        val emb = pRes?.let { PoseidonHD2BisData.extractPlayerEmbedUrl(it.text) }
-                        var detail = "no-emb"
-                        val c = mutableListOf<String>()
-                        if (emb != null) {
-                            val lower = emb.lowercase()
-                            val baseHeaders = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT)
-                            val t0 = android.os.SystemClock.elapsedRealtime()
-                            runCatching {
-                                when {
-                                    v.cyberlocker == "voesx" || lower.contains("voe") -> {
-                                        PoseidonVoeExtractor.extract(emb, "https://player.poseidonhd2.co/", "Voe", {}) { c += it.url }
-                                        val dt = android.os.SystemClock.elapsedRealtime() - t0
-                                        if (c.isEmpty()) {
-                                            val r1 = app.get(emb, referer = "https://player.poseidonhd2.co/", headers = baseHeaders, timeout = 6L)
-                                            detail = "ms=$dt:r1=${r1.code}:${r1.url.take(35)}:alt=${r1.text.contains("altcha-widget")}:head=${r1.text.replace(Regex("\\s+"), " ").take(120)}"
-                                        } else {
-                                            detail = "ms=$dt:ok"
-                                        }
-                                    }
-                                    v.cyberlocker == "doodstream" || lower.contains("dood") -> {
-                                        val r1 = app.get(emb.replace("/d/", "/e/"), headers = baseHeaders, timeout = 8L)
-                                        val hasMd5 = r1.text.contains("/pass_md5/")
-                                        val bodyPart = r1.text.substringAfter("</head>", r1.text).replace(Regex("\\s+"), " ").take(1200)
-                                        loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += it.url }
-                                        detail = "r1=${r1.code}:${r1.url.take(35)}:len=${r1.text.length}:md5=$hasMd5:body=$bodyPart"
-                                    }
-                                    v.cyberlocker == "streamwish" || lower.contains("streamwish") -> {
-                                        PoseidonStreamWishExtractor.extract(emb, "https://player.poseidonhd2.co/", "StreamWish", {}) { c += it.url }
-                                        val dt = android.os.SystemClock.elapsedRealtime() - t0
-                                        detail = "ms=$dt:first=${c.firstOrNull()?.take(90)}"
-                                    }
-                                    v.cyberlocker == "vidhide" || lower.contains("vidhide") -> {
-                                        PoseidonVidHideExtractor.extract(emb, "https://player.poseidonhd2.co/", "VidHide", {}) { c += it.url }
-                                        val dt = android.os.SystemClock.elapsedRealtime() - t0
-                                        detail = "ms=$dt"
-                                    }
-                                    else -> {
-                                        loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += it.url }
-                                        detail = "other"
-                                    }
-                                }
-                            }.onFailure { detail = "EXC:${it.javaClass.simpleName}:${it.message?.take(60)}" }
-                        }
-                        "${v.languageLabel}/${v.cyberlocker}:n=${c.size}:[$detail]"
-                    } ?: "${v.languageLabel}/${v.cyberlocker}:TO"
-                }
-                Log.i("CSPlaybackProbe", "$tag -> $summary")
-            }.onFailure {
-                Log.i("CSPlaybackProbe", "$tag err=${it.message}")
             }
         }
     }
