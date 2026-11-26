@@ -11,53 +11,42 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect waaw htoken/shh/createcxt/s47
+      - name: Check waaw Imfla/htoken/get_player_image
         run: |
           python3 - <<'PY'
-          import re, urllib.request, urllib.error
+          import json, re, urllib.request, urllib.error
 
           UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
           notices = []
-
           def add_notice(tag, msg):
               s = f"{tag}: {msg}".replace("%", "%25").replace("\r", "").replace("\n", " | ")
               notices.append(s[:3800])
-
-          def fetch(url, headers=None):
+          def fetch(url, headers=None, data=None):
               h = {"User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9,en;q=0.8"}
-              if headers:
-                  h.update(headers)
-              req = urllib.request.Request(url, headers=h)
-              with urllib.request.urlopen(req, timeout=10) as r:
-                  return r.read().decode("utf-8", "replace")
+              if headers: h.update(headers)
+              req = urllib.request.Request(url, data=data, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      return r.status, r.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode("utf-8", "replace")
 
-          wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
-          ejs = fetch("https://waaw.to/js/embed.232.js?736", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
+          _, wb = fetch("https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F", {"Referer": "https://pelisjuanita.com/"})
           scripts = re.findall(r"<script[^>]*>(.*?)</script>", wb, re.S | re.I)
+          s35 = scripts[35]
+          add_notice("S35_36_40", s35[36000:39700])
+          add_notice("S35_40_44", s35[39700:43400])
+          add_notice("S35_44_48", s35[43400:47100])
 
-          # Check createcxt, shh=, htoken=, click_hash=, 407 in ejs & script 35
-          for label, src in [("EJS", ejs), ("S35", scripts[35])]:
-              hits = []
-              for kw in ["createcxt", "shh", "htoken", "click_hash", "get_md5", "407", "need_captcha", "gol()"]:
-                  for m in re.finditer(re.escape(kw), src):
-                      hits.append(f"[{kw}@{m.start()}]: {src[max(0,m.start()-60):m.start()+200]}")
-                      if len(hits) >= 12:
-                          break
-                  if len(hits) >= 12:
-                      break
-              add_notice(f"W_{label}", " || ".join(hits)[:3700])
-
-          # Show script 47 in full chunks (26KB) - just head/tail + what function it defines
-          s47 = scripts[47]
-          add_notice("W_S47_HEAD", s47[:3600])
-          add_notice("W_S47_TAIL", s47[-3600:])
-
-          # Also check /js/d_check.js?36 and /js/click.31.js?165
-          try:
-              dc = fetch("https://waaw.to/js/d_check.js?36", {"Referer": "https://waaw.to/e/ALdJ0Jeeqk66"})
-              add_notice("W_DCHECK", dc[:3600])
-          except Exception as e:
-              add_notice("W_DCHECK", repr(e))
+          # Also test POST /player/get_player_image.php
+          m_vid = re.search(r"'videoid'\s*:\s*'([^']+)'", s35)
+          vid = m_vid.group(1) if m_vid else "60221804"
+          c, img_res = fetch("https://waaw.to/player/get_player_image.php", {
+              "Referer": "https://waaw.to/e/ALdJ0Jeeqk66?http_referer=https%3A%2F%2Fpelisjuanita.com%2F",
+              "Origin": "https://waaw.to",
+              "Content-Type": "application/json",
+          }, data=json.dumps({"videoid": vid, "width": 800, "height": 450}).encode())
+          add_notice("GET_PLAYER_IMG", f"vid={vid} c={c} res={img_res[:1500]}")
 
           for n in notices[:8]:
               print(f"::notice::{n}")
