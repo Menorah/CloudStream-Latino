@@ -14,7 +14,7 @@ open(p, 'w').write(s)
 p = 'PelisJuanita/build.gradle.kts'
 s = open(p).read().replace(
     'dependencies {',
-    'dependencies {\n    compileOnly("androidx.media3:media3-exoplayer:1.9.3")\n    compileOnly("androidx.media3:media3-exoplayer-hls:1.9.3")\n    compileOnly("io.coil-kt.coil3:coil:3.3.0")\n    compileOnly("io.coil-kt.coil3:coil-network-okhttp:3.3.0")',
+    'dependencies {\n    compileOnly("androidx.media3:media3-exoplayer:1.9.3")\n    compileOnly("androidx.media3:media3-exoplayer-hls:1.9.3")\n    compileOnly("androidx.media3:media3-datasource-okhttp:1.9.3")\n    compileOnly("io.coil-kt.coil3:coil:3.3.0")\n    compileOnly("io.coil-kt.coil3:coil-network-okhttp:3.3.0")',
     1,
 )
 open(p, 'w').write(s)
@@ -55,7 +55,7 @@ for i in $(seq 1 95); do
   fi
   if echo "$log" | grep -q 'FAIL '; then
     echo "$log"
-    echo "$log" | grep -E 'home sections=|PASS pagination|PASS unverified|PASS coil posters=|PASS server |server coverage' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
+    echo "$log" | grep -E 'home sections=|PASS pagination|PASS unverified|PASS verified|PASS coil posters=|PASS server |server coverage' | sed -e 's/%/%25/g' -e 's/^/::notice::/'
     echo "::error::$(echo "$log" | grep 'FAIL ' | tail -1 | sed -e 's/%/%25/g')"
     exit 1
   fi

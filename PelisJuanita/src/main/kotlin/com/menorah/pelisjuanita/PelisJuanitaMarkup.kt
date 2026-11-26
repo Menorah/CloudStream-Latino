@@ -167,8 +167,10 @@ internal object PelisJuanitaMarkup {
     private val SERIE_ID_REGEX = Regex("""CURRENT_SERIE_ID\s*=\s*(\d+)""")
     private val MOVIE_ID_REGEX = Regex("""CURRENT_MOVIE_ID\s*=\s*(\d+)""")
     private val MOVIE_INFO_P_REGEX = Regex("""movieInfo\.php\?[^"'<>]*?[?&]p=(\d+)""")
-    private val TMDB_FILENAME_REGEX = Regex("""^/?([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
+    private val TMDB_FILENAME_REGEX = Regex("""^/*([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
     private val TMDB_FULL_PATH_REGEX = Regex("""^/t/p/[^/]+/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp)$""", RegexOption.IGNORE_CASE)
+    private val TMDB_REL_TP_REGEX = Regex("""^/*(t/p/[^/]+/+[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
+    private val MULTI_SLASH_REGEX = Regex("""/+""")
     private val SAVED_LOCAL_ASSETS_REGEX = Regex("""_files/([A-Za-z0-9_-]{6,}\.(?:jpg|jpeg|png|webp))$""", RegexOption.IGNORE_CASE)
 
     fun isSiteUrl(url: String?): Boolean {
@@ -205,14 +207,17 @@ internal object PelisJuanitaMarkup {
         ) {
             return null
         }
+        TMDB_FILENAME_REGEX.matchEntire(clean)?.let { m ->
+            return "$tmdbBase/${m.groupValues[1]}"
+        }
+        TMDB_REL_TP_REGEX.matchEntire(clean)?.let { m ->
+            return "https://image.tmdb.org/${MULTI_SLASH_REGEX.replace(m.groupValues[1], "/")}"
+        }
         val candidate = when {
             clean.startsWith("https://", ignoreCase = true) -> clean
             clean.startsWith("http://", ignoreCase = true) -> "https://${clean.substringAfter("://")}"
             clean.startsWith("//") -> "https:$clean"
             else -> {
-                TMDB_FILENAME_REGEX.matchEntire(clean)?.let { m ->
-                    return "$tmdbBase/${m.groupValues[1]}"
-                }
                 SAVED_LOCAL_ASSETS_REGEX.find(clean)?.let { m ->
                     return "$tmdbBase/${m.groupValues[1]}"
                 }
@@ -221,10 +226,20 @@ internal object PelisJuanitaMarkup {
         }
         val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
         val host = uri.host?.lowercase().orEmpty()
-        val path = uri.rawPath.orEmpty()
-        if (path.isEmpty() || path.endsWith("/")) return null
-        if (host.endsWith("image.tmdb.org") && !TMDB_FULL_PATH_REGEX.matches(path)) {
-            return null
+        val rawPath = uri.rawPath.orEmpty()
+        if (rawPath.isEmpty() || rawPath.endsWith("/")) return null
+        val normalizedPath = MULTI_SLASH_REGEX.replace(rawPath, "/")
+        if (host.endsWith("image.tmdb.org")) {
+            if (!TMDB_FULL_PATH_REGEX.matches(normalizedPath)) {
+                return null
+            }
+            return if (normalizedPath == rawPath) {
+                candidate
+            } else {
+                runCatching {
+                    URI(uri.scheme, uri.authority, normalizedPath, uri.rawQuery, uri.rawFragment).toString()
+                }.getOrDefault(candidate)
+            }
         }
         return candidate
     }
@@ -335,7 +350,8 @@ internal object PelisJuanitaMarkup {
 
     fun buildMovieInfoUrl(slug: String, movieId: Long? = null): String {
         val pVal = movieId?.takeIf { it > 0 }?.toString().orEmpty()
-        return "$MAIN_URL/movies/movieInfo.php?title=${URLEncoder.encode(slug, "UTF-8")}&p=$pVal"
+        val encodedSlug = URLEncoder.encode(slug, "UTF-8").replace("+", "%20")
+        return "$MAIN_URL/movies/movieInfo.php?title=$encodedSlug&p=$pVal"
     }
 
     fun buildSerieShellUrl(slug: String): String =
@@ -343,17 +359,20 @@ internal object PelisJuanitaMarkup {
 
     fun buildSerieInfoEpisodeUrl(slug: String, season: Int, episode: Int, serieId: Long?): String {
         val pVal = serieId?.takeIf { it > 0 }?.toString().orEmpty()
-        return "$MAIN_URL/series/serieInfo.php?nombreSerie=${URLEncoder.encode(slug, "UTF-8")}&nroTemporada=$season&nroEpisodio=$episode&p=$pVal"
+        val encodedSlug = URLEncoder.encode(slug, "UTF-8").replace("+", "%20")
+        return "$MAIN_URL/series/serieInfo.php?nombreSerie=$encodedSlug&nroTemporada=$season&nroEpisodio=$episode&p=$pVal"
     }
 
     fun buildSerieInfoSeasonUrl(slug: String, season: Int, snum: Int, enumVal: Int, serieId: Long?): String {
         val pVal = serieId?.takeIf { it > 0 }?.toString().orEmpty()
-        return "$MAIN_URL/series/serieInfo.php?nombreSerie=${URLEncoder.encode(slug, "UTF-8")}&temporada=$season&snum=$snum&enum=$enumVal&p=$pVal"
+        val encodedSlug = URLEncoder.encode(slug, "UTF-8").replace("+", "%20")
+        return "$MAIN_URL/series/serieInfo.php?nombreSerie=$encodedSlug&temporada=$season&snum=$snum&enum=$enumVal&p=$pVal"
     }
 
     fun buildSerieInfoSeasonModeUrl(slug: String, season: Int, serieId: Long?): String {
         val pVal = serieId?.takeIf { it > 0 }?.toString().orEmpty()
-        return "$MAIN_URL/series/serieInfo.php?nombreSerie=${URLEncoder.encode(slug, "UTF-8")}&nroTemporada=$season&nroEpisodio=0&modoTemporada=1&p=$pVal"
+        val encodedSlug = URLEncoder.encode(slug, "UTF-8").replace("+", "%20")
+        return "$MAIN_URL/series/serieInfo.php?nombreSerie=$encodedSlug&nroTemporada=$season&nroEpisodio=0&modoTemporada=1&p=$pVal"
     }
 
     fun extractSeriesIdFromShell(html: String): Long? =
@@ -691,13 +710,16 @@ internal object PelisJuanitaMarkup {
                 if (strictStreamType) {
                     if (tipo != "stream") continue
                 } else {
-                    if (tipo in setOf("descarga", "download", "descargas")) continue
+                    if (tipo in setOf("descarga", "download", "descargas", "ayuda", "tutorial", "guide")) continue
                 }
 
                 val rawUrl = normalizeStreamUrl(
-                    row.attr("data-url").trim().ifEmpty {
-                        CARGAR_SERVIDOR_REGEX.find(row.attr("onclick"))?.groupValues?.getOrNull(1).orEmpty().trim()
-                    },
+                    row.attr("data-url").trim()
+                        .ifEmpty { row.attr("data-src").trim() }
+                        .ifEmpty { row.attr("data-link").trim() }
+                        .ifEmpty {
+                            CARGAR_SERVIDOR_REGEX.find(row.attr("onclick"))?.groupValues?.getOrNull(1).orEmpty().trim()
+                        },
                 )
                 if (!rawUrl.startsWith("http", ignoreCase = true)) continue
 
