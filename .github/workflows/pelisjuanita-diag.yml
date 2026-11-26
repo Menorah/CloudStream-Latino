@@ -1,4 +1,4 @@
-name: Sonda Byse Protocolo y Busqueda HTML Diag
+name: Sonda Byse Te-nt-ct y Busqueda JS Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 1. Byse videoPagesBundle & pow protocol
+      - name: 1. Byse Te/nt/Et/ct & pow access endpoints
         shell: python3 {0}
         run: |
           import re, urllib.request
@@ -23,68 +23,46 @@ jobs:
               return urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': ua, 'Referer': 'https://n1mwq.org/'}), timeout=15).read().decode('utf-8', 'replace')
           vp = get('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js')
           pw = get('https://n1mwq.org/assets/pow-DEJGtdh2.js')
-          idx = vp.find('Et=async')
-          emit('vp_et', vp[max(0, idx-1200):idx+1800])
-          idx2 = vp.find('Aa=')
-          emit('vp_aa', vp[max(0, idx2-600):idx2+1600])
-          emit('pow_full', pw[:10000])
+          idx = vp.find('wt=(')
+          emit('vp_before_wt', vp[max(0, idx-2500):idx+500])
+          # Also find callers of Et(
+          callers = [vp[max(0, m.start()-300):m.end()+500] for m in re.finditer(r'\bEt\(', vp)]
+          emit('vp_et_callers', '\n---\n'.join(callers[:6]))
+          # Tail of pow-DEJGtdh2.js (after noble-curves)
+          idx_mt = pw.find('/api/videos/access')
+          emit('pow_tail', pw[max(0, idx_mt-300):idx_mt+6000])
 
-      - name: 2. Byse live POST playback probes
-        shell: python3 {0}
+      - name: 2. Check busqueda.zip URL via curl & extract
+        shell: bash
         run: |
-          import urllib.request, urllib.error, http.cookiejar
-          def emit(title, text):
-              chunk = text[:3500].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
-              print(f'::notice title={title}::{chunk}')
-          ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          def req(url, ref, method='GET', hdrs=None, data=None):
-              try:
-                  h = {'User-Agent': ua, 'Referer': ref}
-                  if hdrs: h.update(hdrs)
-                  r = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=h, method=method), timeout=15)
-                  return r.status, dict(r.headers), r.read().decode('utf-8', 'replace')
-              except urllib.error.HTTPError as e:
-                  return e.code, dict(e.headers), e.read().decode('utf-8', 'replace')
-              except Exception as e:
-                  return -1, {}, repr(e)
-          lines = []
-          for base, ref, parent in [
-              ('https://bysesukior.com', 'https://bysesukior.com/e/92rgcn88ka85', 'https://pelisjuanita.com/'),
-              ('https://n1mwq.org', 'https://n1mwq.org/ev5/92rgcn88ka85', 'https://bysesukior.com/'),
-              ('https://n1mwq.org', 'https://n1mwq.org/ev5/92rgcn88ka85', 'https://pelisjuanita.com/'),
-          ]:
-              for mth, ep, data in [
-                  ('GET', 'embed/details', None),
-                  ('POST', 'embed/playback', b'{}'),
-                  ('POST', 'embed/playback', b''),
-              ]:
-                  sc, sh, sb = req(f'{base}/api/videos/92rgcn88ka85/{ep}', ref, mth, {'Origin': base, 'X-Embed-Parent': parent, 'Content-Type': 'application/json'}, data)
-                  lines.append(f'{mth} {base} ep={ep} parent={parent} -> {sc} allow={sh.get("Allow") or sh.get("allow")} {sb[:300]}')
-          emit('probes', '\n'.join(lines))
-
-      - name: 3. Busqueda zip grid y script.js
-        shell: python3 {0}
-        run: |
-          import io, re, urllib.request, zipfile
+          python3 - <<'PY'
+          import re, urllib.request, zipfile, io
           def emit(title, text):
               for i in range(0, len(text), 3500):
                   chunk = text[i:i+3500].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
                   print(f'::notice title={title}_{i//3500}::{chunk}')
-          ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          zbytes = urllib.request.urlopen(urllib.request.Request('https://tmpfiles.org/dl/w5Azv6U6dMIa/busqueda.zip', headers={'User-Agent': ua}), timeout=20).read()
-          zf = zipfile.ZipFile(io.BytesIO(zbytes))
-          for name in zf.namelist():
-              if name.endswith('.html') and zf.getinfo(name).file_size > 0:
-                  txt = zf.read(name).decode('utf-8', 'replace')
-                  m = re.search(r'<div class="grid-container">.*?(?:<footer|</body>)', txt, re.S)
-                  if m:
-                      cleaned = re.sub(r'<style[^>]*>.*?</style>', '', m.group(0), flags=re.S)
-                      cleaned = re.sub(r'\s+', ' ', cleaned)
-                      emit('grid', cleaned[:6500])
-              elif name.endswith('script.js.download'):
-                  js = zf.read(name).decode('utf-8', 'replace')
-                  # find search / realizarBusqueda / cargarSeries / cargarPeliculas
-                  for pat in ['realizarBusqueda', 'cargarPeliculas', 'cargarSeries', 'pagina']:
-                      idx = js.find(pat)
-                      if idx >= 0:
-                          emit('js_' + pat, js[max(0, idx-120):idx+1800])
+          ua = 'Mozilla/5.0 (Mozilla/5.0) AppleWebKit/537.36'
+          html = urllib.request.urlopen(urllib.request.Request('https://tmpfiles.org/w5Azv6U6dMIa/busqueda.zip', headers={'User-Agent': ua}), timeout=15).read().decode('utf-8', 'replace')
+          m = re.search(r'href="(https?://tmpfiles\.org/dl/[^"]+)"', html)
+          dl = m.group(1) if m else 'https://tmpfiles.org/dl/w5Azv6U6dMIa/busqueda.zip'
+          emit('dl_url', dl)
+          try:
+              zbytes = urllib.request.urlopen(urllib.request.Request(dl, headers={'User-Agent': ua}), timeout=20).read()
+              zf = zipfile.ZipFile(io.BytesIO(zbytes))
+              for name in zf.namelist():
+                  if name.endswith('.html') and zf.getinfo(name).file_size > 0:
+                      txt = zf.read(name).decode('utf-8', 'replace')
+                      gm = re.search(r'<div class="grid-container">.*?(?:<footer|</body>)', txt, re.S)
+                      if gm:
+                          cleaned = re.sub(r'<style[^>]*>.*?</style>', '', gm.group(0), flags=re.S)
+                          cleaned = re.sub(r'\s+', ' ', cleaned)
+                          emit('grid', cleaned[:6500])
+                  elif name.endswith('script.js.download'):
+                      js = zf.read(name).decode('utf-8', 'replace')
+                      for pat in ['realizarBusqueda', 'cargarPeliculas', 'cargarSeries', 'pagina']:
+                          idx = js.find(pat)
+                          if idx >= 0:
+                              emit('js_' + pat, js[max(0, idx-120):idx+1800])
+          except Exception as e:
+              emit('zip_err', repr(e))
+          PY
