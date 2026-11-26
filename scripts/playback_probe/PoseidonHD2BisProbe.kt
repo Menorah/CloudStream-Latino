@@ -122,7 +122,7 @@ object PlaybackProbe {
                     val targets = listOf(
                         "latest ep (${firstEpCardUrl.substringAfter("/serie/")})" to epParentLoad.episodes.last().data,
                         "hotd s1e1" to hotdLoad.episodes.first().data,
-                        "latest movie (${latestMovieCard.title})" to latestMovieLoad.dataUrl,
+                        "latest movie (${latestMovieCard.name})" to latestMovieLoad.dataUrl,
                         "matrix" to matrixLoad.dataUrl,
                     )
 
