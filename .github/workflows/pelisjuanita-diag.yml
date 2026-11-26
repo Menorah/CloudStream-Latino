@@ -1,4 +1,4 @@
-name: Sonda Byse Te-nt-ct y Busqueda JS Diag
+name: Sonda Byse Te/Router/Pow y Busqueda Func Diag
 on:
   push:
     branches: ['arena/**']
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 1. Byse Te/nt/Et/ct & pow access endpoints
+      - name: 1. Byse Te, router, and pow tail
         shell: python3 {0}
         run: |
           import re, urllib.request
@@ -21,48 +21,36 @@ jobs:
           ua = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
           def get(url):
               return urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': ua, 'Referer': 'https://n1mwq.org/'}), timeout=15).read().decode('utf-8', 'replace')
+          idx_js = get('https://n1mwq.org/assets/index-DocunfmE.js')
           vp = get('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js')
           pw = get('https://n1mwq.org/assets/pow-DEJGtdh2.js')
-          idx = vp.find('wt=(')
-          emit('vp_before_wt', vp[max(0, idx-2500):idx+500])
-          # Also find callers of Et(
-          callers = [vp[max(0, m.start()-300):m.end()+500] for m in re.finditer(r'\bEt\(', vp)]
-          emit('vp_et_callers', '\n---\n'.join(callers[:6]))
-          # Tail of pow-DEJGtdh2.js (after noble-curves)
-          idx_mt = pw.find('/api/videos/access')
-          emit('pow_tail', pw[max(0, idx_mt-300):idx_mt+6000])
+          m_te = re.search(r'(Te=|Zt=)', vp)
+          emit('vp_te', vp[max(0, m_te.start()-200):m_te.start()+2000] if m_te else 'no Te')
+          # Also check /api/videos/ in vp
+          hits_v = [vp[max(0, m.start()-150):m.end()+250] for m in re.finditer(r'/api/videos/', vp)]
+          emit('vp_apivideos', '\n---\n'.join(hits_v[:8]))
+          # Check videoPagesBundle routes in index-DocunfmE.js
+          hits_r = [idx_js[max(0, m.start()-250):m.end()+250] for m in re.finditer(r'videoPagesBundle|embed_frame_url|path:"/e/|path:"/:', idx_js)]
+          emit('idx_routes', '\n---\n'.join(hits_r[:10]))
+          # Tail of pow-DEJGtdh2.js from hardware_concurrency to end
+          hc = pw.find('hardware_concurrency')
+          emit('pow_end', pw[hc:])
 
-      - name: 2. Check busqueda.zip URL via curl & extract
-        shell: bash
+      - name: 2. Busqueda script.js realizarBusqueda & routes
+        shell: python3 {0}
         run: |
-          python3 - <<'PY'
-          import re, urllib.request, zipfile, io
+          import io, re, urllib.request, zipfile
           def emit(title, text):
               for i in range(0, len(text), 3500):
                   chunk = text[i:i+3500].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
                   print(f'::notice title={title}_{i//3500}::{chunk}')
-          ua = 'Mozilla/5.0 (Mozilla/5.0) AppleWebKit/537.36'
+          ua = 'Mozilla/5.0 AppleWebKit/537.36'
           html = urllib.request.urlopen(urllib.request.Request('https://tmpfiles.org/w5Azv6U6dMIa/busqueda.zip', headers={'User-Agent': ua}), timeout=15).read().decode('utf-8', 'replace')
-          m = re.search(r'href="(https?://tmpfiles\.org/dl/[^"]+)"', html)
-          dl = m.group(1) if m else 'https://tmpfiles.org/dl/w5Azv6U6dMIa/busqueda.zip'
-          emit('dl_url', dl)
-          try:
-              zbytes = urllib.request.urlopen(urllib.request.Request(dl, headers={'User-Agent': ua}), timeout=20).read()
-              zf = zipfile.ZipFile(io.BytesIO(zbytes))
-              for name in zf.namelist():
-                  if name.endswith('.html') and zf.getinfo(name).file_size > 0:
-                      txt = zf.read(name).decode('utf-8', 'replace')
-                      gm = re.search(r'<div class="grid-container">.*?(?:<footer|</body>)', txt, re.S)
-                      if gm:
-                          cleaned = re.sub(r'<style[^>]*>.*?</style>', '', gm.group(0), flags=re.S)
-                          cleaned = re.sub(r'\s+', ' ', cleaned)
-                          emit('grid', cleaned[:6500])
-                  elif name.endswith('script.js.download'):
-                      js = zf.read(name).decode('utf-8', 'replace')
-                      for pat in ['realizarBusqueda', 'cargarPeliculas', 'cargarSeries', 'pagina']:
-                          idx = js.find(pat)
-                          if idx >= 0:
-                              emit('js_' + pat, js[max(0, idx-120):idx+1800])
-          except Exception as e:
-              emit('zip_err', repr(e))
-          PY
+          dl = re.search(r'href="(https?://tmpfiles\.org/dl/[^"]+)"', html).group(1)
+          zf = zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(urllib.request.Request(dl, headers={'User-Agent': ua}), timeout=20).read()))
+          js = [zf.read(n).decode('utf-8', 'replace') for n in zf.namelist() if n.endswith('script.js.download')][0]
+          for m in re.finditer(r'function\s+realizarBusqueda|searchIndex|cargarPeliculas\s*\(', js):
+              emit('js_' + str(m.start()), js[max(0, m.start()-100):m.start()+2200])
+          # Also check lines 640-780
+          lines = js.splitlines()
+          emit('js_lines_640_800', '\n'.join(f'{i+1}: {l}' for i, l in enumerate(lines) if 640 <= i+1 <= 800))
