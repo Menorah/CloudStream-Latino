@@ -8,15 +8,9 @@ permissions:
   contents: read
 jobs:
   probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        part: ['1a', '1b', '1c', '3a', '4c', '4d']
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: python3 -c "import bs4" 2>/dev/null || python3 -m pip install --break-system-packages -q beautifulsoup4
-      - run: python3 scripts/pelisjuanita_probe.py --download --part ${{ matrix.part }} --slice 0:9
-      - run: python3 scripts/pelisjuanita_probe.py --part ${{ matrix.part }} --slice 9:18
-      - run: python3 scripts/pelisjuanita_probe.py --part ${{ matrix.part }} --slice 18:27
+      - run: python3 scripts/pelisjuanita_probe.py --download --part 6 --slice 0:9
