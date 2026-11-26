@@ -9,5 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect Voe target, StreamWish loader, and menu hrefs
+      - name: Test VOE ALTCHA, StreamHLS, StreamWish main.js, and site catalog endpoints
         run: python3 scripts/poseidon_bis_probe.py
