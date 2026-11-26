@@ -393,5 +393,23 @@ class PelisJuanitaDataTest {
         )
 
         assertEquals(32, PelisJuanitaVsembedCrypto.encryptHex("12345", "vsembed.com").length)
+
+        // Byse AES-256-GCM playback decryption check
+        val byseKey1 = ByteArray(16) { it.toByte() }
+        val byseKey2 = ByteArray(16) { (it + 16).toByte() }
+        val byseIv = ByteArray(12) { (it + 1).toByte() }
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            SecretKeySpec(byseKey1 + byseKey2, "AES"),
+            javax.crypto.spec.GCMParameterSpec(128, byseIv),
+        )
+        val plain = """{"sources":[{"url":"https://edge.bysesukior.com/hls/stream.m3u8"}]}""".toByteArray(StandardCharsets.UTF_8)
+        val enc = cipher.doFinal(plain)
+        fun b64Url(b: ByteArray) = PelisJuanitaCrypto.encodeBase64(b).replace('+', '-').replace('/', '_').trimEnd('=')
+        assertEquals(
+            "https://edge.bysesukior.com/hls/stream.m3u8",
+            PelisJuanitaByseCrypto.decryptPlayback(b64Url(byseIv), b64Url(enc), listOf(b64Url(byseKey1), b64Url(byseKey2))),
+        )
     }
 }
