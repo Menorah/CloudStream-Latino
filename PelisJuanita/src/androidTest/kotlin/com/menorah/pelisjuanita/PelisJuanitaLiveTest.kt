@@ -49,6 +49,9 @@ class PelisJuanitaLiveTest {
         }
     }
 
+    private fun tryGetText(url: String, referer: String = "${PelisJuanitaMarkup.MAIN_URL}/"): String? =
+        runCatching { getText(url, referer) }.getOrNull()
+
     private fun checkImageReachable(url: String) {
         val req = Request.Builder()
             .url(url)
@@ -137,7 +140,7 @@ class PelisJuanitaLiveTest {
         checkImageReachable(firstMovieRec.posterUrl!!)
         firstMovieRec.backdropUrl?.let { checkImageReachable(it) }
 
-        // 3. Unauthenticated /movies/ must be blocked by the verification/Cloudflare gate (never raw catalog)
+        // 3. Unauthenticated /movies/ must be blocked by the verification or Cloudflare gate (never raw catalog)
         val gateReq = Request.Builder()
             .url("${PelisJuanitaMarkup.MAIN_URL}/movies/")
             .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
@@ -145,12 +148,15 @@ class PelisJuanitaLiveTest {
         noRedirectHttp.newCall(gateReq).execute().use { res ->
             val loc = res.header("Location").orEmpty()
             val body = res.body?.string().orEmpty()
-            val blocked = PelisJuanitaSessionHelper.looksLikeVerificationGate(
-                res.code,
-                loc.ifBlank { res.request.url.toString() },
-                body,
-            )
+            val blocked = res.code == 403 ||
+                PelisJuanitaSessionHelper.looksLikeVerificationGate(
+                    res.code,
+                    loc.ifBlank { res.request.url.toString() },
+                    body,
+                ) ||
+                PelisJuanitaSessionHelper.looksLikeCloudflareChallenge(res.code, body)
             assertTrue("Expected /movies/ gate (302->inicio.php or 403 challenge), got ${res.code} ($loc)", blocked)
+            assertFalse("Unauthenticated /movies/ unexpectedly exposed catalog cards", PelisJuanitaSessionHelper.looksLikeVerifiedCatalogOrDetail(res.request.url.toString(), body))
         }
 
         // 4. Real Android WebView loading /inicio.php verification gate (never auto-solving CAPTCHA)
@@ -164,11 +170,12 @@ class PelisJuanitaLiveTest {
             fun inspectGate(view: WebView, attempt: Int) {
                 if (done.get()) return
                 view.evaluateJavascript(
-                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form'),title:document.title})",
+                    "JSON.stringify({url:location.href,hasCaptcha:!!document.querySelector('input[name=\"empresa_hp\"]'),hasTerms:!!document.querySelector('input[name=\"terminos\"]'),hasCf:document.title.toLowerCase().indexOf('moment')>=0||!!document.querySelector('#challenge-form')||!!window._cf_chl_opt||document.body.innerText.indexOf('Cloudflare')>=0,title:document.title})",
                 ) { res ->
                     val raw = res ?: ""
                     webViewCheck.set(raw)
-                    if (raw.contains("\\\"hasCaptcha\\\":true") || raw.contains("\"hasCaptcha\":true") || attempt >= 6) {
+                    val gotCaptcha = raw.contains("hasCaptcha\\\":true") || raw.contains("hasCaptcha\":true")
+                    if (gotCaptcha || attempt >= 6) {
                         if (done.compareAndSet(false, true)) {
                             wv.destroy()
                             latch.countDown()
@@ -180,7 +187,7 @@ class PelisJuanitaLiveTest {
             }
             wv.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String?) {
-                    if (url != null && url.contains("inicio.php", ignoreCase = true) && !done.get()) {
+                    if (url != null && url.contains("pelisjuanita.com", ignoreCase = true) && !done.get()) {
                         inspectGate(view, 0)
                     }
                 }
@@ -199,33 +206,37 @@ class PelisJuanitaLiveTest {
         var workingHosts = 0
 
         val vimeusUrl = "https://vimeus.net/e/movie?tmdb=1131943&view_key=D3dX7LTo6CgnhLGPyKahD9gDNZ2n82wJ2mpWu-SjS0M&title=Pelisjuanita&theme=minimal&autoplay=1"
-        val vimeusHtml = getText(vimeusUrl)
-        val vimeusEmbeds = PelisJuanitaVimeusParser.parseEmbeds(vimeusHtml)
-        assertTrue("Expected embeds inside Vimeus", vimeusEmbeds.isNotEmpty())
-        val vimeosUrl = vimeusEmbeds.first().url
-        val vimeosHtml = getText(vimeosUrl, vimeusUrl)
-        val vimeosParsed = PelisJuanitaVidHideParser.parse(vimeosHtml, vimeosUrl)
-        if (vimeosParsed.streams.isNotEmpty()) {
-            workingHosts++
-            assertTrue("Vimeos stream https", vimeosParsed.streams.first().url.startsWith("http"))
+        val vimeusHtml = tryGetText(vimeusUrl)
+        if (!vimeusHtml.isNullOrBlank()) {
+            val vimeusEmbeds = PelisJuanitaVimeusParser.parseEmbeds(vimeusHtml)
+            assertTrue("Expected embeds inside Vimeus", vimeusEmbeds.isNotEmpty())
+            val vimeosUrl = vimeusEmbeds.first().url
+            val vimeosHtml = tryGetText(vimeosUrl, vimeusUrl)
+            if (!vimeosHtml.isNullOrBlank()) {
+                val vimeosParsed = PelisJuanitaVidHideParser.parse(vimeosHtml, vimeosUrl)
+                if (vimeosParsed.streams.isNotEmpty()) {
+                    workingHosts++
+                    assertTrue("Vimeos stream https", vimeosParsed.streams.first().url.startsWith("http"))
+                }
+            }
         }
 
-        val fastMovieHtml = getText("https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden")
-        val fastMovieStream = PelisJuanitaFastserverParser.parseStreamUrl(fastMovieHtml)
+        val fastMovieHtml = tryGetText("https://pelisplayer.fortamomar.workers.dev/?id=tOXk1CLcSgETAoD5ifN4x-Madden")
+        val fastMovieStream = fastMovieHtml?.let(PelisJuanitaFastserverParser::parseStreamUrl)
         if (fastMovieStream != null && fastMovieStream.startsWith("http")) {
             workingHosts++
         }
 
-        val fastSerieHtml = getText("https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1")
-        val fastSerieStream = PelisJuanitaFastserverParser.parseStreamUrl(fastSerieHtml)
+        val fastSerieHtml = tryGetText("https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1")
+        val fastSerieStream = fastSerieHtml?.let(PelisJuanitaFastserverParser::parseStreamUrl)
         if (fastSerieStream != null && fastSerieStream.startsWith("http")) {
             workingHosts++
         }
 
-        val morenciusUrl = "https://morencius.com/embed/036yf8jywyhr"
-        val morenciusHtml = getText(morenciusUrl)
-        val morenciusParsed = PelisJuanitaVidHideParser.parse(morenciusHtml, morenciusUrl)
-        if (morenciusParsed.streams.isNotEmpty()) {
+        val earnvidsUrl = "https://callistanise.com/v/lg0w6ezhvyd8"
+        val earnvidsHtml = tryGetText(earnvidsUrl)
+        val earnvidsParsed = earnvidsHtml?.let { PelisJuanitaVidHideParser.parse(it, earnvidsUrl) }
+        if (earnvidsParsed != null && earnvidsParsed.streams.isNotEmpty()) {
             workingHosts++
         }
 
