@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspeccionar wvdetect.js, player.js y abrir stellarconductornexus en Chrome Xvfb
+      - name: Inspeccionar inline vsembed, player.js stream_urls y resolver Turnstile en Chrome
         run: |
           python3 -m pip install -q playwright
           python3 -m playwright install chromium || true
@@ -20,10 +20,8 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          TARGETS = [
-              ("BigGirls_1477963", "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"),
-              ("SkinCrawler_1843139", "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"),
-          ]
+          U1477963 = "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
+          U1843139 = "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"
 
           def emit(title, txt):
               clean = str(txt).replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
@@ -36,40 +34,41 @@ jobs:
               with op.open(urllib.request.Request(url, headers=h), timeout=15) as r:
                   return r.read().decode("utf-8", "replace"), r.geturl()
 
-          landings = []
-          player_sample = None
-          for label, url in TARGETS:
-              b1, u1 = ufetch(url, "https://pelisjuanita.com/")
-              if label.startswith("BigGirls"):
-                  emit("MOVIE_HTML_SCRIPTS", "|".join(re.findall(r'<script[^>]*src="([^"]+)"', b1)))
-              api_rel = re.search(r'data-api="([^"]+)"', b1).group(1).replace("&amp;", "&")
-              b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
-              landing = json.loads(b2)["src"]
-              b3, u3 = ufetch(landing, "https://vsembed.su/")
-              cfg = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3).group(1))
-              player_u = urllib.parse.urljoin(u3, cfg["playerUrl"])
-              landings.append((label, landing, player_u, u3))
-              if not player_sample:
-                  player_sample, _ = ufetch(player_u, u3)
+          # Inspect vsembed.su inline scripts & adcheck/sbx to see what sends Playwright to about:blank
+          b1_a, u1_a = ufetch(U1477963, "https://pelisjuanita.com/")
+          emit("MOVIE_HTML_ABOUT", " | ".join(m.group(0)[:240] for m in re.finditer(r'.{0,120}(about:blank|DisableDevtool|webdriver|devtools).{0,120}', b1_a, re.I)) or "no_inline_match")
+          ad_js, _ = ufetch("https://vsembed.su/assets/adcheck.js?v=1795647930", u1_a)
+          emit("ADCHECK_ABOUT", ad_js[:1500])
+          sbx_js, _ = ufetch("https://vsembed.su/assets/sbx.js?v=1786671805", u1_a)
+          emit("SBX_JS", sbx_js[:1500])
 
-          # Fetch wvdetect.js & check player.js references to pli/plc/wv_beacon/vs:verified
-          m_wv = re.search(r'src="(/embed/iframe_player/assets/wvdetect\.js[^"]*)"', player_sample)
-          if m_wv:
-              wv_js, _ = ufetch(urllib.parse.urljoin(landings[0][2], m_wv.group(1)), landings[0][2])
-              emit("WVDETECT_JS", wv_js[:3400])
-              if len(wv_js) > 3400:
-                  emit("WVDETECT_JS_2", wv_js[3400:6800])
+          # Get landing for 1843139 WITHOUT consuming landing itself
+          b1_b, u1_b = ufetch(U1843139, "https://pelisjuanita.com/")
+          api_rel_b = re.search(r'data-api="([^"]+)"', b1_b).group(1).replace("&amp;", "&")
+          b2_b, _ = ufetch(urllib.parse.urljoin(u1_b, api_rel_b), u1_b)
+          landing_b = json.loads(b2_b)["src"]
 
-          m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', player_sample)
-          if m_pj:
-              p_js, _ = ufetch(urllib.parse.urljoin(landings[0][2], m_pj.group(1)), landings[0][2])
-              hits = []
-              for kw in ["vs:verified", "apiToken", "pli", "plc", "generate", "stream_urls", "TokenLoader", "token="]:
-                  for m in re.finditer(re.escape(kw), p_js):
-                      hits.append(f"[{kw}] " + p_js[max(0, m.start()-60):m.end()+140])
-                      if len(hits) >= 24:
-                          break
-              emit("PLAYER_JS_HITS", "\n".join(hits)[:3400])
+          # Also inspect player.js around bootWithMeta / stream_urls / data.vidsrc.sh using 1477963
+          api_rel_a = re.search(r'data-api="([^"]+)"', b1_a).group(1).replace("&amp;", "&")
+          b2_a, _ = ufetch(urllib.parse.urljoin(u1_a, api_rel_a), u1_a)
+          landing_a = json.loads(b2_a)["src"]
+          b3_a, u3_a = ufetch(landing_a, "https://vsembed.su/")
+          cfg_a = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', b3_a).group(1))
+          b4_a, u4_a = ufetch(urllib.parse.urljoin(u3_a, cfg_a["playerUrl"]), u3_a)
+          m_pj = re.search(r'src="(/embed/iframe_player/assets/player\.js[^"]*)"', b4_a)
+          p_js, _ = ufetch(urllib.parse.urljoin(u4_a, m_pj.group(1)), u4_a)
+          idx = p_js.find("function bootWithMeta")
+          if idx == -1: idx = p_js.find("bootWithMeta")
+          emit("PLAYER_JS_BOOT", p_js[max(0, idx-200):idx+3200])
+          idx2 = p_js.find("stream_urls")
+          if idx2 == -1: idx2 = p_js.find("/pl/")
+          emit("PLAYER_JS_STREAM", p_js[max(0, idx2-300):idx2+3000])
+
+          # Fresh landing_a WITHOUT consuming landing_a
+          b1_a2, u1_a2 = ufetch(U1477963, "https://pelisjuanita.com/")
+          api_rel_a2 = re.search(r'data-api="([^"]+)"', b1_a2).group(1).replace("&amp;", "&")
+          b2_a2, _ = ufetch(urllib.parse.urljoin(u1_a2, api_rel_a2), u1_a2)
+          landing_a_fresh = json.loads(b2_a2)["src"]
 
           with sync_playwright() as p:
               try:
@@ -78,33 +77,41 @@ jobs:
                   browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
               ctx = browser.new_context(viewport={"width": 1280, "height": 720}, user_agent=UA)
               ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
-              for label, landing, player_u, u3 in landings:
+
+              tests = [
+                  ("BigGirls_vsembed_aborts", U1477963, "https://pelisjuanita.com/", True),
+                  ("SkinCrawler_landing_fresh", landing_b, "https://vsembed.su/", True),
+                  ("BigGirls_landing_fresh", landing_a_fresh, "https://vsembed.su/", False),
+              ]
+              for label, target_u, ref_u, abort_extras in tests:
                   page = ctx.new_page()
-                  page.route(re.compile(r"disable-devtool|histats|acscdn|cloudflareinsights", re.I), lambda r: r.abort())
+                  if abort_extras:
+                      page.route(re.compile(r"disable-devtool|adcheck|sbx|histats|acscdn|cloudflareinsights", re.I), lambda r: r.abort())
+                  else:
+                      page.route(re.compile(r"disable-devtool|histats|acscdn|cloudflareinsights", re.I), lambda r: r.abort())
                   events = []
                   found = {"stream": "", "headers": {}, "verify": ""}
                   def on_req(req):
                       u = req.url
                       low = u.lower()
-                      if any(k in low for k in ["/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "wv_beacon", "turnstile", "/pl/", "/pli/", "/plc/", "challenges.cloudflare"]):
+                      if any(k in low for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "data.vidsrc.sh", ".wasm", "generate.php", "verify.php", "wv_beacon", "turnstile", "/pl/", "/pli/", "/plc/", "challenges.cloudflare"]):
                           events.append(f"REQ:{u[:110]}")
                       if ("/pl/" in low or "/pli/" in low or "/plc/" in low) and "token=" in low and not found["stream"]:
                           found["stream"] = u
                           found["headers"] = dict(req.headers)
                   def on_resp(resp):
                       u = resp.url
-                      if any(k in u for k in ["verify.php", "generate.php", "data.vidsrc.sh", "wv_beacon", "challenges.cloudflare"]):
+                      if any(k in u for k in ["vs_src.php", "/embed/movie/", "/embed/player/", "verify.php", "generate.php", "data.vidsrc.sh", "challenges.cloudflare"]):
                           try:
-                              txt = resp.text()[:180]
+                              txt = resp.text()[:160] if "verify.php" in u or "vs_src.php" in u or "data.vidsrc" in u else ""
                               if "verify.php" in u: found["verify"] = txt
                               events.append(f"RESP:{resp.status}:{u[:55]}:{txt}")
                           except Exception:
                               events.append(f"RESP:{resp.status}:{u[:55]}")
                   page.on("request", on_req)
                   page.on("response", on_resp)
-                  page.on("console", lambda m: events.append(f"CON:{m.type}:{m.text[:100]}") if m.type in ("error", "warning") else None)
                   page.on("framenavigated", lambda fr: events.append(f"NAV:{fr.url[:85]}"))
-                  page.goto(landing, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
+                  page.goto(target_u, referer=ref_u, wait_until="domcontentloaded", timeout=25000)
 
                   for step in range(45):
                       if found["stream"]:
@@ -138,8 +145,7 @@ jobs:
                                   rateLimited: !!(window.CONFIG && window.CONFIG.rateLimited),
                                   gateClass: (document.getElementById('tsGate') || {}).className || '',
                                   gateText: ((document.getElementById('tsGate') || {}).innerText || '').slice(0, 120),
-                                  errText: ((document.getElementById('errorText') || {}).innerText || ''),
-                                  iframeSrcs: Array.from(document.querySelectorAll('iframe')).map(i => i.src)
+                                  errText: ((document.getElementById('errorText') || {}).innerText || '')
                               })""")
                           except Exception as e:
                               ts_info = {"eval_err": repr(e)}
