@@ -124,14 +124,15 @@ class PelisJuanitaProvider(
                 error = t
             }
 
-            if (appContext != null &&
+            val webCtx = appContext
+            if (webCtx != null &&
                 (error != null || PelisJuanitaSessionHelper.looksLikeCloudflareChallenge(code, body))
             ) {
                 val webRes = runCatching {
                     if (postForm != null) {
-                        PelisJuanitaWebTransport.post(appContext, url, referer, postForm, session.userAgent.takeIf { it.isNotBlank() })
+                        PelisJuanitaWebTransport.post(webCtx, url, referer, postForm, session.userAgent.takeIf { it.isNotBlank() })
                     } else {
-                        PelisJuanitaWebTransport.get(appContext, url, referer, session.userAgent.takeIf { it.isNotBlank() })
+                        PelisJuanitaWebTransport.get(webCtx, url, referer, session.userAgent.takeIf { it.isNotBlank() })
                     }
                 }.getOrNull()
                 if (webRes != null) {

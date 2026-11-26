@@ -460,16 +460,8 @@ internal object PelisJuanitaMarkup {
             ?.takeIf { it.isNotEmpty() }
             ?: return null
 
-        val posterUrl = resolvePosterUrl(
-            doc.selectFirst(".titleInfo .columna.imagen img")?.let {
-                it.attr("data-src").ifBlank { it.attr("src") }
-            },
-        )
-        val backdropUrl = resolveBackdropUrl(
-            doc.selectFirst(".columna-principal .Image img#cpt")?.let {
-                it.attr("data-src").ifBlank { it.attr("src") }
-            },
-        )
+        val posterUrl = resolvePosterUrl(elementImageSrc(doc.selectFirst(".titleInfo .columna.imagen img")))
+        val backdropUrl = resolveBackdropUrl(elementImageSrc(doc.selectFirst(".columna-principal .Image img#cpt")))
         val synopsis = doc.selectFirst(".titleInfo p.sinopsis")?.text()?.trim()?.takeIf { it.isNotEmpty() }
         val year = doc.selectFirst(".titleInfo .info-linea a[href*=\"/release/\"]")?.text()?.let { extractYear(it) }
             ?: extractYear(doc.selectFirst(".titleInfo .info-linea")?.text().orEmpty())
@@ -510,16 +502,8 @@ internal object PelisJuanitaMarkup {
 
         val target = parseTargetUrl(publicUrl)
         val seriesSlug = target?.slug.orEmpty()
-        val posterUrl = resolvePosterUrl(
-            doc.selectFirst(".titleInfo .columna.imagen img")?.let {
-                it.attr("data-src").ifBlank { it.attr("src") }
-            },
-        )
-        val backdropUrl = resolveBackdropUrl(
-            doc.selectFirst(".columna-principal .Image img#cpt")?.let {
-                it.attr("data-src").ifBlank { it.attr("src") }
-            },
-        )
+        val posterUrl = resolvePosterUrl(elementImageSrc(doc.selectFirst(".titleInfo .columna.imagen img")))
+        val backdropUrl = resolveBackdropUrl(elementImageSrc(doc.selectFirst(".columna-principal .Image img#cpt")))
         val synopsis = doc.selectFirst(".titleInfo p.sinopsis")?.text()?.trim()?.takeIf { it.isNotEmpty() }
         val year = doc.selectFirst(".titleInfo .info-linea a[href*=\"/release/\"]")?.text()?.let { extractYear(it) }
             ?: extractYear(doc.selectFirst(".titleInfo .info-linea")?.text().orEmpty())
@@ -673,10 +657,15 @@ internal object PelisJuanitaMarkup {
         for (item in doc.select(".carousel-actores .carousel-actores-item")) {
             val name = item.selectFirst("p strong")?.text()?.trim()?.takeIf { it.isNotEmpty() } ?: continue
             val role = item.select("p").getOrNull(1)?.text()?.trim()?.takeIf { it.isNotEmpty() }
-            val img = item.selectFirst("img")?.let { resolvePosterUrl(it.attr("data-src").ifBlank { it.attr("src") }) }
+            val img = resolvePosterUrl(elementImageSrc(item.selectFirst("img")))
             out += PelisJuanitaActor(name = name, role = role, imageUrl = img)
         }
         return out
+    }
+
+    private fun elementImageSrc(el: org.jsoup.nodes.Element?): String? {
+        if (el == null) return null
+        return el.attr("data-src").ifBlank { el.attr("data-lazy-src") }.ifBlank { el.attr("src") }
     }
 
     private fun parseTrailerUrl(doc: org.jsoup.nodes.Document): String? {
@@ -698,7 +687,7 @@ internal object PelisJuanitaMarkup {
             val title = anchor.selectFirst("h2")?.text()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: cleanAltTitle(img?.attr("alt"))
                 ?: continue
-            val poster = resolvePosterUrl(img?.attr("data-src")?.ifBlank { img.attr("src") } ?: img?.attr("src"))
+            val poster = resolvePosterUrl(elementImageSrc(img))
             out += PelisJuanitaCatalogCard(
                 title = title,
                 url = target.publicUrl,
