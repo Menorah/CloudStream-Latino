@@ -134,13 +134,13 @@ object PlaybackProbe {
                         "FastserverSerie" to "https://seriesplayer.fortamomar.workers.dev/?id=TnGPAAqrTEHHepUKWTq8B-MobLand/1",
                         "Earnvids" to "https://callistanise.com/v/lg0w6ezhvyd8",
                         "StreamWish" to "https://hglink.to/e/u8jqwoe4cnpt",
-                        "StreamWishVsembed" to "https://streamwish.to/e/k9u77dklzfob",
+                        "Byse" to "https://bysesukior.com/e/92rgcn88ka85",
+                        "MixDrop" to "https://mixdrop.top/e/7kgq9r3vcmjjx4",
                         "Voe" to "https://voe.sx/e/ltvamjdzsvxv",
                         "Savefiles" to "https://savefiles.com/e/lpkobe2ki65z",
                         "Lulustream" to "https://lulustream.com/e/zxfcz3pz68ds",
                         "Vidara" to "https://vidara.to/e/HnuAfGnH5Z97l",
-                        "Byse" to "https://bysesukior.com/e/92rgcn88ka85",
-                        "MixDrop" to "https://mixdrop.top/e/7kgq9r3vcmjjx4",
+                        "StreamWishVsembed" to "https://streamwish.to/e/k9u77dklzfob",
                     )
 
                     val passedServers = mutableListOf<String>()
@@ -169,10 +169,9 @@ object PlaybackProbe {
                                 passedServers.add("$srv(${link.name})")
                                 Log.i("CSPlaybackProbe", "PASS server $srv via ${link.name} frame")
                                 break
-                            } catch (e: CancellationException) {
-                                throw e
                             } catch (t: Throwable) {
-                                errs.add("${link.name}: ${t.javaClass.simpleName}:${t.message?.take(100)}")
+                                if (t is CancellationException && t !is TimeoutCancellationException) throw t
+                                errs.add("${link.name}[${link.url.take(60)}]: ${t.javaClass.simpleName}:${t.message?.take(100)}")
                             }
                         }
                         if (!played) failedServers.add("$srv -> $errs")
