@@ -113,6 +113,11 @@ class PelisJuanitaLiveTest {
         )
         assertEquals(1, bareSeasonEps.size)
         assertEquals(32, PelisJuanitaVsembedCrypto.encryptHex("6168w", "vsembed.com").length)
+        assertEquals("1f5101f5dd1f5111f6aa1f6e126a1767", PelisJuanitaVsembedCrypto.generateIvHex("vsembed.com"))
+        val byseKp = PelisJuanitaByseCrypto.ecKeyPairP256()
+        val byseSig = PelisJuanitaCrypto.decodeBase64Flexible(PelisJuanitaByseCrypto.signChallengeNonce("android-nonce", byseKp))
+        assertEquals(64, byseSig.size)
+        assertNotNull(PelisJuanitaBysePow.solveBlocking("5dd6af337978c416cc2cf9a6af73daad", 12))
         assertTrue(PelisJuanitaSessionHelper.looksLikeVerificationGate(302, "https://pelisjuanita.com/inicio.php", ""))
         assertTrue(PelisJuanitaSessionHelper.shouldTryWebTransport(403, "${PelisJuanitaMarkup.MAIN_URL}/movies/", "", null))
     }
@@ -156,6 +161,14 @@ class PelisJuanitaLiveTest {
         val parsedMatrix = PelisJuanitaMarkup.parseSearchJson(rawMatrix)
         assertNotNull("Matrix search parsed", parsedMatrix)
         assertTrue("Expected Matrix search results", parsedMatrix!!.items.isNotEmpty())
+
+        val rawSkinCrawler = getText(PelisJuanitaMarkup.buildSearchApiUrl("skin crawler", 1))
+        val parsedSkinCrawler = PelisJuanitaMarkup.parseSearchJson(rawSkinCrawler)
+        val skinRec = parsedSkinCrawler?.items?.firstOrNull { it.slug == "the-skin-crawler-murders" }
+        if (skinRec != null) {
+            assertNotNull("Expected poster for the-skin-crawler-murders", skinRec.posterUrl)
+            checkImageReachable(skinRec.backdropUrl ?: skinRec.posterUrl!!)
+        }
 
         // 2. TMDB poster + backdrop image reachability & Bitmap decoding
         val firstMovieRec = parsedPage1.items.firstOrNull { it.kind == PelisJuanitaItemKind.Movie && !it.posterUrl.isNullOrBlank() }
@@ -263,6 +276,30 @@ class PelisJuanitaLiveTest {
             workingHosts++
         }
 
-        assertTrue("Expected >= 3 live video host parsers succeeding, got $workingHosts", workingHosts >= 3)
+        // Verify vsembed AES-CBC decryption with live endpoint
+        val vsembedEnc = PelisJuanitaVsembedCrypto.encryptHex("cjvk", "vsembed.com")
+        val vsembedRes = runCatching {
+            val req = Request.Builder()
+                .url("https://vsembed.com/api/stream/tracking?c=$vsembedEnc&ld=1")
+                .header("User-Agent", PelisJuanitaSessionHelper.DEFAULT_USER_AGENT)
+                .header("Referer", "https://vsembed.com/cjvk")
+                .build()
+            http.newCall(req).execute().use { r -> r.header("x-tracking") }
+        }.getOrNull()
+        val vsembedDec = vsembedRes?.let { PelisJuanitaVsembedCrypto.decryptHex(it, "vsembed.com") }
+        if (vsembedDec != null && vsembedDec.contains("master", ignoreCase = true)) {
+            workingHosts++
+        }
+
+        // Verify MixDrop wurl unpacking across mirrors
+        val mixHtml = tryGetText("https://mxdrop.click/e/7kgq9r3vcmjjx4") ?: tryGetText("https://mixdrop.top/e/7kgq9r3vcmjjx4")
+        if (!mixHtml.isNullOrBlank()) {
+            val unpackedMix = PelisJuanitaVidHideParser.unpackAll(mixHtml)
+            if (unpackedMix.contains("wurl", ignoreCase = true) || mixHtml.contains("wurl", ignoreCase = true)) {
+                workingHosts++
+            }
+        }
+
+        assertTrue("Expected >= 4 live video host parsers succeeding, got $workingHosts", workingHosts >= 4)
     }
 }

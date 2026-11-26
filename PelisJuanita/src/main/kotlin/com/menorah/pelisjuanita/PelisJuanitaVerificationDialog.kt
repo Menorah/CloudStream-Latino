@@ -539,8 +539,12 @@ internal object PelisJuanitaWebTransport {
                                 handler.postDelayed({ checkReady(view, url, expectedGen) }, 350L)
                                 return@evaluateJavascript
                             }
-                            if (!isAjax && (httpStatus == 403 || httpStatus == 503) && pageText.isBlank()) {
-                                finish(Result.success(PelisJuanitaWebResponse(httpStatus, pageUrl, pageText)))
+                            val isEmptyDom = pageText.isBlank() ||
+                                (!pageText.contains("<script", ignoreCase = true) &&
+                                    !pageText.contains("<form", ignoreCase = true) &&
+                                    org.jsoup.Jsoup.parse(pageText).text().isBlank())
+                            if (!isAjax && (httpStatus == 403 || httpStatus == 503) && isEmptyDom) {
+                                finish(Result.success(PelisJuanitaWebResponse(httpStatus, pageUrl, "")))
                                 return@evaluateJavascript
                             }
                             if (httpStatus == 0) {
