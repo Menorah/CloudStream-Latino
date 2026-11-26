@@ -9,9 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Probe paging, genres and buildManifest
-        run: python3 scripts/poseidon_bis_probe.py paging
-      - name: Probe movie videos, series seasons and search
-        run: python3 scripts/poseidon_bis_probe.py movie_and_season
-      - name: Probe player.php resolution across hosts
-        run: python3 scripts/poseidon_bis_probe.py players
+      - name: Probe search pagination and JS chunks
+        run: python3 scripts/poseidon_bis_probe.py search_and_chunks
+      - name: Probe player.php internals and cyberlocker hosts
+        run: python3 scripts/poseidon_bis_probe.py player_html_and_hosts

@@ -11,21 +11,21 @@ UA = (
 )
 
 
-def fetch(url, ref="https://www.poseidonhd2.co/", follow_redirects=True):
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
+def fetch(url, ref="https://www.poseidonhd2.co/", extra_headers=None, follow=True):
+    class NoRedir(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             return None
 
-    opener = urllib.request.build_opener() if follow_redirects else urllib.request.build_opener(NoRedirect())
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": UA,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-            "Referer": ref,
-        },
-    )
+    opener = urllib.request.build_opener() if follow else urllib.request.build_opener(NoRedir())
+    hdrs = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "Referer": ref,
+    }
+    if extra_headers:
+        hdrs.update(extra_headers)
+    req = urllib.request.Request(url, headers=hdrs)
     try:
         with opener.open(req, timeout=20) as resp:
             return resp.status, resp.geturl(), dict(resp.headers), resp.read().decode("utf-8", "replace")
@@ -43,144 +43,105 @@ def notice(tag, obj):
 
 def extract_next_data(html):
     m = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
-    if not m:
-        return None
-    return json.loads(m.group(1))
+    return json.loads(m.group(1)) if m else None
 
 
-mode = sys.argv[1] if len(sys.argv) > 1 else "paging"
+mode = sys.argv[1] if len(sys.argv) > 1 else "search_and_chunks"
 
-if mode == "paging":
-    def ids_of(path):
-        st, fu, _, html = fetch("https://www.poseidonhd2.co" + path)
-        nd = extract_next_data(html)
-        if not nd:
-            return {"path": path, "st": st}
-        pp = nd.get("props", {}).get("pageProps", {})
-        items = pp.get("movies") or pp.get("episodes") or pp.get("series") or []
-        ids = [x.get("TMDbId") or x.get("url", {}).get("slug") for x in items[:5]]
-        return {
-            "path": path,
+if mode == "search_and_chunks":
+    # Test search pagination & query behaviors
+    s_tests = [
+        "/search?q=dragon",
+        "/search?q=dragon&page=2",
+        "/search/page/2?q=dragon",
+        "/search?q=love",
+        "/search?q=love&page=2",
+        "/search?q=el",
+        "/search?q=1999",
+    ]
+    s_out = []
+    for p in s_tests:
+        st, fu, _, h = fetch("https://www.poseidonhd2.co" + p)
+        nd = extract_next_data(h)
+        pp = nd.get("props", {}).get("pageProps", {}) if nd else {}
+        items = pp.get("movies") or []
+        s_out.append({
+            "p": p,
             "st": st,
-            "page": pp.get("page"),
             "pages": pp.get("pages"),
-            "count": len(items),
-            "first5": ids,
-            "sample_slug": items[0].get("url", {}).get("slug") if items else None,
-        }
-
-    tests = [
-        "/peliculas", "/peliculas?page=2", "/peliculas/page/2",
-        "/peliculas/estrenos", "/peliculas/estrenos?page=2",
-        "/peliculas/tendencias/dia", "/peliculas/tendencias/semana",
-        "/series", "/series?page=2", "/series/page/2",
-        "/series/estrenos", "/series/tendencias/dia", "/series/tendencias/semana",
-        "/episodios", "/episodios?page=2", "/episodios/page/2",
-        "/genero/accion", "/genero/accion?page=2", "/genero/accion/page/2", "/genero/accion/2",
-        "/search?q=la", "/search?q=la&page=2", "/search?q=dragon",
-    ]
-    out = [ids_of(p) for p in tests]
-    notice("paging_1", out[:8])
-    notice("paging_2", out[8:16])
-    notice("paging_3", out[16:])
-
-    # Check genres and buildManifest
-    _, _, _, home = fetch("https://www.poseidonhd2.co/")
-    bm = re.search(r'src="(/_next/static/[^"]+_buildManifest\.js)"', home)
-    if bm:
-        _, _, _, bm_txt = fetch("https://www.poseidonhd2.co" + bm.group(1))
-        notice("buildManifest", bm_txt)
-
-    genres = [
-        "accion", "animacion", "aventura", "ciencia-ficcion", "comedia", "crimen",
-        "documental", "drama", "familia", "fantasia", "guerra", "historia",
-        "misterio", "musica", "romance", "suspense", "suspenso", "terror", "western",
-    ]
-    g_res = {}
-    for g in genres:
-        st, _, _, h = fetch(f"https://www.poseidonhd2.co/genero/{g}")
-        nd = extract_next_data(h) if st == 200 else None
-        pp = nd.get("props", {}).get("pageProps", {}) if nd else {}
-        g_res[g] = {"st": st, "n": len(pp.get("movies", [])), "pages": pp.get("pages")}
-    notice("genres", g_res)
-
-elif mode == "movie_and_season":
-    for u in [
-        "https://www.poseidonhd2.co/pelicula/1458300/the-mosquito-bowl",
-        "https://www.poseidonhd2.co/pelicula/1300968/los-juegos-del-hambre-amanecer-en-la-cosecha",
-        "https://www.poseidonhd2.co/pelicula/603/the-matrix",
-    ]:
-        st, fu, _, html = fetch(u)
-        nd = extract_next_data(html)
-        if not nd:
-            notice("no_nd", {"u": u, "st": st})
-            continue
-        pp = nd.get("props", {}).get("pageProps", {})
-        tm = dict(pp.get("thisMovie", {}))
-        tm.pop("cast", None)
-        notice("movie_" + u.split("/")[-1][:18], {
-            "st": st,
-            "relatedCount": len(pp.get("relatedMovies", [])),
-            "thisMovie_keys": list(pp.get("thisMovie", {}).keys()),
-            "thisMovie": tm,
+            "page": pp.get("page"),
+            "n": len(items),
+            "first3": [x.get("TMDbId") for x in items[:3]],
         })
+    notice("search_tests", s_out)
 
-    # Also check series hotd season 0, 2, 3 and search?q=la sample types
-    for u in [
-        "https://www.poseidonhd2.co/serie/94997/la-casa-del-dragon",
-        "https://www.poseidonhd2.co/serie/94997/la-casa-del-dragon/temporada/0",
-        "https://www.poseidonhd2.co/serie/94997/la-casa-del-dragon/temporada/2",
-        "https://www.poseidonhd2.co/serie/94997/la-casa-del-dragon/temporada/3",
-        "https://www.poseidonhd2.co/search?q=dragon",
-    ]:
-        st, fu, _, html = fetch(u)
-        nd = extract_next_data(html)
-        pp = nd.get("props", {}).get("pageProps", {}) if nd else {}
-        if "thisSerie" in pp:
-            ts = dict(pp["thisSerie"])
-            seasons_summary = [{"num": s.get("number"), "eps": len(s.get("episodes", []))} for s in ts.get("seasons", [])]
-            ts.pop("seasons", None)
-            ts.pop("cast", None)
-            notice("series_" + u.split("/")[-1], {"st": st, "seasons": seasons_summary, "meta": ts})
-        else:
-            notice("other_" + u.split("/")[-1][:18], {
-                "st": st,
-                "page": nd.get("page") if nd else None,
-                "keys": list(pp.keys()),
-                "movies_sample_slugs": [x.get("url", {}).get("slug") for x in pp.get("movies", [])[:8]],
-            })
+    # Check pelicula, serie, search, index JS chunks for language labels, cyberlockers, and search/nav logic
+    for route in ["/", "/search?q=dragon", "/pelicula/1458300/the-mosquito-bowl"]:
+        _, _, _, h = fetch("https://www.poseidonhd2.co" + route)
+        chunks = re.findall(r'/_next/static/chunks/pages/[^"]+\.js', h)
+        for c in chunks:
+            if "_app" in c:
+                continue
+            _, _, _, js = fetch("https://www.poseidonhd2.co" + c)
+            hits = re.findall(r'videos\.[a-z]+|latino|spanish|english|castellano|subtitulad|search\?[^"\']+|player\.php[^"\']*|/peliculas/[^"\']+|/series/[^"\']+|/genero/[^"\']+', js, re.I)
+            notice("chunk_" + c.split("/")[-1][:24], sorted(set(hits))[:80])
 
-elif mode == "players":
-    # Fetch both a movie (mosquito) and two episodes (hotd 1x1 and 12-12-12 1x4) and inspect player.php
-    pages = [
+elif mode == "player_html_and_hosts":
+    # Get full player.php script structure from 1 example, and resolve all cyberlockers across hotd_1x1 & mosquito & matrix
+    sources = []
+    for label, u in [
+        ("hotd_1x1", "https://www.poseidonhd2.co/serie/94997/la-casa-del-dragon/temporada/1/episodio/1"),
         ("mosquito", "https://www.poseidonhd2.co/pelicula/1458300/the-mosquito-bowl"),
         ("hunger", "https://www.poseidonhd2.co/pelicula/1300968/los-juegos-del-hambre-amanecer-en-la-cosecha"),
-        ("hotd_1x1", "https://www.poseidonhd2.co/serie/94997/la-casa-del-dragon/temporada/1/episodio/1"),
-        ("121212_1x4", "https://www.poseidonhd2.co/serie/254630/12-12-12/temporada/1/episodio/4"),
-    ]
-    for pname, pu in pages:
-        _, _, _, html = fetch(pu)
-        nd = extract_next_data(html)
-        pp = nd.get("props", {}).get("pageProps", {})
-        obj = pp.get("thisMovie") or pp.get("episode") or {}
-        videos = obj.get("videos", {})
-        results = []
-        for lang, items in videos.items():
-            for it in items:
-                p_url = it.get("result")
-                cyber = it.get("cyberlocker")
-                # Check non-redirect response AND followed response
-                st0, fu0, h0, b0 = fetch(p_url, ref="https://www.poseidonhd2.co/", follow_redirects=False)
-                st1, fu1, h1, b1 = fetch(p_url, ref="https://www.poseidonhd2.co/", follow_redirects=True)
-                loc = h0.get("Location") or h0.get("location")
-                scripts = re.findall(r'<script[^>]*>(.*?)</script>', b0, re.S)
-                iframes = re.findall(r'<iframe[^>]+src="([^"]+)"', b0, re.I)
-                urls_in_body = re.findall(r'https?://[^\s"\'<>\\]+', b0)
-                results.append({
-                    "lang": lang,
-                    "cyber": cyber,
-                    "p_url": p_url,
-                    "no_redir": {"st": st0, "loc": loc, "len": len(b0), "iframes": iframes, "urls": [u for u in urls_in_body if "cloudflare" not in u and "w3.org" not in u][:5], "snippet": re.sub(r'\s+', ' ', b0[:400])},
-                    "followed": {"st": st1, "final": fu1, "len": len(b1)},
-                })
-        notice(f"players_{pname}", results)
+        ("matrix", "https://www.poseidonhd2.co/pelicula/603/the-matrix"),
+    ]:
+        _, _, _, h = fetch(u)
+        nd = extract_next_data(h)
+        pp = nd["props"]["pageProps"]
+        obj = pp.get("thisMovie") or pp.get("episode")
+        for lang, arr in obj.get("videos", {}).items():
+            for it in arr:
+                sources.append((label, lang, it.get("cyberlocker"), it.get("result")))
+
+    # Inspect exact JS in player.php for one sample
+    sample_p = sources[0][3]
+    _, _, _, p_html = fetch(sample_p, ref="https://www.poseidonhd2.co/")
+    p_scripts = re.findall(r'<script[^>]*>(.*?)</script>', p_html, re.S)
+    notice("player_php_scripts", [s[:1200] for s in p_scripts if s.strip()])
+
+    # Deduplicate by cyberlocker and test 1-2 per cyberlocker
+    by_cyber = {}
+    for s in sources:
+        by_cyber.setdefault(s[2], []).append(s)
+
+    host_reports = []
+    for cyber, items in by_cyber.items():
+        for label, lang, cyb, p_url in items[:2]:
+            _, _, _, ph = fetch(p_url, ref="https://www.poseidonhd2.co/")
+            # Extract target embed url from player.php
+            m_var = re.search(r"""(?:url|src|link)\s*=\s*['"](https?://[^'"]+)['"]""", ph)
+            if not m_var:
+                urls = [u for u in re.findall(r"""['"](https?://[^'"]+)['"]""", ph) if not any(x in u for x in ["doo.lat", "yandex", "adme2", "cloudflare"])]
+                embed_url = urls[0] if urls else None
+            else:
+                embed_url = m_var.group(1)
+
+            est, efu, ehdrs, ebody = fetch(embed_url, ref="https://player.poseidonhd2.co/") if embed_url else (-1, None, {}, "")
+            has_eval = "eval(function(p,a,c,k,e," in ebody
+            title_m = re.search(r"<title>(.*?)</title>", ebody, re.I | re.S)
+            ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', ebody, re.I)
+            m3u8_direct = re.findall(r'https?://[^\s"\'<>\\]+\.(?:m3u8|mp4)[^\s"\'<>\\]*', ebody)
+            host_reports.append({
+                "src": f"{label}/{lang}/{cyb}",
+                "embed": embed_url,
+                "st": est,
+                "final": efu,
+                "len": len(ebody),
+                "title": title_m.group(1).strip() if title_m else None,
+                "eval": has_eval,
+                "iframes": ifr[:3],
+                "media": m3u8_direct[:3],
+                "head": re.sub(r'\s+', ' ', ebody[:320]),
+            })
+    notice("hosts_1", host_reports[:7])
+    notice("hosts_2", host_reports[7:])
