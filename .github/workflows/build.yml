@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :PeliCineHD:testDebugUnitTest :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Repelis24CZ:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :PeliCineHD:testDebugUnitTest :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest :PelisJuanita:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
           cat build-log.txt
           if [ "$status" -ne 0 ]; then
@@ -59,6 +59,7 @@ jobs:
           cp PeliCineHD/build/PeliCineHD.cs3 output/
           cp CinecalidadOrg/build/CinecalidadOrg.cs3 output/
           cp Cuevana3v/build/Cuevana3v.cs3 output/
+          cp PelisJuanita/build/PelisJuanita.cs3 output/
           cp build/plugins.json output/
           cp repo.json output/
           python3 - <<'PY'
@@ -69,7 +70,7 @@ jobs:
           expected = {
               'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
               'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3',
-              'PeliCineHD.cs3', 'CinecalidadOrg.cs3', 'Cuevana3v.cs3',
+              'PeliCineHD.cs3', 'CinecalidadOrg.cs3', 'Cuevana3v.cs3', 'PelisJuanita.cs3',
           }
           assert names == expected, (sorted(names), sorted(expected))
           for name in expected:
