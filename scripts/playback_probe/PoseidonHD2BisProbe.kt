@@ -181,37 +181,59 @@ object PlaybackProbe {
                         if (emb != null) {
                             val lower = emb.lowercase()
                             val baseHeaders = mapOf("User-Agent" to PoseidonHD2BisData.DEFAULT_USER_AGENT)
+                            val t0 = android.os.SystemClock.elapsedRealtime()
                             runCatching {
                                 when {
                                     v.cyberlocker == "voesx" || lower.contains("voe") -> {
-                                        val r1 = app.get(emb, referer = "https://player.poseidonhd2.co/", headers = baseHeaders, timeout = 8L)
-                                        val hasRedir = r1.text.contains("window.location.href")
-                                        val hasAltcha = r1.text.contains("altcha-widget")
                                         PoseidonVoeExtractor.extract(emb, "https://player.poseidonhd2.co/", "Voe", {}) { c += it.url }
-                                        detail = "r1=${r1.code}:${r1.url.take(35)}:redir=$hasRedir:alt=$hasAltcha"
+                                        val dt = android.os.SystemClock.elapsedRealtime() - t0
+                                        if (c.isEmpty()) {
+                                            val r1 = app.get(emb, referer = "https://player.poseidonhd2.co/", headers = baseHeaders, timeout = 6L)
+                                            detail = "ms=$dt:r1=${r1.code}:${r1.url.take(35)}:alt=${r1.text.contains("altcha-widget")}:head=${r1.text.replace(Regex("\\s+"), " ").take(120)}"
+                                        } else {
+                                            detail = "ms=$dt:ok"
+                                        }
                                     }
                                     v.cyberlocker == "doodstream" || lower.contains("dood") -> {
                                         val r1 = app.get(emb.replace("/d/", "/e/"), headers = baseHeaders, timeout = 8L)
                                         val hasMd5 = r1.text.contains("/pass_md5/")
+                                        val headClean = r1.text.replace(Regex("\\s+"), " ").take(320)
                                         loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += it.url }
-                                        detail = "r1=${r1.code}:${r1.url.take(35)}:len=${r1.text.length}:md5=$hasMd5"
+                                        detail = "r1=${r1.code}:${r1.url.take(35)}:len=${r1.text.length}:md5=$hasMd5:head=$headClean"
                                     }
                                     v.cyberlocker == "streamwish" || lower.contains("streamwish") -> {
-                                        val r1 = app.get(emb, referer = "https://player.poseidonhd2.co/", headers = baseHeaders, timeout = 8L)
-                                        val code = java.net.URI(emb).rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
-                                        val r2 = app.get("https://medixiru.com/e/$code", referer = emb, headers = baseHeaders, timeout = 8L)
-                                        val host = java.net.URI(r2.url).host.orEmpty()
-                                        val short = java.net.URI(r2.url).rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
-                                        val enc = PoseidonVsembedCrypto.encryptHex(short, host.ifEmpty { "vsembed.com" })
-                                        val tr = app.get("https://$host/api/stream/tracking?c=$enc&ld=1", referer = r2.url, headers = baseHeaders, timeout = 8L)
-                                        val xt = tr.headers["x-tracking"]
-                                        val dec = xt?.let { PoseidonVsembedCrypto.decryptHex(it, host) }
                                         PoseidonStreamWishExtractor.extract(emb, "https://player.poseidonhd2.co/", "StreamWish", {}) { c += it.url }
-                                        detail = "r1=${r1.code}:r2=${r2.code}:${r2.url.take(32)}:tr=${tr.code}:xt=${xt!=null}:dec=${dec?.take(60)}"
+                                        val dt = android.os.SystemClock.elapsedRealtime() - t0
+                                        if (c.isEmpty()) {
+                                            val code = java.net.URI(emb).rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
+                                            val r2 = app.get("https://medixiru.com/e/$code", referer = emb, headers = baseHeaders, timeout = 8L)
+                                            val host = java.net.URI(r2.url).host.orEmpty()
+                                            val short = java.net.URI(r2.url).rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
+                                            val enc = PoseidonVsembedCrypto.encryptHex(short, host.ifEmpty { "vsembed.com" })
+                                            val tr = app.get("https://$host/api/stream/tracking?c=$enc&ld=1", referer = r2.url, headers = baseHeaders, timeout = 8L)
+                                            val xt = tr.headers["x-tracking"]
+                                            val dec = xt?.let { PoseidonVsembedCrypto.decryptHex(it, host) }
+                                            val ttUrl = dec?.let {
+                                                runCatching {
+                                                    PoseidonHD2BisData.jsonMapper.readTree(it).path("stream").path("tiktok").asText("")
+                                                }.getOrDefault("")
+                                            }.orEmpty()
+                                            var ttInfo = ""
+                                            if (ttUrl.startsWith("http")) {
+                                                val ttRes = runCatching {
+                                                    app.get(ttUrl, referer = "https://$host/", headers = baseHeaders + ("Origin" to "https://$host"), timeout = 6L)
+                                                }.getOrNull()
+                                                ttInfo = "tt=${ttRes?.code}:${ttRes?.text?.replace(Regex("\\s+"), " ")?.take(90)}"
+                                            }
+                                            detail = "ms=$dt:r2=${r2.code}:${r2.url}:tr=${tr.code}:dec=${dec?.take(500)}:$ttInfo"
+                                        } else {
+                                            detail = "ms=$dt:ok"
+                                        }
                                     }
                                     v.cyberlocker == "vidhide" || lower.contains("vidhide") -> {
                                         PoseidonVidHideExtractor.extract(emb, "https://player.poseidonhd2.co/", "VidHide", {}) { c += it.url }
-                                        detail = "ok"
+                                        val dt = android.os.SystemClock.elapsedRealtime() - t0
+                                        detail = "ms=$dt"
                                     }
                                     else -> {
                                         loadExtractor(emb, "https://player.poseidonhd2.co/", {}) { c += it.url }

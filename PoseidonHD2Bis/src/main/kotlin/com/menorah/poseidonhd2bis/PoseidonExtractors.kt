@@ -18,17 +18,252 @@ import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.Jsoup
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 internal object PoseidonCrypto {
+    private val SHA256_H0 = intArrayOf(
+        0x6a09e667, 0xbb67ae85.toInt(), 0x3c6ef372, 0xa54ff53a.toInt(),
+        0x510e527f, 0x9b05688c.toInt(), 0x1f83d9ab, 0x5be0cd19,
+    )
+
+    private val SHA256_K = intArrayOf(
+        0x428a2f98, 0x71374491, 0xb5c0fbcf.toInt(), 0xe9b5dba5.toInt(),
+        0x3956c25b, 0x59f111f1, 0x923f82a4.toInt(), 0xab1c5ed5.toInt(),
+        0xd807aa98.toInt(), 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe.toInt(), 0x9bdc06a7.toInt(), 0xc19bf174.toInt(),
+        0xe49b69c1.toInt(), 0xefbe4786.toInt(), 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152.toInt(), 0xa831c66d.toInt(), 0xb00327c8.toInt(), 0xbf597fc7.toInt(),
+        0xc6e00bf3.toInt(), 0xd5a79147.toInt(), 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e.toInt(), 0x92722c85.toInt(),
+        0xa2bfe8a1.toInt(), 0xa81a664b.toInt(), 0xc24b8b70.toInt(), 0xc76c51a3.toInt(),
+        0xd192e819.toInt(), 0xd6990624.toInt(), 0xf40e3585.toInt(), 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814.toInt(), 0x8cc70208.toInt(),
+        0x90befffa.toInt(), 0xa4506ceb.toInt(), 0xbef9a3f7.toInt(), 0xc67178f2.toInt(),
+    )
+
+    private class Pbkdf2Sha256Scratch {
+        val keyInts = IntArray(16)
+        val ipadState = IntArray(8)
+        val opadState = IntArray(8)
+        val u = IntArray(8)
+        val t = IntArray(8)
+        val tmp = IntArray(8)
+        val w = IntArray(64)
+        val blockBuf = ByteArray(64)
+    }
+
+    private fun packBlock(bytes: ByteArray, offset: Int, w: IntArray) {
+        var i = 0
+        var off = offset
+        while (i < 16) {
+            w[i] = ((bytes[off].toInt() and 0xFF) shl 24) or
+                ((bytes[off + 1].toInt() and 0xFF) shl 16) or
+                ((bytes[off + 2].toInt() and 0xFF) shl 8) or
+                (bytes[off + 3].toInt() and 0xFF)
+            i++
+            off += 4
+        }
+    }
+
+    private fun sha256Compress(state: IntArray, w: IntArray) {
+        for (i in 16..63) {
+            val w15 = w[i - 15]
+            val w2 = w[i - 2]
+            val s0 = w15.rotateRight(7) xor w15.rotateRight(18) xor (w15 ushr 3)
+            val s1 = w2.rotateRight(17) xor w2.rotateRight(19) xor (w2 ushr 10)
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1
+        }
+
+        var a = state[0]
+        var b = state[1]
+        var c = state[2]
+        var d = state[3]
+        var e = state[4]
+        var f = state[5]
+        var g = state[6]
+        var h = state[7]
+
+        for (i in 0..63) {
+            val s1 = e.rotateRight(6) xor e.rotateRight(11) xor e.rotateRight(25)
+            val ch = (e and f) xor (e.inv() and g)
+            val temp1 = h + s1 + ch + SHA256_K[i] + w[i]
+            val s0 = a.rotateRight(2) xor a.rotateRight(13) xor a.rotateRight(22)
+            val maj = (a and b) xor (a and c) xor (b and c)
+            val temp2 = s0 + maj
+            h = g
+            g = f
+            f = e
+            e = d + temp1
+            d = c
+            c = b
+            b = a
+            a = temp1 + temp2
+        }
+
+        state[0] += a
+        state[1] += b
+        state[2] += c
+        state[3] += d
+        state[4] += e
+        state[5] += f
+        state[6] += g
+        state[7] += h
+    }
+
+    private fun sha256FullMessage(msg: ByteArray, outState: IntArray, w: IntArray, blockBuf: ByteArray) {
+        System.arraycopy(SHA256_H0, 0, outState, 0, 8)
+        var pos = 0
+        for (b in msg) {
+            blockBuf[pos++] = b
+            if (pos == 64) {
+                packBlock(blockBuf, 0, w)
+                sha256Compress(outState, w)
+                pos = 0
+            }
+        }
+        blockBuf[pos++] = 0x80.toByte()
+        if (pos > 56) {
+            while (pos < 64) blockBuf[pos++] = 0
+            packBlock(blockBuf, 0, w)
+            sha256Compress(outState, w)
+            pos = 0
+        }
+        while (pos < 56) blockBuf[pos++] = 0
+        val totalBits = msg.size.toLong() * 8L
+        for (i in 0..7) {
+            blockBuf[56 + i] = (totalBits ushr (56 - i * 8)).toByte()
+        }
+        packBlock(blockBuf, 0, w)
+        sha256Compress(outState, w)
+    }
+
+    private fun pbkdf2Sha256Block1Into(
+        password: ByteArray,
+        salt: ByteArray,
+        iterations: Int,
+        outLen: Int,
+        outBuf: ByteArray,
+        s: Pbkdf2Sha256Scratch,
+    ) {
+        val keyInts = s.keyInts
+        keyInts.fill(0)
+        if (password.size > 64) {
+            sha256FullMessage(password, keyInts, s.w, s.blockBuf)
+        } else {
+            for (i in password.indices) {
+                keyInts[i ushr 2] = keyInts[i ushr 2] or ((password[i].toInt() and 0xFF) shl (24 - (i and 3) * 8))
+            }
+        }
+
+        val ipadState = s.ipadState
+        val opadState = s.opadState
+        val w = s.w
+        System.arraycopy(SHA256_H0, 0, ipadState, 0, 8)
+        for (i in 0..15) w[i] = keyInts[i] xor 0x36363636
+        sha256Compress(ipadState, w)
+
+        System.arraycopy(SHA256_H0, 0, opadState, 0, 8)
+        for (i in 0..15) w[i] = keyInts[i] xor 0x5c5c5c5c
+        sha256Compress(opadState, w)
+
+        val u = s.u
+        val t = s.t
+        val tmp = s.tmp
+        val blockBuf = s.blockBuf
+
+        // Iter 1: inner = SHA256(ipadState || salt || 0x00000001)
+        System.arraycopy(ipadState, 0, u, 0, 8)
+        var pos = 0
+        for (b in salt) {
+            blockBuf[pos++] = b
+            if (pos == 64) {
+                packBlock(blockBuf, 0, w)
+                sha256Compress(u, w)
+                pos = 0
+            }
+        }
+        for (b in 0..3) {
+            blockBuf[pos++] = if (b == 3) 1 else 0
+            if (pos == 64) {
+                packBlock(blockBuf, 0, w)
+                sha256Compress(u, w)
+                pos = 0
+            }
+        }
+        blockBuf[pos++] = 0x80.toByte()
+        if (pos > 56) {
+            while (pos < 64) blockBuf[pos++] = 0
+            packBlock(blockBuf, 0, w)
+            sha256Compress(u, w)
+            pos = 0
+        }
+        while (pos < 56) blockBuf[pos++] = 0
+        val innerBits = (64L + salt.size.toLong() + 4L) * 8L
+        for (i in 0..7) {
+            blockBuf[56 + i] = (innerBits ushr (56 - i * 8)).toByte()
+        }
+        packBlock(blockBuf, 0, w)
+        sha256Compress(u, w)
+
+        // Outer = SHA256(opadState || u)
+        System.arraycopy(opadState, 0, tmp, 0, 8)
+        System.arraycopy(u, 0, w, 0, 8)
+        w[8] = Int.MIN_VALUE
+        for (i in 9..14) w[i] = 0
+        w[15] = 768
+        sha256Compress(tmp, w)
+        System.arraycopy(tmp, 0, u, 0, 8)
+        System.arraycopy(u, 0, t, 0, 8)
+
+        for (iter in 2..iterations) {
+            System.arraycopy(ipadState, 0, tmp, 0, 8)
+            System.arraycopy(u, 0, w, 0, 8)
+            w[8] = Int.MIN_VALUE
+            for (i in 9..14) w[i] = 0
+            w[15] = 768
+            sha256Compress(tmp, w)
+
+            System.arraycopy(opadState, 0, u, 0, 8)
+            System.arraycopy(tmp, 0, w, 0, 8)
+            w[8] = Int.MIN_VALUE
+            for (i in 9..14) w[i] = 0
+            w[15] = 768
+            sha256Compress(u, w)
+
+            t[0] = t[0] xor u[0]
+            t[1] = t[1] xor u[1]
+            t[2] = t[2] xor u[2]
+            t[3] = t[3] xor u[3]
+            t[4] = t[4] xor u[4]
+            t[5] = t[5] xor u[5]
+            t[6] = t[6] xor u[6]
+            t[7] = t[7] xor u[7]
+        }
+
+        for (i in 0 until outLen) {
+            outBuf[i] = (t[i ushr 2] ushr (24 - (i and 3) * 8)).toByte()
+        }
+    }
+
     fun hexToBytes(hex: String): ByteArray {
         val clean = hex.trim()
         require(clean.length % 2 == 0) { "Odd hex length: ${clean.length}" }
@@ -80,12 +315,20 @@ internal object PoseidonCrypto {
         keyLengthBytes: Int,
         algorithm: String = "HmacSHA256",
     ): ByteArray {
+        if (algorithm.equals("HmacSHA256", ignoreCase = true) && keyLengthBytes in 1..32 && iterations >= 1) {
+            val out = ByteArray(keyLengthBytes)
+            pbkdf2Sha256Block1Into(password, salt, iterations, keyLengthBytes, out, Pbkdf2Sha256Scratch())
+            return out
+        }
+
         val mac = Mac.getInstance(algorithm)
         mac.init(SecretKeySpec(password, algorithm))
         val hashLen = mac.macLength
         val blockCount = (keyLengthBytes + hashLen - 1) / hashLen
         val out = ByteArray(blockCount * hashLen)
         val blockIndex = ByteArray(4)
+        val u = ByteArray(hashLen)
+        val t = ByteArray(hashLen)
 
         for (block in 1..blockCount) {
             blockIndex[0] = (block ushr 24).toByte()
@@ -95,11 +338,12 @@ internal object PoseidonCrypto {
 
             mac.update(salt)
             mac.update(blockIndex)
-            var u = mac.doFinal()
-            val t = u.copyOf()
+            mac.doFinal(u, 0)
+            System.arraycopy(u, 0, t, 0, hashLen)
             for (iter in 2..iterations) {
-                u = mac.doFinal(u)
-                for (i in t.indices) {
+                mac.update(u)
+                mac.doFinal(u, 0)
+                for (i in 0 until hashLen) {
                     t[i] = (t[i].toInt() xor u[i].toInt()).toByte()
                 }
             }
@@ -118,6 +362,85 @@ internal object PoseidonCrypto {
             return solveAltchaV2(root, params, maxCounters)
         }
         return solveAltchaV1(root, maxCounters * 50)
+    }
+
+    suspend fun solveAltchaChallengeSuspend(challengeJson: String, maxCounters: Int = 8000): String? {
+        val root = runCatching {
+            PoseidonHD2BisData.jsonMapper.readTree(challengeJson)
+        }.getOrNull() ?: return null
+
+        val params = root.get("parameters")
+        if (params == null || !params.isObject) {
+            return solveAltchaV1(root, maxCounters * 50)
+        }
+
+        val algo = params.get("algorithm")?.asText("PBKDF2/SHA-256") ?: "PBKDF2/SHA-256"
+        val cost = params.get("cost")?.asInt(10000) ?: 10000
+        val keyLen = params.get("keyLength")?.asInt(32) ?: 32
+        if (!algo.equals("PBKDF2/SHA-256", ignoreCase = true) || keyLen !in 1..32 || cost < 500) {
+            return solveAltchaV2(root, params, maxCounters)
+        }
+
+        val keyPrefix = params.get("keyPrefix")?.asText("") ?: return null
+        val nonceHex = params.get("nonce")?.asText("") ?: return null
+        val saltHex = params.get("salt")?.asText("") ?: return null
+        val nonceBytes = runCatching { hexToBytes(nonceHex) }.getOrNull() ?: return null
+        val saltBytes = runCatching { hexToBytes(saltHex) }.getOrNull() ?: return null
+        val prefixBytes = if (keyPrefix.isNotEmpty() && keyPrefix.length % 2 == 0) {
+            runCatching { hexToBytes(keyPrefix) }.getOrNull()
+        } else {
+            null
+        }
+
+        val workerCount = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+        val found = AtomicBoolean(false)
+        val winner = AtomicReference<String?>(null)
+        val startedNs = System.nanoTime()
+
+        coroutineScope {
+            (0 until workerCount).map { workerId ->
+                async(Dispatchers.Default) {
+                    val scratch = Pbkdf2Sha256Scratch()
+                    val passwordBuf = ByteArray(nonceBytes.size + 4)
+                    System.arraycopy(nonceBytes, 0, passwordBuf, 0, nonceBytes.size)
+                    val derivedBuf = ByteArray(keyLen)
+
+                    var counter = workerId
+                    while (counter <= maxCounters && !found.get()) {
+                        passwordBuf[nonceBytes.size] = (counter ushr 24).toByte()
+                        passwordBuf[nonceBytes.size + 1] = (counter ushr 16).toByte()
+                        passwordBuf[nonceBytes.size + 2] = (counter ushr 8).toByte()
+                        passwordBuf[nonceBytes.size + 3] = counter.toByte()
+
+                        pbkdf2Sha256Block1Into(passwordBuf, saltBytes, cost, keyLen, derivedBuf, scratch)
+                        val matched = if (prefixBytes != null) {
+                            prefixBytes.indices.all { i -> derivedBuf[i] == prefixBytes[i] }
+                        } else {
+                            bytesToHex(derivedBuf).startsWith(keyPrefix)
+                        }
+                        if (matched) {
+                            if (found.compareAndSet(false, true)) {
+                                val elapsedMs = ((System.nanoTime() - startedNs) / 1_000_000L).coerceAtLeast(1L)
+                                val payload = mapOf(
+                                    "challenge" to root,
+                                    "solution" to mapOf(
+                                        "counter" to counter,
+                                        "derivedKey" to bytesToHex(derivedBuf),
+                                        "time" to elapsedMs,
+                                    ),
+                                )
+                                val jsonBytes = PoseidonHD2BisData.jsonMapper.writeValueAsBytes(payload)
+                                winner.compareAndSet(null, encodeBase64(jsonBytes))
+                            }
+                            break
+                        }
+                        counter += workerCount
+                    }
+                }
+            }.awaitAll()
+        }
+
+        return winner.get()
     }
 
     private fun solveAltchaV2(root: JsonNode, params: JsonNode, maxCounters: Int): String? {
@@ -144,6 +467,9 @@ internal object PoseidonCrypto {
 
         val passwordBuf = ByteArray(nonceBytes.size + 4)
         System.arraycopy(nonceBytes, 0, passwordBuf, 0, nonceBytes.size)
+        val scratch = Pbkdf2Sha256Scratch()
+        val derivedBuf = ByteArray(keyLen)
+        val useFastSha256 = macAlgo == "HmacSHA256" && keyLen in 1..32 && cost >= 1
         val startedNs = System.nanoTime()
 
         for (counter in 0..maxCounters) {
@@ -152,7 +478,12 @@ internal object PoseidonCrypto {
             passwordBuf[nonceBytes.size + 2] = (counter ushr 8).toByte()
             passwordBuf[nonceBytes.size + 3] = counter.toByte()
 
-            val derived = pbkdf2Hmac(passwordBuf, saltBytes, cost, keyLen, macAlgo)
+            val derived = if (useFastSha256) {
+                pbkdf2Sha256Block1Into(passwordBuf, saltBytes, cost, keyLen, derivedBuf, scratch)
+                derivedBuf
+            } else {
+                pbkdf2Hmac(passwordBuf, saltBytes, cost, keyLen, macAlgo)
+            }
             val matched = if (prefixBytes != null) {
                 prefixBytes.indices.all { i -> derived[i] == prefixBytes[i] }
             } else {
@@ -529,7 +860,9 @@ class PoseidonVoeExtractor : ExtractorApi() {
     }
 
     companion object {
-        private val REDIRECT_REGEX = Regex("""window\.location\.href\s*=\s*['"]([^'"]+)['"]""")
+        private val REDIRECT_REGEX = Regex(
+            """(?:(?:window\.)?location(?:\.href)?\s*=\s*|location\.replace\(\s*)['"]([^'"]+)['"]""",
+        )
 
         suspend fun extract(
             url: String,
@@ -546,7 +879,7 @@ class PoseidonVoeExtractor : ExtractorApi() {
             val cookies = linkedMapOf<String, String>()
             var currentUrl = url
             var currentReferer = referer?.takeIf { it.isNotBlank() } ?: "https://player.poseidonhd2.co/"
-            var res = app.get(currentUrl, referer = currentReferer, headers = baseHeaders, cookies = cookies, timeout = 16L)
+            var res = app.get(currentUrl, referer = currentReferer, headers = baseHeaders, cookies = cookies, timeout = 10L)
             cookies.putAll(res.cookies)
 
             repeat(2) {
@@ -558,7 +891,7 @@ class PoseidonVoeExtractor : ExtractorApi() {
                         val resolvedRedir = runCatching { URI(res.url).resolve(redir).toString() }.getOrDefault(redir)
                         currentReferer = res.url
                         currentUrl = resolvedRedir
-                        res = app.get(currentUrl, referer = currentReferer, headers = baseHeaders, cookies = cookies, timeout = 16L)
+                        res = app.get(currentUrl, referer = currentReferer, headers = baseHeaders, cookies = cookies, timeout = 10L)
                         cookies.putAll(res.cookies)
                     }
                 }
@@ -567,7 +900,7 @@ class PoseidonVoeExtractor : ExtractorApi() {
             if (res.text.contains("altcha-widget", ignoreCase = true)) {
                 val doc = Jsoup.parse(res.text, res.url)
                 val challengeAttr = doc.selectFirst("altcha-widget")?.attr("challenge")?.trim().orEmpty()
-                val formAction = doc.selectFirst("form.access-form, form[method=POST]")?.attr("abs:action")
+                val formAction = doc.selectFirst("form.access-form, form[method~=^(?i)post$], form[action]")?.attr("abs:action")
                     ?.takeIf { it.isNotBlank() } ?: res.url
                 val token = doc.selectFirst("input[name=_token]")?.attr("value").orEmpty()
                 val accessVal = doc.selectFirst("input[name=access]")?.attr("value") ?: "0"
@@ -579,10 +912,10 @@ class PoseidonVoeExtractor : ExtractorApi() {
                         referer = res.url,
                         headers = baseHeaders + ("Accept" to "application/json, */*"),
                         cookies = cookies,
-                        timeout = 16L,
+                        timeout = 10L,
                     )
                     cookies.putAll(chalRes.cookies)
-                    val altchaPayload = PoseidonCrypto.solveAltchaChallenge(chalRes.text) ?: return false
+                    val altchaPayload = PoseidonCrypto.solveAltchaChallengeSuspend(chalRes.text) ?: return false
                     val origin = PoseidonVidHideParser.originOf(res.url)
                     val postRes = app.post(
                         formAction,
@@ -597,10 +930,19 @@ class PoseidonVoeExtractor : ExtractorApi() {
                             "access" to accessVal,
                             "altcha" to altchaPayload,
                         ),
-                        timeout = 18L,
+                        timeout = 12L,
                     )
                     cookies.putAll(postRes.cookies)
                     res = postRes
+
+                    if (!res.text.contains("application/json", ignoreCase = true)) {
+                        val postRedir = REDIRECT_REGEX.find(res.text)?.groupValues?.getOrNull(1)
+                        if (postRedir != null && postRedir != res.url) {
+                            val resolved = runCatching { URI(res.url).resolve(postRedir).toString() }.getOrDefault(postRedir)
+                            res = app.get(resolved, referer = res.url, headers = baseHeaders, cookies = cookies, timeout = 10L)
+                            cookies.putAll(res.cookies)
+                        }
+                    }
                 }
             }
 
@@ -635,7 +977,7 @@ class PoseidonVoeExtractor : ExtractorApi() {
             var emitted = false
             val m3u8Url = decrypted.source?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
             if (m3u8Url != null) {
-                val links = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                val links = withTimeoutOrNull(4_500L) {
                     runCatching {
                         M3u8Helper.generateM3u8(
                             sourceName,
@@ -730,7 +1072,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                 "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
             )
             val effReferer = referer?.takeIf { it.isNotBlank() } ?: "https://player.poseidonhd2.co/"
-            var res = app.get(url, referer = effReferer, headers = baseHeaders, timeout = 16L)
+            var res = app.get(url, referer = effReferer, headers = baseHeaders, timeout = 10L)
 
             // Branch 1: Classic packed / JWPlayer embed directly returned
             val unpacked = PoseidonVidHideParser.parse(res.text, res.url)
@@ -748,7 +1090,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                 if (fileCode.isNotEmpty()) {
                     for (mirror in REDIRECT_HOSTS) {
                         val hopped = runCatching {
-                            app.get("$mirror/e/$fileCode", referer = res.url, headers = baseHeaders, timeout = 16L)
+                            app.get("$mirror/e/$fileCode", referer = res.url, headers = baseHeaders, timeout = 10L)
                         }.getOrNull()
                         if (hopped != null) {
                             res = hopped
@@ -764,12 +1106,10 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
 
             // Branch 3: vsembed.com SPA API + AES-128-CBC tracking header
             if (res.url.contains("vsembed.com", ignoreCase = true)) {
-                if (extractFromVsembed(res.url, res.text, sourceName, subtitleCallback, callback)) {
-                    return true
-                }
+                return extractFromVsembed(res.url, res.text, sourceName, subtitleCallback, callback)
             }
 
-            // Branch 4: Native CloudStream StreamWish fallback
+            // Branch 4: Native CloudStream StreamWish fallback (only for non-vsembed pages)
             var fallbackEmitted = false
             runCatching {
                 StreamWishExtractor().getUrl(url, referer, subtitleCallback) { link ->
@@ -819,29 +1159,11 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                 "Referer" to pageUrl,
             )
 
-            // Subtitles + metadata (non-fatal)
-            runCatching {
-                val streamInfoRes = app.get("$origin/api/stream?s=$shortCode&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 12L)
-                if (streamInfoRes.isSuccessful) {
-                    val dataNode = PoseidonHD2BisData.jsonMapper.readTree(streamInfoRes.text).get("data")
-                    val subsNode = dataNode?.get("subtitles")
-                    if (subsNode != null && subsNode.isArray) {
-                        for (sub in subsNode) {
-                            val subUrl = sub.get("file")?.asText() ?: sub.get("url")?.asText() ?: continue
-                            val subLabel = sub.get("label")?.asText() ?: sub.get("language")?.asText() ?: "Subtítulos"
-                            if (subUrl.startsWith("http", ignoreCase = true)) {
-                                subtitleCallback(newSubtitleFile(subLabel, subUrl))
-                            }
-                        }
-                    }
-                }
-            }
-
             var keyChars = PoseidonVsembedCrypto.DEFAULT_KEY_CHARS
             var saltChars = PoseidonVsembedCrypto.DEFAULT_SALT_CHARS
 
             var encParam = PoseidonVsembedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
-            var trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 14L)
+            var trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 10L)
             var xTracking = trackRes.headers["x-tracking"]
 
             var decryptedJson = xTracking?.let { PoseidonVsembedCrypto.decryptHex(it, host, keyChars, saltChars) }
@@ -851,7 +1173,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                 val assetPath = JS_ASSET_REGEX.find(pageHtml)?.groupValues?.getOrNull(1)
                 if (assetPath != null) {
                     val bundleText = runCatching {
-                        app.get("$origin$assetPath", referer = pageUrl, headers = apiHeaders, timeout = 14L).text
+                        app.get("$origin$assetPath", referer = pageUrl, headers = apiHeaders, timeout = 10L).text
                     }.getOrNull()
                     if (bundleText != null) {
                         val parsedKeys = parseCharArray(bundleText, "keyChars")
@@ -860,7 +1182,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                             keyChars = parsedKeys
                             saltChars = parsedSalts
                             encParam = PoseidonVsembedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
-                            trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 14L)
+                            trackRes = app.get("$origin/api/stream/tracking?c=$encParam&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 10L)
                             xTracking = trackRes.headers["x-tracking"]
                             decryptedJson = xTracking?.let { PoseidonVsembedCrypto.decryptHex(it, host, keyChars, saltChars) }
                         }
@@ -879,7 +1201,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
 
             var emitted = false
             if (hlsUrl != null) {
-                val generated = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                val generated = withTimeoutOrNull(4_500L) {
                     runCatching {
                         M3u8Helper.generateM3u8(sourceName, hlsUrl, "$origin/", headers = streamHeaders)
                     }.getOrElse { emptyList() }
@@ -898,6 +1220,26 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
                         },
                     )
                     emitted = true
+                }
+            }
+
+            // Subtitles + metadata (non-fatal, fetched after stream check)
+            if (emitted) {
+                runCatching {
+                    val streamInfoRes = app.get("$origin/api/stream?s=$shortCode&ld=1", referer = pageUrl, headers = apiHeaders, timeout = 6L)
+                    if (streamInfoRes.isSuccessful) {
+                        val dataNode = PoseidonHD2BisData.jsonMapper.readTree(streamInfoRes.text).get("data")
+                        val subsNode = dataNode?.get("subtitles")
+                        if (subsNode != null && subsNode.isArray) {
+                            for (sub in subsNode) {
+                                val subUrl = sub.get("file")?.asText() ?: sub.get("url")?.asText() ?: continue
+                                val subLabel = sub.get("label")?.asText() ?: sub.get("language")?.asText() ?: "Subtítulos"
+                                if (subUrl.startsWith("http", ignoreCase = true)) {
+                                    subtitleCallback(newSubtitleFile(subLabel, subUrl))
+                                }
+                            }
+                        }
+                    }
                 }
             }
             return emitted
@@ -927,7 +1269,7 @@ open class PoseidonStreamWishExtractor : ExtractorApi() {
             var emitted = false
             for (stream in parsed.streams) {
                 if (stream.key == "hls3" && emitted) continue
-                val generated = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                val generated = withTimeoutOrNull(4_500L) {
                     runCatching {
                         M3u8Helper.generateM3u8(sourceName, stream.url, "${parsed.origin}/", headers = streamHeaders)
                     }.getOrElse { emptyList() }
@@ -978,6 +1320,7 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
             "https://ryderjet.com",
             "https://vidhidepre.com",
         )
+        private val UNRELIABLE_HOSTS = setOf("vidhidepro.com", "dhtpre.com")
 
         suspend fun extract(
             url: String,
@@ -994,13 +1337,19 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
                 if (!q.isNullOrEmpty()) append("?$q")
             }
 
+            val origOrigin = runCatching { PoseidonVidHideParser.originOf(normalizedUrl) }.getOrNull()
+            val origHost = parsedUri?.host?.lowercase().orEmpty()
             val candidateUrls = buildList {
-                add(normalizedUrl)
-                val origOrigin = runCatching { PoseidonVidHideParser.originOf(normalizedUrl) }.getOrNull()
+                if (origHost !in UNRELIABLE_HOSTS) {
+                    add(normalizedUrl)
+                }
                 for (mirror in MIRROR_ORIGINS) {
                     if (!mirror.equals(origOrigin, ignoreCase = true)) {
                         add("$mirror$pathWithQuery")
                     }
+                }
+                if (origHost in UNRELIABLE_HOSTS) {
+                    add(normalizedUrl)
                 }
             }
 
@@ -1014,7 +1363,7 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
             var parsed: PoseidonVidHideParsed? = null
             for (candidate in candidateUrls) {
                 val res = try {
-                    app.get(candidate, referer = effReferer, headers = reqHeaders, timeout = 8L)
+                    app.get(candidate, referer = effReferer, headers = reqHeaders, timeout = 6L)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -1046,12 +1395,35 @@ open class PoseidonVidHideExtractor : ExtractorApi() {
                 "Referer" to "${result.origin}/",
             )
 
-            // Prefer hls2 (clean standard MPEG-TS CDN) and skip broken hls3/hls4 once a stream loads
-            for (stream in result.streams) {
-                if (stream.key == "hls3" && result.streams.any { it.key == "hls2" || it.key == "hls" }) {
-                    continue
+            // Prefer hls2 (clean standard MPEG-TS CDN) and skip broken hls3/hls4 once hls2/hls is present
+            val primaryStream = result.streams.firstOrNull { it.key == "hls2" || it.key == "hls" }
+            if (primaryStream != null) {
+                val links = withTimeoutOrNull(4_500L) {
+                    runCatching {
+                        M3u8Helper.generateM3u8(
+                            sourceName,
+                            primaryStream.url,
+                            "${result.origin}/",
+                            headers = streamHeaders,
+                        )
+                    }.getOrElse { emptyList() }
+                }.orEmpty()
+                if (links.isNotEmpty()) {
+                    links.forEach(callback)
+                } else {
+                    callback(
+                        newExtractorLink(sourceName, sourceName, primaryStream.url, ExtractorLinkType.M3U8) {
+                            this.referer = "${result.origin}/"
+                            this.headers = streamHeaders
+                            this.quality = Qualities.Unknown.value
+                        },
+                    )
                 }
-                val links = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                return true
+            }
+
+            for (stream in result.streams) {
+                val links = withTimeoutOrNull(4_500L) {
                     runCatching {
                         M3u8Helper.generateM3u8(
                             sourceName,

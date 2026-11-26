@@ -1,5 +1,6 @@
 package com.menorah.poseidonhd2bis
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -7,6 +8,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.charset.StandardCharsets
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class PoseidonHD2BisDataTest {
 
@@ -217,6 +220,65 @@ class PoseidonHD2BisDataTest {
         assertEquals(
             "002443d914be3ca3d667130ca2df65d991d3288b2b5d3d4422fc64c06c693ad3",
             tree.get("solution").get("derivedKey").asText(),
+        )
+
+        val asyncEncoded = runBlocking {
+            PoseidonCrypto.solveAltchaChallengeSuspend(challengeJson, maxCounters = 500)
+        }
+        assertNotNull(asyncEncoded)
+        val asyncTree = PoseidonHD2BisData.jsonMapper.readTree(
+            String(PoseidonCrypto.decodeBase64Flexible(asyncEncoded!!), StandardCharsets.UTF_8),
+        )
+        assertEquals(295, asyncTree.get("solution").get("counter").asInt())
+        assertEquals(
+            "002443d914be3ca3d667130ca2df65d991d3288b2b5d3d4422fc64c06c693ad3",
+            asyncTree.get("solution").get("derivedKey").asText(),
+        )
+    }
+
+    @Test
+    fun `PoseidonCrypto fast SHA-256 PBKDF2 matches reference Mac across salt and password boundaries`() {
+        fun referencePbkdf2(password: ByteArray, salt: ByteArray, iterations: Int, keyLen: Int): ByteArray {
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(password, "HmacSHA256"))
+            val block = byteArrayOf(0, 0, 0, 1)
+            mac.update(salt)
+            mac.update(block)
+            var u = mac.doFinal()
+            val t = u.copyOf()
+            for (i in 2..iterations) {
+                u = mac.doFinal(u)
+                for (j in t.indices) t[j] = (t[j].toInt() xor u[j].toInt()).toByte()
+            }
+            return t.copyOf(keyLen)
+        }
+
+        val passwords = listOf(
+            ByteArray(20) { (it * 7 + 3).toByte() },
+            ByteArray(64) { (it * 13 + 5).toByte() },
+            ByteArray(80) { (it * 17 + 1).toByte() },
+        )
+        val salts = listOf(
+            ByteArray(0),
+            ByteArray(16) { (it + 11).toByte() },
+            ByteArray(52) { (it + 23).toByte() },
+            ByteArray(56) { (it + 31).toByte() },
+            ByteArray(60) { (it + 41).toByte() },
+            ByteArray(72) { (it + 53).toByte() },
+        )
+        for (pw in passwords) {
+            for (salt in salts) {
+                for (iters in listOf(1, 5, 50)) {
+                    assertEquals(
+                        PoseidonCrypto.bytesToHex(referencePbkdf2(pw, salt, iters, 32)),
+                        PoseidonCrypto.bytesToHex(PoseidonCrypto.pbkdf2Hmac(pw, salt, iters, 32, "HmacSHA256")),
+                    )
+                }
+            }
+        }
+        assertEquals(
+            PoseidonCrypto.bytesToHex(referencePbkdf2(passwords[0], salts[1], 1000, 16)),
+            PoseidonCrypto.bytesToHex(PoseidonCrypto.pbkdf2Hmac(passwords[0], salts[1], 1000, 16, "HmacSHA256")),
         )
     }
 
