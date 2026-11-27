@@ -1,4 +1,4 @@
-package com.menorah.veraniv2
+package com.menorah.verani
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -36,7 +36,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-internal object VerAniV2Crypto {
+internal object VerAniCrypto {
     private const val B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     private val B64_DECODE_TABLE = IntArray(256) { -1 }.apply {
         for (i in B64_ALPHABET.indices) {
@@ -108,7 +108,7 @@ internal object VerAniV2Crypto {
     }
 }
 
-internal object VerAniV2HlsHelper {
+internal object VerAniHlsHelper {
     private val DEMUXED_AUDIO_REGEX = Regex("""#EXT-X-MEDIA:[^\n]*TYPE=AUDIO""", RegexOption.IGNORE_CASE)
     private val RESOLUTION_HEIGHT_REGEX = Regex("""RESOLUTION=\d+x(\d+)""", RegexOption.IGNORE_CASE)
 
@@ -195,7 +195,7 @@ internal object VerAniV2HlsHelper {
     }
 }
 
-internal object VerAniV2TurboEmbedCrypto {
+internal object VerAniTurboEmbedCrypto {
     val DEFAULT_KEY_CHARS = listOf("𝕊", "𝔼", "𝕮", "𝚁", "𝔼", "𝚃", "𝓚", "𝓔", "𝓨", "𝟙", "𝟚", "𝟛")
     val DEFAULT_SALT_CHARS = listOf("🔐", "🗝️", "🔑", "🚪", "🛡️", "⚡")
 
@@ -206,7 +206,7 @@ internal object VerAniV2TurboEmbedCrypto {
         val prefix = keyChars.joinToString("") { Character.codePointAt(it, 0).toString(16) }
         val dayHex = (nowMs / 86_400_000L).toString(16)
         val hex32 = (prefix + dayHex).take(32).padEnd(32, '0')
-        return VerAniV2Crypto.hexToBytes(hex32)
+        return VerAniCrypto.hexToBytes(hex32)
     }
 
     fun buildIvBytes(
@@ -214,9 +214,9 @@ internal object VerAniV2TurboEmbedCrypto {
         saltChars: List<String> = DEFAULT_SALT_CHARS,
     ): ByteArray {
         val prefix = saltChars.joinToString("") { Character.codePointAt(it, 0).toString(16) }
-        val hostHex = VerAniV2Crypto.bytesToHex(host.toByteArray(StandardCharsets.UTF_8))
+        val hostHex = VerAniCrypto.bytesToHex(host.toByteArray(StandardCharsets.UTF_8))
         val hex32 = (prefix + hostHex).take(32).padEnd(32, '0')
-        return VerAniV2Crypto.hexToBytes(hex32)
+        return VerAniCrypto.hexToBytes(hex32)
     }
 
     fun encryptHex(
@@ -231,7 +231,7 @@ internal object VerAniV2TurboEmbedCrypto {
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, key, iv)
         val encrypted = cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8))
-        return VerAniV2Crypto.bytesToHex(encrypted)
+        return VerAniCrypto.bytesToHex(encrypted)
     }
 
     fun decryptHex(
@@ -245,7 +245,7 @@ internal object VerAniV2TurboEmbedCrypto {
         val iv = IvParameterSpec(buildIvBytes(host, saltChars))
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, key, iv)
-        val plain = cipher.doFinal(VerAniV2Crypto.hexToBytes(cipherHex))
+        val plain = cipher.doFinal(VerAniCrypto.hexToBytes(cipherHex))
         String(plain, StandardCharsets.UTF_8)
     }.getOrNull()
 
@@ -258,7 +258,7 @@ internal object VerAniV2TurboEmbedCrypto {
     }
 }
 
-internal object VerAniV2VoeDecoder {
+internal object VerAniVoeDecoder {
     private val F7_JSON_SCRIPT_REGEX = Regex(
         """<script[^>]*type=["']application/json["'][^>]*>\s*\[\s*"([^"]+)"\s*]\s*</script>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
@@ -287,7 +287,7 @@ internal object VerAniV2VoeDecoder {
         val step2 = SPECIAL_TOKEN_REGEX.replace(step1, "_")
         val step3 = step2.replace("_", "")
         // Step 3: Base64 decode
-        val step4 = String(VerAniV2Crypto.decodeBase64Flexible(step3), StandardCharsets.ISO_8859_1)
+        val step4 = String(VerAniCrypto.decodeBase64Flexible(step3), StandardCharsets.ISO_8859_1)
         // Step 4: Shift each character back by 3
         val step5 = buildString(step4.length) {
             for (ch in step4) {
@@ -296,11 +296,11 @@ internal object VerAniV2VoeDecoder {
         }
         // Step 5: Reverse and Base64 decode UTF-8
         val reversed = step5.reversed()
-        String(VerAniV2Crypto.decodeBase64Flexible(reversed), StandardCharsets.UTF_8)
+        String(VerAniCrypto.decodeBase64Flexible(reversed), StandardCharsets.UTF_8)
     }.getOrNull()
 }
 
-internal object VerAniV2JsUnpacker {
+internal object VerAniJsUnpacker {
     private val PACKED_REGEX = Regex(
         """eval\(function\(p,a,c,k,e,[dr]\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)""",
         RegexOption.DOT_MATCHES_ALL,
@@ -341,7 +341,7 @@ internal object VerAniV2JsUnpacker {
     }
 }
 
-internal object VerAniV2Mp4UploadParser {
+internal object VerAniMp4UploadParser {
     private val DIRECT_SRC_OBJ_REGEX = Regex("""player\.src\(\s*\{[^}]*\bsrc\s*:\s*["']([^"']+)["']""", RegexOption.DOT_MATCHES_ALL)
     private val DIRECT_SRC_STR_REGEX = Regex("""player\.src\(\s*["']([^"']+)["']\s*\)""")
     private val SOURCE_TAG_REGEX = Regex("""<source[^>]+src\s*=\s*["']([^"']+\.mp4[^"']*)["']""", RegexOption.IGNORE_CASE)
@@ -359,7 +359,7 @@ internal object VerAniV2Mp4UploadParser {
     }
 
     fun extractVideoSrc(html: String): String? {
-        for (body in VerAniV2JsUnpacker.unpackAll(html)) {
+        for (body in VerAniJsUnpacker.unpackAll(html)) {
             DIRECT_SRC_OBJ_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }?.let { return it }
             DIRECT_SRC_STR_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }?.let { return it }
             SOURCE_TAG_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }?.let { return it }
@@ -371,11 +371,11 @@ internal object VerAniV2Mp4UploadParser {
         HEIGHT_REGEX.findAll(html).mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }.maxOrNull()
 }
 
-internal object VerAniV2MxDropParser {
+internal object VerAniMxDropParser {
     private val WURL_REGEX = Regex("""MDCore\.wurl\s*=\s*["']([^"']+)["']""")
 
     fun extractWurl(html: String): String? {
-        for (body in VerAniV2JsUnpacker.unpackAll(html)) {
+        for (body in VerAniJsUnpacker.unpackAll(html)) {
             val raw = WURL_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim().orEmpty()
             if (raw.isNotEmpty()) {
                 return if (raw.startsWith("//")) "https:$raw" else raw
@@ -385,24 +385,24 @@ internal object VerAniV2MxDropParser {
     }
 }
 
-internal data class VerAniV2ByseSource(
+internal data class VerAniByseSource(
     val url: String,
     val height: Int,
     val bitrateKbps: Int,
     val label: String?,
 )
 
-internal data class VerAniV2ByseTrack(
+internal data class VerAniByseTrack(
     val label: String,
     val url: String,
 )
 
-internal data class VerAniV2BysePlaybackData(
-    val sources: List<VerAniV2ByseSource>,
-    val tracks: List<VerAniV2ByseTrack>,
+internal data class VerAniBysePlaybackData(
+    val sources: List<VerAniByseSource>,
+    val tracks: List<VerAniByseTrack>,
 )
 
-internal object VerAniV2BysePow {
+internal object VerAniBysePow {
     fun hashNonce(input: ByteArray): IntArray {
         val e = intArrayOf(
             0x6a09e667,
@@ -504,9 +504,9 @@ internal object VerAniV2BysePow {
         }
 }
 
-internal object VerAniV2ByseCrypto {
+internal object VerAniByseCrypto {
     fun base64UrlNoPad(bytes: ByteArray): String =
-        VerAniV2Crypto.encodeBase64(bytes)
+        VerAniCrypto.encodeBase64(bytes)
             .replace('+', '-')
             .replace('/', '_')
             .trimEnd('=')
@@ -576,12 +576,12 @@ internal object VerAniV2ByseCrypto {
             val idx1 = verNum - 1
             val idx2 = 30 - verNum
             if (idx1 in keyParts.indices && idx2 in keyParts.indices) {
-                return VerAniV2Crypto.decodeBase64Flexible(keyParts[idx1]) +
-                    VerAniV2Crypto.decodeBase64Flexible(keyParts[idx2])
+                return VerAniCrypto.decodeBase64Flexible(keyParts[idx1]) +
+                    VerAniCrypto.decodeBase64Flexible(keyParts[idx2])
             }
         }
-        return VerAniV2Crypto.decodeBase64Flexible(keyParts[0]) +
-            VerAniV2Crypto.decodeBase64Flexible(keyParts[1])
+        return VerAniCrypto.decodeBase64Flexible(keyParts[0]) +
+            VerAniCrypto.decodeBase64Flexible(keyParts[1])
     }
 
     fun decryptPlaybackDetails(
@@ -589,24 +589,24 @@ internal object VerAniV2ByseCrypto {
         payloadB64Url: String,
         keyParts: List<String>,
         version: String? = null,
-    ): VerAniV2BysePlaybackData? {
+    ): VerAniBysePlaybackData? {
         val keyBytes = resolveAesKeyBytes(keyParts, version) ?: return null
-        val ivBytes = VerAniV2Crypto.decodeBase64Flexible(ivB64Url)
-        val cipherBytes = VerAniV2Crypto.decodeBase64Flexible(payloadB64Url)
+        val ivBytes = VerAniCrypto.decodeBase64Flexible(ivB64Url)
+        val cipherBytes = VerAniCrypto.decodeBase64Flexible(payloadB64Url)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, ivBytes))
         var plain = String(cipher.doFinal(cipherBytes), StandardCharsets.UTF_8)
         if (plain.startsWith("\uFEFF")) plain = plain.substring(1)
 
-        val root = runCatching { VerAniV2Markup.jsonMapper.readTree(plain) }.getOrNull() ?: return null
+        val root = runCatching { VerAniMarkup.jsonMapper.readTree(plain) }.getOrNull() ?: return null
         val sourcesNode = root.get("sources") ?: return null
         if (!sourcesNode.isArray) return null
 
-        val parsedSources = mutableListOf<VerAniV2ByseSource>()
+        val parsedSources = mutableListOf<VerAniByseSource>()
         for (node in sourcesNode) {
             val u = node.get("url")?.asText()?.trim().orEmpty()
             if (!u.startsWith("http", ignoreCase = true)) continue
-            parsedSources += VerAniV2ByseSource(
+            parsedSources += VerAniByseSource(
                 url = u,
                 height = node.get("height")?.asInt(0) ?: 0,
                 bitrateKbps = node.get("bitrate_kbps")?.asInt(0) ?: node.get("bitrate")?.asInt(0) ?: 0,
@@ -615,10 +615,10 @@ internal object VerAniV2ByseCrypto {
         }
         if (parsedSources.isEmpty()) return null
         val ordered = parsedSources.sortedWith(
-            compareByDescending<VerAniV2ByseSource> { it.height }.thenByDescending { it.bitrateKbps },
+            compareByDescending<VerAniByseSource> { it.height }.thenByDescending { it.bitrateKbps },
         )
 
-        val tracks = mutableListOf<VerAniV2ByseTrack>()
+        val tracks = mutableListOf<VerAniByseTrack>()
         val tracksNode = root.get("tracks") ?: root.get("subtitles")
         if (tracksNode != null && tracksNode.isArray) {
             for (sub in tracksNode) {
@@ -626,19 +626,19 @@ internal object VerAniV2ByseCrypto {
                 if (!subUrl.startsWith("http", ignoreCase = true)) continue
                 val subLabel = (sub.get("label")?.asText() ?: sub.get("language")?.asText() ?: sub.get("title")?.asText())
                     ?.trim()?.takeIf { it.isNotEmpty() } ?: "Subtítulos"
-                tracks += VerAniV2ByseTrack(label = subLabel, url = subUrl)
+                tracks += VerAniByseTrack(label = subLabel, url = subUrl)
             }
         }
-        return VerAniV2BysePlaybackData(sources = ordered, tracks = tracks)
+        return VerAniBysePlaybackData(sources = ordered, tracks = tracks)
     }
 }
 
-internal object VerAniV2ExtractorUserAgent {
+internal object VerAniExtractorUserAgent {
     const val UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 }
 
-open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
+open class VerAniTurboEmbedExtractor : ExtractorApi() {
     override val name = "TurboEmbed"
     override val mainUrl = "https://turboembed.com"
     override val requiresReferer = false
@@ -661,14 +661,14 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
         val pvSuffix = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "&$it" }.orEmpty()
 
         val apiHeaders = mapOf(
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
             "Accept" to "application/json, text/plain, */*",
             "Referer" to url,
         )
 
-        var keyChars = VerAniV2TurboEmbedCrypto.DEFAULT_KEY_CHARS
-        var saltChars = VerAniV2TurboEmbedCrypto.DEFAULT_SALT_CHARS
-        var encParam = VerAniV2TurboEmbedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
+        var keyChars = VerAniTurboEmbedCrypto.DEFAULT_KEY_CHARS
+        var saltChars = VerAniTurboEmbedCrypto.DEFAULT_SALT_CHARS
+        var encParam = VerAniTurboEmbedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
         var trackRes = app.get(
             "$origin/api/stream/tracking?c=$encParam$pvSuffix",
             referer = url,
@@ -676,7 +676,7 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
             timeout = 10L,
         )
         var decryptedJson = trackRes.headers["x-tracking"]?.let {
-            VerAniV2TurboEmbedCrypto.decryptHex(it, host, keyChars, saltChars)
+            VerAniTurboEmbedCrypto.decryptHex(it, host, keyChars, saltChars)
         }
 
         if (decryptedJson == null) {
@@ -690,12 +690,12 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
                     app.get(assetUrl, referer = url, headers = apiHeaders, timeout = 8L).text
                 }.getOrNull()
                 if (bundleText != null) {
-                    val parsedKeys = VerAniV2TurboEmbedCrypto.parseCharArray(bundleText, "keyChars")
-                    val parsedSalts = VerAniV2TurboEmbedCrypto.parseCharArray(bundleText, "saltChars")
+                    val parsedKeys = VerAniTurboEmbedCrypto.parseCharArray(bundleText, "keyChars")
+                    val parsedSalts = VerAniTurboEmbedCrypto.parseCharArray(bundleText, "saltChars")
                     if (!parsedKeys.isNullOrEmpty() && !parsedSalts.isNullOrEmpty()) {
                         keyChars = parsedKeys
                         saltChars = parsedSalts
-                        encParam = VerAniV2TurboEmbedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
+                        encParam = VerAniTurboEmbedCrypto.encryptHex(shortCode, host, keyChars, saltChars)
                         trackRes = app.get(
                             "$origin/api/stream/tracking?c=$encParam$pvSuffix",
                             referer = url,
@@ -703,7 +703,7 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
                             timeout = 10L,
                         )
                         decryptedJson = trackRes.headers["x-tracking"]?.let {
-                            VerAniV2TurboEmbedCrypto.decryptHex(it, host, keyChars, saltChars)
+                            VerAniTurboEmbedCrypto.decryptHex(it, host, keyChars, saltChars)
                         }
                     }
                 }
@@ -711,7 +711,7 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
         }
 
         val jsonText = decryptedJson ?: return
-        val root = runCatching { VerAniV2Markup.jsonMapper.readTree(jsonText) }.getOrNull() ?: return
+        val root = runCatching { VerAniMarkup.jsonMapper.readTree(jsonText) }.getOrNull() ?: return
         val streamNode = root.get("stream") ?: root
         val streamCandidates = listOf("tiktok", "hls", "direct")
             .mapNotNull { key ->
@@ -724,13 +724,13 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
         val streamHeaders = mapOf(
             "Origin" to origin,
             "Referer" to "$origin/",
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
         )
 
         var emitted = false
         for (candidate in streamCandidates) {
             val before = emitted
-            VerAniV2HlsHelper.emitHlsSafely(
+            VerAniHlsHelper.emitHlsSafely(
                 sourceName = name,
                 displayName = name,
                 masterUrl = candidate,
@@ -748,7 +748,7 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
             runCatching {
                 val infoRes = app.get("$origin/api/stream?s=$shortCode$pvSuffix", referer = url, headers = apiHeaders, timeout = 5L)
                 if (infoRes.isSuccessful) {
-                    val subsNode = VerAniV2Markup.jsonMapper.readTree(infoRes.text).get("data")?.get("subtitles")
+                    val subsNode = VerAniMarkup.jsonMapper.readTree(infoRes.text).get("data")?.get("subtitles")
                     if (subsNode != null && subsNode.isArray) {
                         for (sub in subsNode) {
                             val subUrl = sub.get("url")?.asText()?.trim().orEmpty()
@@ -766,7 +766,7 @@ open class VerAniV2TurboEmbedExtractor : ExtractorApi() {
     }
 }
 
-class VerAniV2AnimeAv1Extractor : VerAniV2TurboEmbedExtractor() {
+class VerAniAnimeAv1Extractor : VerAniTurboEmbedExtractor() {
     override val name = "AnimeAV1"
     override val mainUrl = "https://animeav1.uns.bio"
 
@@ -791,7 +791,7 @@ class VerAniV2AnimeAv1Extractor : VerAniV2TurboEmbedExtractor() {
                 "$origin/api/public/resolve?file1=$file1",
                 referer = url,
                 headers = mapOf(
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                     "Accept" to "application/json, */*",
                     "Referer" to url,
                 ),
@@ -801,14 +801,14 @@ class VerAniV2AnimeAv1Extractor : VerAniV2TurboEmbedExtractor() {
 
         if (!res.isSuccessful) return
         val resolvedUrl = runCatching {
-            VerAniV2Markup.jsonMapper.readTree(res.text).get("url")?.asText()?.trim()
+            VerAniMarkup.jsonMapper.readTree(res.text).get("url")?.asText()?.trim()
         }.getOrNull()?.takeIf { it.startsWith("http", ignoreCase = true) } ?: return
 
         super.getUrl(resolvedUrl, url, subtitleCallback, callback)
     }
 }
 
-class VerAniV2VidaraExtractor : ExtractorApi() {
+class VerAniVidaraExtractor : ExtractorApi() {
     override val name = "Vidara"
     override val mainUrl = "https://vidara.so"
     override val requiresReferer = true
@@ -828,7 +828,7 @@ class VerAniV2VidaraExtractor : ExtractorApi() {
         val filecode = uri.rawPath.orEmpty().trimEnd('/').substringAfterLast('/').trim()
         if (filecode.isEmpty()) return
 
-        val payload = VerAniV2Markup.jsonMapper.writeValueAsString(
+        val payload = VerAniMarkup.jsonMapper.writeValueAsString(
             mapOf(
                 "filecode" to filecode,
                 "device" to "android",
@@ -836,7 +836,7 @@ class VerAniV2VidaraExtractor : ExtractorApi() {
             ),
         )
         val headers = mapOf(
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
             "Accept" to "application/json, */*",
             "Origin" to origin,
             "Referer" to url,
@@ -851,7 +851,7 @@ class VerAniV2VidaraExtractor : ExtractorApi() {
         }.getOrNull() ?: return
 
         if (!res.isSuccessful) return
-        val node = runCatching { VerAniV2Markup.jsonMapper.readTree(res.text) }.getOrNull() ?: return
+        val node = runCatching { VerAniMarkup.jsonMapper.readTree(res.text) }.getOrNull() ?: return
         val streamUrl = node.get("streaming_url")?.asText()?.trim()
             ?.takeIf { it.startsWith("http", ignoreCase = true) } ?: return
 
@@ -869,9 +869,9 @@ class VerAniV2VidaraExtractor : ExtractorApi() {
         val streamHeaders = mapOf(
             "Origin" to origin,
             "Referer" to "$origin/",
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
         )
-        VerAniV2HlsHelper.emitHlsSafely(
+        VerAniHlsHelper.emitHlsSafely(
             sourceName = name,
             displayName = name,
             masterUrl = streamUrl,
@@ -882,7 +882,7 @@ class VerAniV2VidaraExtractor : ExtractorApi() {
     }
 }
 
-class VerAniV2ZillaExtractor : ExtractorApi() {
+class VerAniZillaExtractor : ExtractorApi() {
     override val name = "Zilla"
     override val mainUrl = "https://player.zilla-networks.com"
     override val requiresReferer = true
@@ -904,12 +904,12 @@ class VerAniV2ZillaExtractor : ExtractorApi() {
             }
         }
 
-        val effRef = referer?.takeIf { it.startsWith("http", ignoreCase = true) } ?: "${VerAniV2Markup.DEFAULT_MAIN_URL}/"
+        val effRef = referer?.takeIf { it.startsWith("http", ignoreCase = true) } ?: "${VerAniMarkup.DEFAULT_MAIN_URL}/"
         val headers = mapOf(
             "Referer" to effRef,
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
         )
-        VerAniV2HlsHelper.emitHlsSafely(
+        VerAniHlsHelper.emitHlsSafely(
             sourceName = name,
             displayName = name,
             masterUrl = m3u8Url,
@@ -920,7 +920,7 @@ class VerAniV2ZillaExtractor : ExtractorApi() {
     }
 }
 
-open class VerAniV2VoeExtractor : ExtractorApi() {
+open class VerAniVoeExtractor : ExtractorApi() {
     override val name = "Voe"
     override val mainUrl = "https://voe.sx"
     override val requiresReferer = true
@@ -932,7 +932,7 @@ open class VerAniV2VoeExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit,
     ) {
         val headers = mapOf(
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         )
         var currentUrl = url
@@ -941,7 +941,7 @@ open class VerAniV2VoeExtractor : ExtractorApi() {
 
         var html = res.text
         currentUrl = res.url
-        VerAniV2VoeDecoder.findRedirectUrl(html)?.let { redir ->
+        VerAniVoeDecoder.findRedirectUrl(html)?.let { redir ->
             val r2 = runCatching { app.get(redir, referer = currentUrl, headers = headers, timeout = 12L) }.getOrNull()
             if (r2 != null && r2.isSuccessful) {
                 html = r2.text
@@ -954,13 +954,13 @@ open class VerAniV2VoeExtractor : ExtractorApi() {
         val streamHeaders = mapOf(
             "Origin" to curOrigin,
             "Referer" to "$curOrigin/",
-            "user-agent" to VerAniV2ExtractorUserAgent.UA,
+            "user-agent" to VerAniExtractorUserAgent.UA,
         )
 
-        val encoded = VerAniV2VoeDecoder.findEncodedPayload(html)
-        val decryptedJson = encoded?.let { VerAniV2VoeDecoder.decryptF7(it) }
+        val encoded = VerAniVoeDecoder.findEncodedPayload(html)
+        val decryptedJson = encoded?.let { VerAniVoeDecoder.decryptF7(it) }
         if (!decryptedJson.isNullOrBlank()) {
-            val node = runCatching { VerAniV2Markup.jsonMapper.readTree(decryptedJson) }.getOrNull()
+            val node = runCatching { VerAniMarkup.jsonMapper.readTree(decryptedJson) }.getOrNull()
             if (node != null) {
                 val hlsUrl = node.get("source")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
                 val mp4Url = node.get("direct_access_url")?.asText()?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
@@ -978,7 +978,7 @@ open class VerAniV2VoeExtractor : ExtractorApi() {
 
                 var emitted = false
                 if (hlsUrl != null) {
-                    VerAniV2HlsHelper.emitHlsSafely(
+                    VerAniHlsHelper.emitHlsSafely(
                         sourceName = name,
                         displayName = name,
                         masterUrl = hlsUrl,
@@ -1006,15 +1006,15 @@ open class VerAniV2VoeExtractor : ExtractorApi() {
 
         // Legacy fallback if F7 payload wasn't present
         val hlsLegacy = Regex("""["']hls["']\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
-            ?.let { raw -> if (raw.startsWith("http")) raw else runCatching { String(VerAniV2Crypto.decodeBase64Flexible(raw)) }.getOrNull() }
+            ?.let { raw -> if (raw.startsWith("http")) raw else runCatching { String(VerAniCrypto.decodeBase64Flexible(raw)) }.getOrNull() }
             ?.takeIf { it.startsWith("http", ignoreCase = true) }
         if (hlsLegacy != null) {
-            VerAniV2HlsHelper.emitHlsSafely(name, name, hlsLegacy, "$curOrigin/", streamHeaders, callback = callback)
+            VerAniHlsHelper.emitHlsSafely(name, name, hlsLegacy, "$curOrigin/", streamHeaders, callback = callback)
         }
     }
 }
 
-class VerAniV2Mp4UploadExtractor : ExtractorApi() {
+class VerAniMp4UploadExtractor : ExtractorApi() {
     override val name = "Mp4Upload"
     override val mainUrl = "https://www.mp4upload.com"
     override val requiresReferer = true
@@ -1025,13 +1025,13 @@ class VerAniV2Mp4UploadExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
-        val realUrl = VerAniV2Mp4UploadParser.normalizeEmbedUrl(url) ?: return
+        val realUrl = VerAniMp4UploadParser.normalizeEmbedUrl(url) ?: return
         val res = runCatching {
             app.get(
                 realUrl,
-                referer = referer ?: "${VerAniV2Markup.DEFAULT_MAIN_URL}/",
+                referer = referer ?: "${VerAniMarkup.DEFAULT_MAIN_URL}/",
                 headers = mapOf(
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                     "Referer" to "$mainUrl/",
                 ),
                 timeout = 12L,
@@ -1039,14 +1039,14 @@ class VerAniV2Mp4UploadExtractor : ExtractorApi() {
         }.getOrNull() ?: return
         if (!res.isSuccessful) return
 
-        val videoSrc = VerAniV2Mp4UploadParser.extractVideoSrc(res.text) ?: return
-        val height = VerAniV2Mp4UploadParser.extractHeight(res.text) ?: Qualities.Unknown.value
+        val videoSrc = VerAniMp4UploadParser.extractVideoSrc(res.text) ?: return
+        val height = VerAniMp4UploadParser.extractHeight(res.text) ?: Qualities.Unknown.value
         callback(
             newExtractorLink(name, name, videoSrc, ExtractorLinkType.VIDEO) {
                 this.referer = "$mainUrl/"
                 this.headers = mapOf(
                     "Referer" to "$mainUrl/",
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                 )
                 this.quality = height
             },
@@ -1054,7 +1054,7 @@ class VerAniV2Mp4UploadExtractor : ExtractorApi() {
     }
 }
 
-class VerAniV2MxDropExtractor : ExtractorApi() {
+class VerAniMxDropExtractor : ExtractorApi() {
     override val name = "MxDrop"
     override val mainUrl = "https://mxdrop.sx"
     override val requiresReferer = true
@@ -1070,7 +1070,7 @@ class VerAniV2MxDropExtractor : ExtractorApi() {
                 url,
                 referer = referer ?: "$mainUrl/",
                 headers = mapOf(
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                     "Accept" to "text/html,application/xhtml+xml,*/*;q=0.8",
                 ),
                 timeout = 12L,
@@ -1083,7 +1083,7 @@ class VerAniV2MxDropExtractor : ExtractorApi() {
             "${u.scheme}://${u.authority}"
         }.getOrDefault(mainUrl)
 
-        val wurl = VerAniV2MxDropParser.extractWurl(res.text) ?: return
+        val wurl = VerAniMxDropParser.extractWurl(res.text) ?: return
         val quality = Jsoup.parse(res.text).select("meta[name=description], title").text()
             .let { Regex("""(\d{3,4}p)""").find(it)?.groupValues?.getOrNull(1) }
             ?.let(::getQualityFromName)
@@ -1094,7 +1094,7 @@ class VerAniV2MxDropExtractor : ExtractorApi() {
                 this.referer = "$finalOrigin/"
                 this.headers = mapOf(
                     "Referer" to "$finalOrigin/",
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                 )
                 this.quality = quality
             },
@@ -1102,7 +1102,7 @@ class VerAniV2MxDropExtractor : ExtractorApi() {
     }
 }
 
-open class VerAniV2ByseExtractor : ExtractorApi() {
+open class VerAniByseExtractor : ExtractorApi() {
     override val name = "Byse"
     override val mainUrl = "https://byselapuix.com"
     override val requiresReferer = true
@@ -1121,7 +1121,7 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
         private const val ATTEST_TTL_MS = 20 * 60_000L
 
         private fun jsonBody(payload: Any) =
-            VerAniV2Markup.jsonMapper.writeValueAsString(payload).toRequestBody(JSON_MEDIA)
+            VerAniMarkup.jsonMapper.writeValueAsString(payload).toRequestBody(JSON_MEDIA)
 
         private suspend fun getOrCreateAttestedState(
             origin: String,
@@ -1139,9 +1139,9 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                     return@withLock rechecked
                 }
                 val cookies = if (forceRefresh) linkedMapOf() else rechecked?.cookies?.toMutableMap() ?: linkedMapOf()
-                val keyPair = if (forceRefresh) VerAniV2ByseCrypto.ecKeyPairP256() else rechecked?.keyPair ?: VerAniV2ByseCrypto.ecKeyPairP256()
+                val keyPair = if (forceRefresh) VerAniByseCrypto.ecKeyPairP256() else rechecked?.keyPair ?: VerAniByseCrypto.ecKeyPairP256()
                 val baseHeaders = mapOf(
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                     "Accept" to "application/json, */*",
                     "Origin" to origin,
                     "Referer" to referer,
@@ -1158,13 +1158,13 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                 }.getOrNull() ?: return@withLock null
                 cookies.putAll(chalRes.cookies)
                 if (!chalRes.isSuccessful) return@withLock null
-                val chalNode = runCatching { VerAniV2Markup.jsonMapper.readTree(chalRes.text) }.getOrNull() ?: return@withLock null
+                val chalNode = runCatching { VerAniMarkup.jsonMapper.readTree(chalRes.text) }.getOrNull() ?: return@withLock null
                 val challengeId = chalNode.get("challenge_id")?.asText()?.trim().orEmpty()
                 val nonce = chalNode.get("nonce")?.asText()?.trim().orEmpty()
                 if (challengeId.isEmpty() || nonce.isEmpty()) return@withLock null
 
-                val signature = VerAniV2ByseCrypto.signChallengeNonce(nonce, keyPair)
-                val pubJwk = VerAniV2ByseCrypto.toJwkPublicKey(keyPair.public as ECPublicKey)
+                val signature = VerAniByseCrypto.signChallengeNonce(nonce, keyPair)
+                val pubJwk = VerAniByseCrypto.toJwkPublicKey(keyPair.public as ECPublicKey)
                 val attestPayload = linkedMapOf<String, Any?>(
                     "viewer_id" to if (forceRefresh) null else rechecked?.fingerprint?.get("viewer_id"),
                     "device_id" to if (forceRefresh) null else rechecked?.fingerprint?.get("device_id"),
@@ -1173,7 +1173,7 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                     "signature" to signature,
                     "public_key" to pubJwk,
                     "client" to mapOf(
-                        "user_agent" to VerAniV2ExtractorUserAgent.UA,
+                        "user_agent" to VerAniExtractorUserAgent.UA,
                         "platform" to "Linux armv8l",
                         "languages" to listOf("es-MX", "es"),
                         "timezone" to "America/Mexico_City",
@@ -1193,7 +1193,7 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                 cookies.putAll(attestRes.cookies)
                 if (!attestRes.isSuccessful) return@withLock null
 
-                val attNode = runCatching { VerAniV2Markup.jsonMapper.readTree(attestRes.text) }.getOrNull() ?: return@withLock null
+                val attNode = runCatching { VerAniMarkup.jsonMapper.readTree(attestRes.text) }.getOrNull() ?: return@withLock null
                 val viewerId = attNode.get("viewer_id")?.asText()?.trim().orEmpty()
                 val deviceId = attNode.get("device_id")?.asText()?.trim().orEmpty()
                 val token = attNode.get("token")?.asText()?.trim().orEmpty()
@@ -1227,7 +1227,7 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
         val code = runCatching { URI(url).rawPath.orEmpty().trimEnd('/').substringAfterLast('/') }.getOrDefault("")
         if (code.isBlank()) return
 
-        val baseHeaders = mapOf("user-agent" to VerAniV2ExtractorUserAgent.UA, "Accept" to "*/*")
+        val baseHeaders = mapOf("user-agent" to VerAniExtractorUserAgent.UA, "Accept" to "*/*")
         val detailsRes = runCatching {
             app.get("$base/api/videos/$code/embed/details", referer = url, headers = baseHeaders, timeout = 8L)
         }.getOrNull()?.takeIf { it.isSuccessful } ?: runCatching {
@@ -1235,7 +1235,7 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
         }.getOrNull()?.takeIf { it.isSuccessful }
 
         val embedFrameUrl = detailsRes?.text?.let { raw ->
-            runCatching { VerAniV2Markup.jsonMapper.readTree(raw).get("embed_frame_url")?.asText()?.trim() }.getOrNull()
+            runCatching { VerAniMarkup.jsonMapper.readTree(raw).get("embed_frame_url")?.asText()?.trim() }.getOrNull()
         }?.takeIf { it.startsWith("http", ignoreCase = true) }
 
         val targetPairs = buildList {
@@ -1256,12 +1256,12 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
             } == true
             val state = getOrCreateAttestedState(targetOrigin, effRef) ?: continue
 
-            suspend fun requestPlayback(activeState: AttestedOriginState, isEmbedMode: Boolean): VerAniV2BysePlaybackData? {
+            suspend fun requestPlayback(activeState: AttestedOriginState, isEmbedMode: Boolean): VerAniBysePlaybackData? {
                 val prefix = if (isEmbedMode) "embed/" else ""
-                val embedParent = referer?.takeIf { it.isNotBlank() } ?: "${VerAniV2Markup.DEFAULT_MAIN_URL}/"
-                val embedParentHost = VerAniV2Markup.hostOf(embedParent).ifEmpty { "verani.me" }
+                val embedParent = referer?.takeIf { it.isNotBlank() } ?: "${VerAniMarkup.DEFAULT_MAIN_URL}/"
+                val embedParentHost = VerAniMarkup.hostOf(embedParent).ifEmpty { "verani.me" }
                 val pbHeaders = linkedMapOf(
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                     "Accept" to "application/json, */*",
                     "Origin" to targetOrigin,
                     "Referer" to effRef,
@@ -1294,13 +1294,13 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                     activeState.cookies.putAll(capRes.cookies)
                     if (!capRes.isSuccessful) return null
 
-                    val capNode = runCatching { VerAniV2Markup.jsonMapper.readTree(capRes.text) }.getOrNull() ?: return null
+                    val capNode = runCatching { VerAniMarkup.jsonMapper.readTree(capRes.text) }.getOrNull() ?: return null
                     val powNonce = capNode.get("pow_nonce")?.asText().orEmpty()
                     val powDiff = capNode.get("pow_difficulty")?.asInt(12) ?: 12
                     val powToken = capNode.get("pow_token")?.asText().orEmpty()
                     if (powNonce.isEmpty() || powToken.isEmpty()) return null
 
-                    val solution = VerAniV2BysePow.solve(powNonce, powDiff) ?: return null
+                    val solution = VerAniBysePow.solve(powNonce, powDiff) ?: return null
                     val verifyPayload = mapOf(
                         "pow_token" to powToken,
                         "solution" to solution,
@@ -1317,7 +1317,7 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                     if (!verRes.isSuccessful) return null
 
                     val captchaToken = runCatching {
-                        VerAniV2Markup.jsonMapper.readTree(verRes.text).get("token")?.asText()?.trim()
+                        VerAniMarkup.jsonMapper.readTree(verRes.text).get("token")?.asText()?.trim()
                     }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
 
                     pbRes = app.post(
@@ -1331,14 +1331,14 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                 }
 
                 if (!pbRes.isSuccessful) return null
-                val root = runCatching { VerAniV2Markup.jsonMapper.readTree(pbRes.text) }.getOrNull() ?: return null
+                val root = runCatching { VerAniMarkup.jsonMapper.readTree(pbRes.text) }.getOrNull() ?: return null
                 val playback = root.get("playback") ?: return null
                 val iv = playback.get("iv")?.asText().orEmpty()
                 val payload = playback.get("payload")?.asText().orEmpty()
                 val version = playback.get("version")?.asText()
                 val keyParts = playback.get("key_parts")?.mapNotNull { it.asText() }.orEmpty()
                 return runCatching {
-                    VerAniV2ByseCrypto.decryptPlaybackDetails(iv, payload, keyParts, version)
+                    VerAniByseCrypto.decryptPlaybackDetails(iv, payload, keyParts, version)
                 }.getOrNull()
             }
 
@@ -1360,14 +1360,14 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
                 val streamHeaders = mapOf(
                     "Origin" to targetOrigin,
                     "Referer" to "$targetOrigin/",
-                    "user-agent" to VerAniV2ExtractorUserAgent.UA,
+                    "user-agent" to VerAniExtractorUserAgent.UA,
                 )
                 val best = decrypted.sources.first()
                 val isM3u8 = best.url.contains(".m3u8", ignoreCase = true) ||
                     best.url.contains("/hls/", ignoreCase = true) ||
                     best.url.contains("master", ignoreCase = true)
                 if (isM3u8) {
-                    VerAniV2HlsHelper.emitHlsSafely(
+                    VerAniHlsHelper.emitHlsSafely(
                         sourceName = name,
                         displayName = best.label?.let { "$name ($it)" } ?: name,
                         masterUrl = best.url,
@@ -1391,33 +1391,33 @@ open class VerAniV2ByseExtractor : ExtractorApi() {
     }
 }
 
-class VerAniV2ByseKozeExtractor : VerAniV2ByseExtractor() {
+class VerAniByseKozeExtractor : VerAniByseExtractor() {
     override val name = "Byse"
     override val mainUrl = "https://bysekoze.com"
 }
 
-class VerAniV2ByseBuhoExtractor : VerAniV2ByseExtractor() {
+class VerAniByseBuhoExtractor : VerAniByseExtractor() {
     override val name = "Byse"
     override val mainUrl = "https://bysebuho.com"
 }
 
-class VerAniV2ByseSxExtractor : VerAniV2ByseExtractor() {
+class VerAniByseSxExtractor : VerAniByseExtractor() {
     override val name = "Byse"
     override val mainUrl = "https://byse.sx"
 }
 
-internal object VerAniV2ExtractorDispatcher {
-    private val animeAv1 = VerAniV2AnimeAv1Extractor()
-    private val turboEmbed = VerAniV2TurboEmbedExtractor()
-    private val vidara = VerAniV2VidaraExtractor()
-    private val zilla = VerAniV2ZillaExtractor()
-    private val voe = VerAniV2VoeExtractor()
-    private val mp4Upload = VerAniV2Mp4UploadExtractor()
-    private val mxDrop = VerAniV2MxDropExtractor()
-    private val byse = VerAniV2ByseExtractor()
+internal object VerAniExtractorDispatcher {
+    private val animeAv1 = VerAniAnimeAv1Extractor()
+    private val turboEmbed = VerAniTurboEmbedExtractor()
+    private val vidara = VerAniVidaraExtractor()
+    private val zilla = VerAniZillaExtractor()
+    private val voe = VerAniVoeExtractor()
+    private val mp4Upload = VerAniMp4UploadExtractor()
+    private val mxDrop = VerAniMxDropExtractor()
+    private val byse = VerAniByseExtractor()
 
     fun decorateName(base: String, badge: String): String =
-        VerAniV2Markup.decorateLinkName(base, badge)
+        VerAniMarkup.decorateLinkName(base, badge)
 
     suspend fun extractTab(
         tab: VerAniPlayerTab,
@@ -1425,7 +1425,7 @@ internal object VerAniV2ExtractorDispatcher {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
-        val host = VerAniV2Markup.hostOf(tab.url).removePrefix("www.")
+        val host = VerAniMarkup.hostOf(tab.url).removePrefix("www.")
         val collected = mutableListOf<ExtractorLink>()
         val collect: (ExtractorLink) -> Unit = { collected += it }
 

@@ -14,7 +14,6 @@ on:
     branches: ['arena/**']
     paths:
       - 'AnimeOnlineNinja/**'
-      - 'VerAni/**'
       - 'Repelis24CZ/**'
       - 'PeliCineHD/**'
       - '.github/workflows/android-browser-test.yml'
@@ -52,7 +51,6 @@ jobs:
           name: pruebas-webview
           path: |
             AnimeOnlineNinja/build/reports/androidTests/
-            VerAni/build/reports/androidTests/
             Repelis24CZ/build/reports/androidTests/
             PeliCineHD/build/reports/androidTests/
           if-no-files-found: ignore

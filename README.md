@@ -37,15 +37,13 @@ La raíz del dominio puede redirigir a `ver2.animeonline.ninja`, que muestra el 
 
 ### Pruebas de Android
 
-El flujo **Pruebas WebView en Android** ejecuta pruebas con WebView real en un emulador usando respuestas simuladas, incluyendo la preservación de errores HTTP. Desde **Actions → Pruebas WebView en Android → Run workflow**, activa `live` para probar también el catálogo y la API reales; dependen de la red y pueden fallar por causas externas. La prueba real de VerAni comprueba catálogos, búsqueda, episodios, idiomas y metadatos. No verifica la reproducción en el dispositivo del usuario.
+El flujo **Pruebas WebView en Android** ejecuta pruebas con WebView real en un emulador usando respuestas simuladas, incluyendo la preservación de errores HTTP. Desde **Actions → Pruebas WebView en Android → Run workflow**, activa `live` para probar también el catálogo y la API reales; dependen de la red y pueden fallar por causas externas.
 
-### VerAni: temporadas y OVAS
+### VerAni.me
 
-Las temporadas y la numeración se toman de las fichas de VerAni, independientemente de si la dirección de un episodio contiene `capitulo-`, comienza por un número o solo tiene un título. Las OVAS sin número se ordenan según la lista del sitio y se enumeran para poder seleccionarlas. Se asignan a la temporada 0; algunas versiones de CloudStream la muestran como «Ninguna temporada», por lo que cada uno de estos episodios conserva también el prefijo OVAS.
+Extensión reconstruida para `https://verani.me/` con soporte paginado de **Estrenos Semanales**, **Últimos Animes**, **En Emisión**, **Audio Latino**, **Castellano**, **Más Populares**, **Películas** y géneros principales, además de búsqueda paginada y resolución automática desde capítulos hacia la ficha padre del anime.
 
-### VerAni: estado de los reproductores
-
-VerAni incluye páginas de anime y películas con paginación, búsqueda, fichas y servidores con la etiqueta de audio y subtítulos indicada por la página. Los tops se muestran por clasificación (puntuación, votos, vistas, comentarios, reacciones y favoritos, según corresponda) y se pueden recorrer en varias páginas. Los títulos que el sitio enlaza a otros dominios se omiten porque no son fichas de VerAni compatibles. Las fichas usan la portada y el fondo del título cuando están disponibles, evitando el logotipo genérico del sitio. Los enlaces HLS directos se presentan solo si el servidor devuelve un manifiesto válido; los demás dependen de los extractores disponibles en CloudStream. **Un manifiesto válido no garantiza reproducción:** en las pruebas desde GitHub, los segmentos de Zilla devolvieron HTTP 403 aunque el manifiesto respondió correctamente. Los servidores y su disponibilidad pueden variar según el título, la red y el dispositivo. Si uno falla, prueba otra fuente; no se garantiza que todas funcionen.
+Las temporadas y capítulos se ordenan cronológicamente evitando duplicados en los nombres de temporada, asignan cualquier sección de películas relacionadas (como *Boruto*) a su propia pestaña de temporada no-cero y descartan automáticamente el logotipo genérico del sitio como portada en favor de la imagen del anime. Incluye extractores nativos para **AnimeAV1 / TurboEmbed** (conservando la pista de audio en listas maestras HLS separadas), **Vidara**, **Zilla**, **VOE** (espejos y decodificación F7), **Mp4Upload**, **MxDrop** y **Byse**, etiquetando cada enlace con su idioma (`[Latino]`, `[Castellano]`, `[Sub Español]`). Algunos servidores externos como `player.zilla-networks.com` o espejos concretos de Byse pueden aplicar bloqueos por IP de centro de datos o captcha interactivo dependiendo de la red del dispositivo.
 
 ### RePelis24.cz
 

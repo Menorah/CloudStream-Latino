@@ -1,197 +1,214 @@
 package com.menorah.verani
 
-import android.content.Context
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withTimeoutOrNull
+import com.lagradost.cloudstream3.DubStatus
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SearchResponseList
+import com.lagradost.cloudstream3.SeasonData
+import com.lagradost.cloudstream3.ShowStatus
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.addDubStatus
+import com.lagradost.cloudstream3.addEpisodes
+import com.lagradost.cloudstream3.amap
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newAnimeLoadResponse
+import com.lagradost.cloudstream3.newAnimeSearchResponse
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newMovieLoadResponse
+import com.lagradost.cloudstream3.newMovieSearchResponse
+import com.lagradost.cloudstream3.newSearchResponseList
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import java.net.URI
-import java.net.URLEncoder
-import java.util.Collections
-import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
-class VerAniProvider(context: Context) : MainAPI() {
-    override var mainUrl = "https://verani.me"
+class VerAniProvider : MainAPI() {
+    override var mainUrl = VerAniMarkup.DEFAULT_MAIN_URL
     override var name = "VerAni.me"
-    override var lang = "es"
     override val hasMainPage = true
-    override val hasQuickSearch = true
-    override val hasChromecastSupport = false
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
+    override var lang = "es"
+    override val supportedTypes = setOf(
+        TvType.Anime,
+        TvType.AnimeMovie,
+        TvType.OVA,
+    )
+
     override val mainPage = mainPageOf(
-        "/animes/" to "Animes", "/peliculas/" to "Películas",
-        "/tops/animes/#rated_anime" to "Top animes · Mejor puntuados",
-        "/tops/animes/#votes_anime" to "Top animes · Más votados",
-        "/tops/animes/#viewed" to "Top animes · Más vistos",
-        "/tops/animes/#commented" to "Top animes · Más comentados",
-        "/tops/animes/#reactions" to "Top animes · Más reacciones",
-        "/tops/animes/#fav_anime" to "Top animes · Favoritos",
-        "/tops/peliculas/#peli_viewed" to "Top películas · Más vistas",
-        "/tops/peliculas/#peli_commented" to "Top películas · Más comentadas",
-        "/tops/peliculas/#peli_reactions" to "Top películas · Más reacciones",
-        "/tops/peliculas/#fav_peli" to "Top películas · Favoritas",
+        VerAniMarkup.SECTION_WEEKLY to "Estrenos Semanales",
+        "$mainUrl/animes/" to "Últimos Animes",
+        "$mainUrl/animes/?estado=en-emision" to "En Emisión",
+        "$mainUrl/animes/?idioma=Espa%C3%B1ol%20Latino" to "Audio Latino",
+        "$mainUrl/animes/?idioma=Espa%C3%B1ol%20Espa%C3%B1a" to "Castellano",
+        "$mainUrl/animes/?orderby=popular" to "Más Populares",
+        "$mainUrl/peliculas/" to "Películas",
+        "$mainUrl/animes/accion/" to "Acción",
+        "$mainUrl/animes/aventura/" to "Aventura",
+        "$mainUrl/animes/fantasia/" to "Fantasía",
+        "$mainUrl/animes/isekai/" to "Isekai",
+        "$mainUrl/animes/romance/" to "Romance",
+        "$mainUrl/animes/shounen/" to "Shounen",
     )
-    private val site = SiteClient.create(context)
-    private val posters = PosterCache.create(context)
-    private val rankingMutex = Mutex()
-    private val rankingCache = mutableMapOf<String, RankingSnapshot>()
 
-    private data class RankingSnapshot(val expiresAt: Long, val lists: Map<String, List<VerAniCard>>)
-    private val rankingKeys = mapOf(
-        "/tops/animes/" to listOf("rated_anime", "votes_anime", "viewed", "commented", "reactions", "fav_anime"),
-        "/tops/peliculas/" to listOf("peli_viewed", "peli_commented", "peli_reactions", "fav_peli"),
+    private val defaultHeaders = mapOf(
+        "user-agent" to VerAniExtractorUserAgent.UA,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "es-MX,es;q=0.9,en;q=0.8",
     )
-    private suspend fun ranking(path: String, key: String): List<VerAniCard> = rankingMutex.withLock {
-        val keys = rankingKeys[path] ?: return@withLock emptyList()
-        if (key !in keys) return@withLock emptyList()
-        val now = System.currentTimeMillis()
-        val snapshot = rankingCache[path]?.takeIf { now < it.expiresAt } ?: run {
-            val doc = fetch(path)
-            val lists = keys.associateWith { VerAniMarkup.ranking(doc, it, path == "/tops/peliculas/") }
-            // Do not cache a changed or blocked page as an empty ranking.
-            if (lists.values.all { it.isEmpty() }) throw IllegalStateException("No se pudieron leer los tops de VerAni.")
-            RankingSnapshot(now + 5 * 60_000L, lists).also { rankingCache[path] = it }
-        }
-        snapshot.lists[key].orEmpty()
-    }
 
-    private suspend fun fetch(url: String): Document {
-        val target = URI("$mainUrl/").resolve(url).toString()
-        require(isSiteUrl(target)) { "URL fuera del sitio VerAni" }
-        val response = site.get(target)
-        if (!response.isSuccessful) throw IllegalStateException("VerAni rechazó el acceso (HTTP ${response.code}).")
-        return Jsoup.parse(response.text, response.url)
-    }
-
-    private suspend fun cards(parsed: List<VerAniCard>): List<SearchResponse> {
-        val cached = posters.resolve(parsed.map { it.poster })
-        return parsed.map { item ->
-            val poster = cached[item.poster] ?: item.poster
-            val headers = item.poster?.takeIf(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/") }
-            if (item.movie) newMovieSearchResponse(item.title, item.url, TvType.AnimeMovie) { posterUrl = poster; posterHeaders = headers }
-            else newTvSeriesSearchResponse(item.title, item.url, TvType.Anime) { posterUrl = poster; posterHeaders = headers }
+    private fun VerAniCard.toSearchResponse(): SearchResponse {
+        return if (isMovie) {
+            newMovieSearchResponse(title, url, TvType.AnimeMovie) {
+                this.posterUrl = this@toSearchResponse.posterUrl
+            }
+        } else {
+            newAnimeSearchResponse(title, url, TvType.Anime) {
+                this.posterUrl = this@toSearchResponse.posterUrl
+                val epCount = this@toSearchResponse.latestEpisode ?: this@toSearchResponse.episodesCount
+                if (epCount != null && epCount > 0) {
+                    addDubStatus(isDub = this@toSearchResponse.isDub, episodes = epCount)
+                } else if (this@toSearchResponse.isDub) {
+                    addDubStatus(isDub = true, episodes = null)
+                }
+            }
         }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val section = request.data.substringBefore('#')
-        if (section in rankingKeys) {
-            val entries = ranking(section, request.data.substringAfter('#', ""))
-            val result = VerAniMarkup.rankingPage(entries, page)
-            return newHomePageResponse(HomePageList(request.name, cards(result.cards)), hasNext = result.hasNext)
+        if (request.data == VerAniMarkup.SECTION_WEEKLY) {
+            if (page > 1) {
+                return newHomePageResponse(request, emptyList(), hasNext = false)
+            }
+            val res = app.get("$mainUrl/", headers = defaultHeaders, timeout = 15L)
+            val doc = Jsoup.parse(res.text, res.url)
+            val items = VerAniMarkup.parseHomeWeeklyUpdates(doc, mainUrl).map { it.toSearchResponse() }
+            return newHomePageResponse(request, items, hasNext = false)
         }
-        val path = request.data.trimEnd('/') + if (page > 1) "/page/$page/" else "/"
-        val doc = fetch(path)
-        return newHomePageResponse(HomePageList(request.name, cards(VerAniMarkup.cards(doc))), hasNext = VerAniMarkup.hasNext(doc))
+
+        val targetUrl = VerAniMarkup.buildArchivePageUrl(request.data, page, mainUrl)
+        val res = app.get(targetUrl, referer = "$mainUrl/", headers = defaultHeaders, timeout = 15L)
+        val doc = Jsoup.parse(res.text, res.url)
+        val paged = VerAniMarkup.parseArchiveCards(doc, mainUrl)
+        val items = paged.items.map { it.toSearchResponse() }
+        return newHomePageResponse(request, items, hasNext = paged.hasNext)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        if (query.isBlank()) return emptyList()
-        return cards(VerAniMarkup.cards(fetch("/?s=${URLEncoder.encode(query.trim(), "UTF-8")}")))
-    }
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
-    override suspend fun search(query: String, page: Int): SearchResponseList? {
-        if (query.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
-        val path = if (page > 1) "/page/$page/" else "/"
-        val doc = fetch("$path?s=${URLEncoder.encode(query.trim(), "UTF-8")}")
-        return newSearchResponseList(cards(VerAniMarkup.cards(doc)), hasNext = VerAniMarkup.hasNext(doc))
+    override suspend fun search(query: String, page: Int): SearchResponseList {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return newSearchResponseList(emptyList(), hasNext = false)
+        val targetUrl = VerAniMarkup.buildSearchUrl(trimmed, page, mainUrl)
+        val res = app.get(targetUrl, referer = "$mainUrl/", headers = defaultHeaders, timeout = 15L)
+        val doc = Jsoup.parse(res.text, res.url)
+        val paged = VerAniMarkup.parseArchiveCards(doc, mainUrl)
+        return newSearchResponseList(paged.items.map { it.toSearchResponse() }, hasNext = paged.hasNext)
     }
 
-    override suspend fun load(url: String): LoadResponse? {
-        val doc = fetch(url)
-        val title = doc.selectFirst("h1")?.text()?.replace(Regex("\\s*\\(\\d{4}\\)\\s*$"), "")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val poster = VerAniMarkup.poster(doc)
-        val backdrop = VerAniMarkup.backdrop(doc)
-        val plot = VerAniMarkup.plot(doc)
-        val episodes = VerAniMarkup.episodes(doc)
-        val cached = posters.resolve(listOf(poster, backdrop) + episodes.map { it.poster })
-        val display = cached[poster] ?: poster
-        val background = cached[backdrop] ?: backdrop
-        val headers = listOfNotNull(poster, backdrop).firstOrNull(PosterCache::isProtectedPoster)?.let { mapOf("Referer" to "$mainUrl/") }
-        val movie = URI(url).path.orEmpty().contains("/pelicula/")
-        if (movie) return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) { posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot }
-        if (episodes.isEmpty()) return null
-        val list = episodes.map { ep -> newEpisode(ep.url) {
-            name = if (ep.season == 0 && ep.seasonLabel != null) "${ep.seasonLabel} · ${ep.title}" else ep.title
-            season = ep.season; episode = ep.number; posterUrl = cached[ep.poster] ?: ep.poster
-        } }
-        val labels = episodes.asSequence().filter { it.season > 0 && it.seasonLabel != null }
-            .distinctBy { it.season }.map { SeasonData(it.season, it.seasonLabel, it.season) }.toList()
-        return newTvSeriesLoadResponse(title, url, TvType.Anime, list) {
-            posterUrl = display; backgroundPosterUrl = background; posterHeaders = headers; this.plot = plot
-            if (labels.isNotEmpty()) seasonNames = labels
-        }
-    }
+    override suspend fun search(query: String): List<SearchResponse> =
+        search(query, 1).items
 
-    private suspend fun <T> attempt(block: suspend () -> T): T? = try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+    override suspend fun load(url: String): LoadResponse? =
+        loadInternal(url, allowParentRedirect = true)
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val sent = AtomicBoolean(false)
-        val lock = Any()
-        val doc = fetch(data)
-        val servers = VerAniMarkup.servers(doc).take(24)
-        withTimeoutOrNull(40_000L) {
-            coroutineScope {
-                val permits = Semaphore(5)
-                servers.map { server -> async {
-                    permits.withPermit {
-                        withTimeoutOrNull(10_000L) {
-                            val links = resolve(server.url, doc.location(), subtitleCallback, 0)
-                            for (link in links) {
-                                val labelled = withLanguage(link, server.language)
-                                synchronized(lock) { sent.set(true); callback(labelled) }
-                            }
-                        }
+    private suspend fun loadInternal(url: String, allowParentRedirect: Boolean): LoadResponse? {
+        val resolvedUrl = VerAniMarkup.resolveUrl(mainUrl, url) ?: url
+        val res = app.get(resolvedUrl, referer = "$mainUrl/", headers = defaultHeaders, timeout = 15L)
+        if (!res.isSuccessful) return null
+        val finalUrl = res.url
+        val doc = Jsoup.parse(res.text, finalUrl)
+
+        return when (VerAniMarkup.detectPageKind(doc)) {
+            VerAniPageKind.MOVIE -> {
+                val movie = VerAniMarkup.parseMovieDetail(doc, finalUrl, mainUrl) ?: return null
+                newMovieLoadResponse(movie.title, finalUrl, TvType.AnimeMovie, finalUrl) {
+                    this.posterUrl = movie.posterUrl
+                    this.backgroundPosterUrl = movie.backgroundUrl ?: movie.posterUrl
+                    this.year = movie.year
+                    this.plot = movie.plot
+                    this.tags = movie.tags
+                }
+            }
+
+            VerAniPageKind.CHAPTER -> {
+                val chapter = VerAniMarkup.parseChapterDetail(doc, finalUrl, mainUrl)
+                val parentUrl = chapter.parentAnimeUrl
+                if (allowParentRedirect &&
+                    !parentUrl.isNullOrBlank() &&
+                    parentUrl.trimEnd('/') != finalUrl.trimEnd('/')
+                ) {
+                    val parentResponse = runCatching { loadInternal(parentUrl, allowParentRedirect = false) }.getOrNull()
+                    if (parentResponse != null) return parentResponse
+                }
+                newMovieLoadResponse(chapter.title, finalUrl, TvType.AnimeMovie, finalUrl) {
+                    this.posterUrl = chapter.backdropUrl
+                    this.backgroundPosterUrl = chapter.backdropUrl
+                }
+            }
+
+            VerAniPageKind.ANIME, VerAniPageKind.UNKNOWN -> {
+                val detail = VerAniMarkup.parseAnimeDetail(doc, finalUrl, mainUrl) ?: return null
+                val episodes = detail.episodes.map { ep ->
+                    newEpisode(ep.url) {
+                        this.name = ep.name
+                        this.season = ep.season
+                        this.episode = ep.episode
+                        this.posterUrl = ep.posterUrl ?: detail.posterUrl
                     }
-                } }.awaitAll()
+                }
+                newAnimeLoadResponse(detail.title, finalUrl, TvType.Anime) {
+                    this.posterUrl = detail.posterUrl
+                    this.backgroundPosterUrl = detail.backgroundUrl ?: detail.posterUrl
+                    this.year = detail.year
+                    this.plot = detail.plot
+                    this.tags = detail.tags
+                    this.showStatus = when (detail.status) {
+                        VerAniShowStatus.ONGOING -> ShowStatus.Ongoing
+                        VerAniShowStatus.COMPLETED -> ShowStatus.Completed
+                        null -> null
+                    }
+                    this.seasonNames = detail.seasons.map { s ->
+                        SeasonData(season = s.season, name = s.name, displaySeason = null)
+                    }
+                    this.recommendations = detail.recommendations.map { it.toSearchResponse() }
+                    addTrailer(detail.trailerUrl)
+                    addEpisodes(DubStatus.Subbed, episodes)
+                }
             }
         }
-        return sent.get()
     }
 
-    private suspend fun resolve(url: String, referer: String, subtitles: (SubtitleFile) -> Unit, depth: Int): List<ExtractorLink> {
-        if (depth > 2) return emptyList()
-        val uri = runCatching { URI(url) }.getOrNull() ?: return emptyList()
-        if (uri.scheme !in listOf("http", "https") || uri.host.isNullOrBlank()) return emptyList()
-        val path = uri.path.orEmpty().lowercase()
-        // This provider's HLS endpoints have no extension; verify the manifest,
-        // not merely the hostname, before handing it to the player.
-        val hlsCandidate = path.endsWith(".m3u8") || (uri.host.equals("player.zilla-networks.com", true) && path.startsWith("/m3u8/"))
-        if (hlsCandidate) {
-            val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = 7) } ?: return emptyList()
-            if (!response.isSuccessful || !response.text.trimStart().startsWith("#EXTM3U")) return emptyList()
-            return listOf(newExtractorLink(name, "HLS", url, ExtractorLinkType.M3U8) { this.referer = referer })
-        }
-        val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-        withTimeoutOrNull(7_000L) { attempt { loadExtractor(url, referer, subtitles) { found.add(it) } } }
-        val links = synchronized(found) { found.toList() }
-        if (links.isNotEmpty()) return links
-        val response = attempt { app.get(url, headers = mapOf("Referer" to referer), timeout = 6) } ?: return emptyList()
-        if (!response.isSuccessful) return emptyList()
-        val doc = Jsoup.parse(response.text, response.url)
-        val frames = doc.select("iframe[src]").map { it.absUrl("src") }.filter { it.startsWith("https://") || it.startsWith("http://") }.distinct().take(3)
-        val nested = mutableListOf<ExtractorLink>()
-        for (frame in frames) nested += resolve(frame, response.url, subtitles, depth + 1)
-        return nested
-    }
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val resolvedUrl = VerAniMarkup.resolveUrl(mainUrl, data) ?: return false
+        val res = runCatching {
+            app.get(resolvedUrl, referer = "$mainUrl/", headers = defaultHeaders, timeout = 15L)
+        }.getOrNull() ?: return false
+        if (!res.isSuccessful) return false
 
-    private suspend fun withLanguage(link: ExtractorLink, language: String): ExtractorLink {
-        val label = "[$language] ${link.name}"
-        if (link is DrmExtractorLink) return newDrmExtractorLink(link.source, label, link.url, link.type, link.uuid) {
-            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
-            kid = link.kid; key = link.key; kty = link.kty; keyRequestParameters = link.keyRequestParameters; licenseUrl = link.licenseUrl
+        val doc = Jsoup.parse(res.text, res.url)
+        val tabs = VerAniMarkup.parsePlayerTabs(doc, mainUrl)
+        if (tabs.isEmpty()) return false
+
+        val emittedAny = AtomicBoolean(false)
+        tabs.amap { tab ->
+            VerAniExtractorDispatcher.extractTab(
+                tab = tab,
+                refererPageUrl = res.url,
+                subtitleCallback = subtitleCallback,
+                callback = { link ->
+                    emittedAny.set(true)
+                    callback(link)
+                },
+            )
         }
-        return newExtractorLink(link.source, label, link.url, link.type) {
-            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
-        }
+        return emittedAny.get()
     }
 }
