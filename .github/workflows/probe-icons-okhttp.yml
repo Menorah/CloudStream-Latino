@@ -18,7 +18,7 @@ jobs:
           java-version: '17'
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '12'
       - name: Instalar dependencias Python y OkHttp jar
         run: |
           pip install -q pillow requests curl_cffi
@@ -27,7 +27,7 @@ jobs:
           curl -fsSL -o /tmp/okhttp/okio.jar https://repo1.maven.org/maven2/com/squareup/okio/okio/3.6.0/okio-3.6.0.jar
           curl -fsSL -o /tmp/okhttp/okio-jvm.jar https://repo1.maven.org/maven2/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
           curl -fsSL -o /tmp/okhttp/kotlin-stdlib.jar https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.22/kotlin-stdlib-1.9.22.jar
-      - name: Probar plugins.json live y todos los íconos con OkHttp real
+      - name: Probar todos los íconos con OkHttp y analizar píxeles
         run: |
           cat > /tmp/okhttp/ProbeOkHttp.java <<'JAVA'
           import okhttp3.*;
@@ -47,22 +47,12 @@ jobs:
                           int code = resp.code();
                           String ct = resp.header("Content-Type", "");
                           byte[] body = resp.body() != null ? resp.body().bytes() : new byte[0];
-                          String finalUrl = resp.request().url().toString();
                           String imgInfo = "n/a";
                           if (code == 200 && body.length > 0) {
-                              try {
-                                  BufferedImage img = ImageIO.read(new ByteArrayInputStream(body));
-                                  if (img != null) {
-                                      imgInfo = img.getWidth() + "x" + img.getHeight() + " type=" + img.getType();
-                                  } else {
-                                      String head = new String(body, 0, Math.min(body.length, 40)).replaceAll("\\s+", " ");
-                                      imgInfo = "NOT_DECODED(" + head + ")";
-                                  }
-                              } catch (Exception e) {
-                                  imgInfo = "IMG_ERR(" + e.getMessage() + ")";
-                              }
+                              BufferedImage img = ImageIO.read(new ByteArrayInputStream(body));
+                              imgInfo = img != null ? (img.getWidth() + "x" + img.getHeight()) : "NOT_DECODED";
                           }
-                          return "code=" + code + " ct=" + ct + " len=" + body.length + " img=" + imgInfo + (finalUrl.equals(url) ? "" : " redir=" + finalUrl);
+                          return code + " " + ct.split(";")[0] + " " + body.length + "B " + imgInfo;
                       }
                   } catch (Exception e) {
                       return "EX=" + e.getClass().getSimpleName() + ":" + e.getMessage();
@@ -82,75 +72,96 @@ jobs:
                       String url = line.substring(idx + 1);
                       String rBare = fetch(client, url, null);
                       String rCs = fetch(client, url, CS_UA);
-                      System.out.println(name + " || BARE=[" + rBare + "] || CS_UA=[" + rCs + "]");
+                      System.out.println(name + ": BARE=[" + rBare + "] CS_UA=[" + rCs + "]");
                   }
               }
           }
           JAVA
           javac -cp "/tmp/okhttp/*" /tmp/okhttp/ProbeOkHttp.java
           python3 - <<'PY'
-          import io, json, subprocess, requests
+          import base64, io, json, subprocess, requests
           from PIL import Image
           from curl_cffi import requests as cfreq
 
-          for tag in ["cloudstream", "beta"]:
-              u = f"https://github.com/Menorah/CloudStream-Latino/releases/download/{tag}/plugins.json"
-              r = requests.get(u, timeout=15)
-              print(f"RELEASE {tag} plugins.json status={r.status_code} len={len(r.content)}")
-              if r.status_code == 200:
-                  data = r.json()
-                  lines = [f"{p.get('internalName')}:v{p.get('version')}:{p.get('language')}:{p.get('iconUrl')}" for p in data]
-                  msg = f"PLUGINS_{tag.upper()}({len(data)}): " + " | ".join(lines)
-                  print("::notice::" + msg.replace("%", "%25")[:3800])
-
-          # Collect all 13 iconUrls from live cloudstream plugins.json + repo-icon
           r = requests.get("https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/plugins.json", timeout=15)
           items = []
           for p in r.json():
               url = (p.get("iconUrl") or "").replace("%size%", "128").replace("%exact_size%", "64")
               items.append((p["internalName"], url))
-          items.append(("REPO_ICON", "https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo-icon.png"))
+          items.append(("REPO_ICON_REL", "https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo-icon.png"))
+          items.append(("REPO_ICON_RAW", "https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/assets/repo-icon.png"))
 
           args = [f"{name}|{url}" for name, url in items]
-          out = subprocess.check_output(["java", "-cp", "/tmp/okhttp:/tmp/okhttp/*", "ProbeOkHttp"] + args, text=True)
-          for line in out.strip().splitlines():
-              print(line)
-              print("::notice::OKHTTP_" + line.replace("%", "%25")[:1800])
+          out = subprocess.check_output(["java", "-cp", "/tmp/okhttp:/tmp/okhttp/*", "ProbeOkHttp"] + args, text=True).strip().splitlines()
+          print("::notice::OKHTTP_ALL_1=" + " || ".join(out[:8]).replace("%", "%25"))
+          print("::notice::OKHTTP_ALL_2=" + " || ".join(out[8:]).replace("%", "%25"))
 
-          # Pixel/visual analysis of the 4 failing + PeliCineHD + repo-icon using curl_cffi and requests
+          # Check pixel stats for all 4 + alternatives
           focus = [
               ("Latanime", "https://latanime.org/img/logito.png"),
               ("PelisJuanita", "https://pelisjuanita.com/favicon.png"),
+              ("PelisJuanita_apple", "https://pelisjuanita.com/apple-touch-icon.png"),
               ("RePelisHD_G128", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=128"),
-              ("RePelisHD_G64", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=64"),
+              ("RePelisHD_G24", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=64"),
               ("PeliCineHD_G128", "https://www.google.com/s2/favicons?domain=pelicinehd.com&sz=128"),
               ("AnimeOnline_ver2", "https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png"),
               ("AnimeOnline_ww4", "https://ww4.animeonline.ninja/fh_assets/apple-touch-icon.png"),
+              ("AnimeOnline_G128", "https://www.google.com/s2/favicons?domain=animeonline.ninja&sz=128"),
+              ("AnimeOnline_ww4_G128", "https://www.google.com/s2/favicons?domain=ww4.animeonline.ninja&sz=128"),
+              ("AnimeOnline_ver2_G128", "https://www.google.com/s2/favicons?domain=ver2.animeonline.ninja&sz=128"),
+              ("Latanime_G128", "https://www.google.com/s2/favicons?domain=latanime.org&sz=128"),
+              ("PelisJuanita_G128", "https://www.google.com/s2/favicons?domain=pelisjuanita.com&sz=128"),
           ]
+          pix_lines = []
           for name, url in focus:
-              for mode_name, fn in [("req_bare", lambda u: requests.get(u, timeout=12)),
-                                    ("cf_chrome", lambda u: cfreq.get(u, impersonate="chrome131", timeout=15))]:
+              try:
+                  resp = cfreq.get(url, impersonate="chrome131", timeout=15)
+                  info = f"{resp.status_code} {len(resp.content)}B"
+                  if resp.status_code == 200:
+                      im = Image.open(io.BytesIO(resp.content))
+                      rgba = im.convert("RGBA")
+                      px = list(rgba.getdata())
+                      non_trans = [p for p in px if p[3] > 20]
+                      opaque_pct = round(100.0 * len(non_trans) / max(1, len(px)), 1)
+                      avg_lum = round(sum((0.299*p[0]+0.587*p[1]+0.114*p[2]) for p in non_trans) / max(1, len(non_trans)), 1) if non_trans else -1
+                      max_rgb = max((max(p[0], p[1], p[2]) for p in non_trans), default=-1)
+                      w, h = im.size
+                      info += f" {im.format} {im.mode} {w}x{h} opq={opaque_pct}% lum={avg_lum} max={max_rgb}"
+                      if name == "RePelisHD_G128":
+                          # ASCII art 16x16 downsample
+                          small = rgba.resize((16, 16))
+                          rows = []
+                          for y in range(16):
+                              row = ""
+                              for x in range(16):
+                                  r0, g0, b0, a0 = small.getpixel((x, y))
+                                  if a0 < 20:
+                                      row += "."
+                                  else:
+                                      l = (r0+g0+b0)/3
+                                      row += "#" if l > 170 else ("+" if l > 80 else "X")
+                              rows.append(row)
+                          info += " art=[" + "/".join(rows) + "]"
+                  pix_lines.append(f"{name}=>{info}")
+              except Exception as e:
+                  pix_lines.append(f"{name}=>ERR:{str(e)[:60]}")
+          print("::notice::PIX_1=" + " | ".join(pix_lines[:6]).replace("%", "%25"))
+          print("::notice::PIX_2=" + " | ".join(pix_lines[6:]).replace("%", "%25"))
+
+          # Also test DuckDuckGo & Yandex & Google for all 4 domains
+          alt_lines = []
+          for dom in ["latanime.org", "pelisjuanita.com", "repelishd.hair", "animeonline.ninja", "ww4.animeonline.ninja", "ver2.animeonline.ninja"]:
+              row = [dom]
+              for label, u in [
+                  ("DDG", f"https://icons.duckduckgo.com/ip3/{dom}.ico"),
+                  ("YAN", f"https://favicon.yandex.net/favicon/{dom}?size=120"),
+              ]:
                   try:
-                      resp = fn(url)
-                      info = f"HTTP {resp.status_code} ct={resp.headers.get('Content-Type','')} len={len(resp.content)}"
-                      if resp.status_code == 200:
-                          try:
-                              im = Image.open(io.BytesIO(resp.content))
-                              rgba = im.convert("RGBA")
-                              px = list(rgba.getdata())
-                              non_trans = [p for p in px if p[3] > 20]
-                              opaque_pct = round(100.0 * len(non_trans) / max(1, len(px)), 1)
-                              avg_lum = round(sum((0.299*p[0]+0.587*p[1]+0.114*p[2]) for p in non_trans) / max(1, len(non_trans)), 1) if non_trans else -1
-                              max_rgb = max((max(p[0], p[1], p[2]) for p in non_trans), default=-1)
-                              min_rgb = min((min(p[0], p[1], p[2]) for p in non_trans), default=-1)
-                              # sample border vs center
-                              w, h = im.size
-                              center = rgba.getpixel((w//2, h//2))
-                              corner = rgba.getpixel((0, 0))
-                              info += f" fmt={im.format} mode={im.mode} size={w}x{h} opaque={opaque_pct}% lum={avg_lum} rgb=[{min_rgb},{max_rgb}] corner={corner} center={center}"
-                          except Exception as e:
-                              info += f" PIL_ERR={e}"
-                      print(f"::notice::PIX[{name}|{mode_name}] {info}".replace("%", "%25"))
+                      resp = requests.get(u, timeout=10)
+                      im = Image.open(io.BytesIO(resp.content))
+                      row.append(f"{label}:{resp.status_code} {im.format} {im.size[0]}x{im.size[1]} {len(resp.content)}B")
                   except Exception as e:
-                      print(f"::notice::PIX[{name}|{mode_name}] ERR={str(e)[:200]}".replace("%", "%25"))
+                      row.append(f"{label}:ERR({str(e)[:40]})")
+              alt_lines.append(" ".join(row))
+          print("::notice::ALTS=" + " | ".join(alt_lines).replace("%", "%25"))
           PY
