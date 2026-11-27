@@ -1,0 +1,180 @@
+name: Probe GnulaHD Zip and Live
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/probe-gnulahd.yml']
+permissions:
+  contents: read
+jobs:
+  inspect_zip_and_live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q beautifulsoup4 requests curl_cffi pillow
+      - name: Descargar y listar ww3.gnulahd.nu.zip
+        run: |
+          python3 - <<'PY'
+          import os, re, zipfile, requests
+          from bs4 import BeautifulSoup
+
+          page_url = "https://tmpfiles.org/wrAmvgh4G7Qr/ww3.gnulahd.nu.zip"
+          dl_url = "https://tmpfiles.org/dl/1795823170.36156a77def5f426/wrAmvgh4G7Qr/ww3.gnulahd.nu.zip"
+          r = requests.get(page_url, timeout=20)
+          m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+\.zip', r.text)
+          if m:
+              dl_url = m.group(0)
+          print("DL_URL=", dl_url)
+          rz = requests.get(dl_url, timeout=60, stream=True)
+          assert rz.status_code == 200, f"tmpfiles status={rz.status_code}"
+          with open("/tmp/gnula.zip", "wb") as f:
+              for chunk in rz.iter_content(65536):
+                  f.write(chunk)
+          os.makedirs("/tmp/gnula", exist_ok=True)
+          with zipfile.ZipFile("/tmp/gnula.zip") as zf:
+              zf.extractall("/tmp/gnula")
+              names = zf.namelist()
+          files = []
+          for root, _, fns in os.walk("/tmp/gnula"):
+              for fn in sorted(fns):
+                  p = os.path.join(root, fn)
+                  rel = os.path.relpath(p, "/tmp/gnula")
+                  sz = os.path.getsize(p)
+                  files.append((rel, sz, p))
+          files.sort()
+          summary = [f"{rel}({sz}B)" for rel, sz, _ in files]
+          print("FILES:", summary)
+          print("::notice::ZIP_FILES(" + str(len(files)) + ")=" + " | ".join(summary).replace("%", "%25")[:3800])
+          PY
+      - name: Analizar estructura de cada HTML del zip (bloque 1)
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from bs4 import BeautifulSoup
+
+          files = []
+          for root, _, fns in os.walk("/tmp/gnula"):
+              for fn in sorted(fns):
+                  p = os.path.join(root, fn)
+                  rel = os.path.relpath(p, "/tmp/gnula")
+                  if rel.lower().endswith((".html", ".htm")):
+                      files.append((rel, p))
+          files.sort()
+
+          def summarize_html(rel, p):
+              html = open(p, errors="replace").read()
+              soup = BeautifulSoup(html, "html.parser")
+              title = (soup.title.string.strip() if soup.title and soup.title.string else "")[:80]
+              canon = soup.select_one("link[rel='canonical']")
+              canon_u = canon.get("href", "") if canon else ""
+              icons = [el.get("href", "") for el in soup.select("link[rel*='icon']")]
+              body_cls = " ".join(soup.body.get("class", [])) if soup.body else ""
+              # Navigation / links
+              nav_links = []
+              for a in soup.select("header a[href], nav a[href], .menu a[href]"):
+                  t = a.get_text(" ", strip=True)
+                  h = a.get("href", "")
+                  if h and not h.startswith("#") and (t or h):
+                      nav_links.append(f"{t}=>{h}")
+              # Main classes/ids
+              sections = []
+              for el in soup.select("main section, main > div, #content > div, .container > div, section"):
+                  cls = ".".join(el.get("class", []))
+                  eid = el.get("id", "")
+                  if cls or eid:
+                      sections.append(f"#{eid}.{cls}")
+              # Cards / articles
+              cards = soup.select("article, .card, .movie, .item, .post, [class*='card'], [class*='poster'], [class*='grid'] > a")
+              # Forms
+              forms = [(f.get("action", ""), f.get("method", ""), [i.get("name") for i in f.select("input, select")]) for f in soup.select("form")]
+              # Iframes & scripts mentioning ajax / api / embed / player / server / episode / wp-json
+              iframes = [f.get("src") or f.get("data-src") or "" for f in soup.select("iframe")]
+              scripts_src = [s.get("src", "") for s in soup.select("script[src]") if "gnula" in (s.get("src") or "") or "wp-content" in (s.get("src") or "")]
+              inline_hits = []
+              for s in soup.select("script:not([src])"):
+                  txt = s.get_text()
+                  if any(k in txt.lower() for k in ["ajax", "wp-json", "embed", "player", "server", "episod", "season", "nonce", "video", "api", "source", "stream"]):
+                      inline_hits.append(re.sub(r"\s+", " ", txt.strip())[:500])
+              return (
+                  f"FILE[{rel}] len={len(html)} title={title!r} canon={canon_u} body_cls={body_cls!r} icons={icons[:4]} "
+                  f"nav={list(dict.fromkeys(nav_links))[:15]} forms={forms[:4]} iframes={iframes[:6]} "
+                  f"scripts={scripts_src[:8]} inline_cnt={len(inline_hits)} "
+                  f"inline0={inline_hits[0][:350] if inline_hits else ''}"
+              )
+
+          for i, (rel, p) in enumerate(files[:8]):
+              msg = summarize_html(rel, p)
+              print(f"::notice::HTML_{i}=" + msg.replace("%", "%25").replace("\n", " ")[:3500])
+          open("/tmp/html_count.txt", "w").write(str(len(files)))
+          PY
+      - name: Analizar estructura de cada HTML del zip (bloque 2)
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from bs4 import BeautifulSoup
+          files = []
+          for root, _, fns in os.walk("/tmp/gnula"):
+              for fn in sorted(fns):
+                  p = os.path.join(root, fn)
+                  rel = os.path.relpath(p, "/tmp/gnula")
+                  if rel.lower().endswith((".html", ".htm")):
+                      files.append((rel, p))
+          files.sort()
+          for i, (rel, p) in enumerate(files[8:16], start=8):
+              html = open(p, errors="replace").read()
+              soup = BeautifulSoup(html, "html.parser")
+              title = (soup.title.string.strip() if soup.title and soup.title.string else "")[:80]
+              canon = (soup.select_one("link[rel='canonical']") or {}).get("href", "")
+              body_cls = " ".join(soup.body.get("class", [])) if soup.body else ""
+              iframes = [f.get("src") or f.get("data-src") or "" for f in soup.select("iframe")]
+              forms = [(f.get("action", ""), f.get("method", ""), [i.get("name") for i in f.select("input, select")]) for f in soup.select("form")]
+              inline_hits = [re.sub(r"\s+", " ", s.get_text().strip())[:400] for s in soup.select("script:not([src])") if any(k in s.get_text().lower() for k in ["ajax", "wp-json", "embed", "player", "server", "episod", "season", "nonce", "video", "api"])]
+              msg = f"FILE[{rel}] len={len(html)} title={title!r} canon={canon} body_cls={body_cls!r} forms={forms[:4]} iframes={iframes[:6]} inline_cnt={len(inline_hits)} inline0={inline_hits[0][:350] if inline_hits else ''}"
+              print(f"::notice::HTML_{i}=" + msg.replace("%", "%25").replace("\n", " ")[:3500])
+          if len(files) > 16:
+              print("::notice::MORE_FILES=" + str([r for r, _ in files[16:]]).replace("%", "%25")[:2000])
+          PY
+      - name: Probar sitio en vivo ww3.gnulahd.nu (HTTP, CF, wp-json, iconos)
+        run: |
+          python3 - <<'PY'
+          import io, json, requests
+          from PIL import Image
+          from bs4 import BeautifulSoup
+          from curl_cffi import requests as cfreq
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
+          tests = [
+              ("bare_okhttp_like", lambda u: requests.get(u, headers={"User-Agent": "okhttp/4.12.0"}, timeout=15)),
+              ("cs_ua", lambda u: requests.get(u, headers={"User-Agent": UA}, timeout=15)),
+              ("cf_chrome", lambda u: cfreq.get(u, impersonate="chrome131", timeout=15)),
+          ]
+          res = []
+          for label, fn in tests:
+              try:
+                  r = fn("https://ww3.gnulahd.nu/")
+                  soup = BeautifulSoup(r.text, "html.parser")
+                  t = (soup.title.string.strip() if soup.title and soup.title.string else "")[:50]
+                  icons = [(el.get("rel"), el.get("sizes"), el.get("href")) for el in soup.select("link[rel*='icon']")]
+                  res.append(f"{label}=>{r.status_code} redir={r.url} len={len(r.text)} title={t!r} icons={icons[:4]}")
+              except Exception as e:
+                  res.append(f"{label}=>ERR:{e}")
+          print("::notice::LIVE_HOME=" + " || ".join(res).replace("%", "%25")[:3500])
+
+          # Test wp-json, sitemap, search
+          extra = []
+          for u in [
+              "https://ww3.gnulahd.nu/wp-json/",
+              "https://ww3.gnulahd.nu/wp-json/wp/v2/types",
+              "https://ww3.gnulahd.nu/?s=matrix",
+              "https://ww3.gnulahd.nu/robots.txt",
+          ]:
+              try:
+                  r = requests.get(u, headers={"User-Agent": UA}, timeout=15)
+                  extra.append(f"{u}=>{r.status_code} ct={r.headers.get('Content-Type','')} len={len(r.text)} head={r.text[:200].replace(chr(10),' ')}")
+              except Exception as e:
+                  extra.append(f"{u}=>ERR:{e}")
+          print("::notice::LIVE_API=" + " || ".join(extra).replace("%", "%25")[:3500])
+          PY
