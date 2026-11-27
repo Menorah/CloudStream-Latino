@@ -1,4 +1,4 @@
-name: Probe Icons OkHttp
+name: Probe Icons RePelisHD
 on:
   workflow_dispatch:
   push:
@@ -12,156 +12,73 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Instalar dependencias Python y OkHttp jar
+      - name: Instalar dependencias
+        run: pip install -q pillow requests curl_cffi
+      - name: Inspeccionar RePelisHD y fuentes de íconos
         run: |
-          pip install -q pillow requests curl_cffi
-          mkdir -p /tmp/okhttp
-          curl -fsSL -o /tmp/okhttp/okhttp.jar https://repo1.maven.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar
-          curl -fsSL -o /tmp/okhttp/okio.jar https://repo1.maven.org/maven2/com/squareup/okio/okio/3.6.0/okio-3.6.0.jar
-          curl -fsSL -o /tmp/okhttp/okio-jvm.jar https://repo1.maven.org/maven2/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
-          curl -fsSL -o /tmp/okhttp/kotlin-stdlib.jar https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.22/kotlin-stdlib-1.9.22.jar
-      - name: Probar todos los íconos con OkHttp y analizar píxeles
-        run: |
-          cat > /tmp/okhttp/ProbeOkHttp.java <<'JAVA'
-          import okhttp3.*;
-          import javax.imageio.ImageIO;
-          import java.awt.image.BufferedImage;
-          import java.io.*;
-          import java.util.concurrent.TimeUnit;
-
-          public class ProbeOkHttp {
-              static final String CS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-
-              static String fetch(OkHttpClient client, String url, String ua) {
-                  try {
-                      Request.Builder rb = new Request.Builder().url(url);
-                      if (ua != null) rb.header("User-Agent", ua);
-                      try (Response resp = client.newCall(rb.build()).execute()) {
-                          int code = resp.code();
-                          String ct = resp.header("Content-Type", "");
-                          byte[] body = resp.body() != null ? resp.body().bytes() : new byte[0];
-                          String imgInfo = "n/a";
-                          if (code == 200 && body.length > 0) {
-                              BufferedImage img = ImageIO.read(new ByteArrayInputStream(body));
-                              imgInfo = img != null ? (img.getWidth() + "x" + img.getHeight()) : "NOT_DECODED";
-                          }
-                          return code + " " + ct.split(";")[0] + " " + body.length + "B " + imgInfo;
-                      }
-                  } catch (Exception e) {
-                      return "EX=" + e.getClass().getSimpleName() + ":" + e.getMessage();
-                  }
-              }
-
-              public static void main(String[] args) throws Exception {
-                  OkHttpClient client = new OkHttpClient.Builder()
-                      .followRedirects(true)
-                      .followSslRedirects(true)
-                      .connectTimeout(15, TimeUnit.SECONDS)
-                      .readTimeout(15, TimeUnit.SECONDS)
-                      .build();
-                  for (String line : args) {
-                      int idx = line.indexOf('|');
-                      String name = line.substring(0, idx);
-                      String url = line.substring(idx + 1);
-                      String rBare = fetch(client, url, null);
-                      String rCs = fetch(client, url, CS_UA);
-                      System.out.println(name + ": BARE=[" + rBare + "] CS_UA=[" + rCs + "]");
-                  }
-              }
-          }
-          JAVA
-          javac -cp "/tmp/okhttp/*" /tmp/okhttp/ProbeOkHttp.java
           python3 - <<'PY'
-          import base64, io, json, subprocess, requests
+          import io, requests
+          from collections import Counter
           from PIL import Image
           from curl_cffi import requests as cfreq
 
-          r = requests.get("https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/plugins.json", timeout=15)
-          items = []
-          for p in r.json():
-              url = (p.get("iconUrl") or "").replace("%size%", "128").replace("%exact_size%", "64")
-              items.append((p["internalName"], url))
-          items.append(("REPO_ICON_REL", "https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo-icon.png"))
-          items.append(("REPO_ICON_RAW", "https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/assets/repo-icon.png"))
+          lines = []
+          for sz in [16, 32, 64, 128, 256]:
+              u = f"https://www.google.com/s2/favicons?domain=repelishd.hair&sz={sz}"
+              r = requests.get(u, timeout=10)
+              im = Image.open(io.BytesIO(r.content))
+              rgba = im.convert("RGBA")
+              top_colors = Counter(rgba.getdata()).most_common(4)
+              top_hex = [(f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}a{c[3]:02x}", n) for c, n in top_colors]
+              lines.append(f"sz={sz}=>{r.status_code} redir={r.url[:65]} size={im.size} {len(r.content)}B colors={top_hex}")
+          print("::notice::REPELIS_G=" + " || ".join(lines).replace("%", "%25"))
 
-          args = [f"{name}|{url}" for name, url in items]
-          out = subprocess.check_output(["java", "-cp", "/tmp/okhttp:/tmp/okhttp/*", "ProbeOkHttp"] + args, text=True).strip().splitlines()
-          print("::notice::OKHTTP_ALL_1=" + " || ".join(out[:8]).replace("%", "%25"))
-          print("::notice::OKHTTP_ALL_2=" + " || ".join(out[8:]).replace("%", "%25"))
-
-          # Check pixel stats for all 4 + alternatives
-          focus = [
-              ("Latanime", "https://latanime.org/img/logito.png"),
-              ("PelisJuanita", "https://pelisjuanita.com/favicon.png"),
-              ("PelisJuanita_apple", "https://pelisjuanita.com/apple-touch-icon.png"),
-              ("RePelisHD_G128", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=128"),
-              ("RePelisHD_G24", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=64"),
-              ("PeliCineHD_G128", "https://www.google.com/s2/favicons?domain=pelicinehd.com&sz=128"),
-              ("AnimeOnline_ver2", "https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png"),
-              ("AnimeOnline_ww4", "https://ww4.animeonline.ninja/fh_assets/apple-touch-icon.png"),
-              ("AnimeOnline_G128", "https://www.google.com/s2/favicons?domain=animeonline.ninja&sz=128"),
-              ("AnimeOnline_ww4_G128", "https://www.google.com/s2/favicons?domain=ww4.animeonline.ninja&sz=128"),
-              ("AnimeOnline_ver2_G128", "https://www.google.com/s2/favicons?domain=ver2.animeonline.ninja&sz=128"),
-              ("Latanime_G128", "https://www.google.com/s2/favicons?domain=latanime.org&sz=128"),
-              ("PelisJuanita_G128", "https://www.google.com/s2/favicons?domain=pelisjuanita.com&sz=128"),
+          # Check Wayback / CDX / other domains / apple-touch.png
+          cands = [
+              ("repelishd_hair_apple", "https://repelishd.hair/brand/repelishd/apple-touch.png"),
+              ("repelishd_hair_fav", "https://repelishd.hair/favicon.ico"),
+              ("repelishd_hair_logo", "https://repelishd.hair/brand/repelishd/logo.png"),
+              ("repelishd_surf_apple", "https://repelishd.surf/brand/repelishd/apple-touch.png"),
+              ("repelishd_lat_apple", "https://repelishd.lat/brand/repelishd/apple-touch.png"),
+              ("repelishd_co_apple", "https://repelishd.co/brand/repelishd/apple-touch.png"),
+              ("repelishd_one_apple", "https://repelishd.one/brand/repelishd/apple-touch.png"),
+              ("repelishd_com_apple", "https://repelishd.com/brand/repelishd/apple-touch.png"),
+              ("wayback_apple", "https://web.archive.org/web/2026id_/https://repelishd.hair/brand/repelishd/apple-touch.png"),
           ]
-          pix_lines = []
-          for name, url in focus:
+          res_c = []
+          for label, u in cands:
               try:
-                  resp = cfreq.get(url, impersonate="chrome131", timeout=15)
-                  info = f"{resp.status_code} {len(resp.content)}B"
-                  if resp.status_code == 200:
-                      im = Image.open(io.BytesIO(resp.content))
-                      rgba = im.convert("RGBA")
-                      px = list(rgba.getdata())
-                      non_trans = [p for p in px if p[3] > 20]
-                      opaque_pct = round(100.0 * len(non_trans) / max(1, len(px)), 1)
-                      avg_lum = round(sum((0.299*p[0]+0.587*p[1]+0.114*p[2]) for p in non_trans) / max(1, len(non_trans)), 1) if non_trans else -1
-                      max_rgb = max((max(p[0], p[1], p[2]) for p in non_trans), default=-1)
-                      w, h = im.size
-                      info += f" {im.format} {im.mode} {w}x{h} opq={opaque_pct}% lum={avg_lum} max={max_rgb}"
-                      if name == "RePelisHD_G128":
-                          # ASCII art 16x16 downsample
-                          small = rgba.resize((16, 16))
-                          rows = []
-                          for y in range(16):
-                              row = ""
-                              for x in range(16):
-                                  r0, g0, b0, a0 = small.getpixel((x, y))
-                                  if a0 < 20:
-                                      row += "."
-                                  else:
-                                      l = (r0+g0+b0)/3
-                                      row += "#" if l > 170 else ("+" if l > 80 else "X")
-                              rows.append(row)
-                          info += " art=[" + "/".join(rows) + "]"
-                  pix_lines.append(f"{name}=>{info}")
+                  r = cfreq.get(u, impersonate="chrome131", timeout=12)
+                  ct = r.headers.get("Content-Type", "").split(";")[0]
+                  extra = ""
+                  if r.status_code == 200 and ct.startswith("image/"):
+                      im = Image.open(io.BytesIO(r.content))
+                      extra = f" {im.format} {im.size}"
+                  res_c.append(f"{label}:{r.status_code}({ct},{len(r.content)}B{extra})")
               except Exception as e:
-                  pix_lines.append(f"{name}=>ERR:{str(e)[:60]}")
-          print("::notice::PIX_1=" + " | ".join(pix_lines[:6]).replace("%", "%25"))
-          print("::notice::PIX_2=" + " | ".join(pix_lines[6:]).replace("%", "%25"))
+                  res_c.append(f"{label}:ERR({str(e)[:40]})")
+          print("::notice::REPELIS_CANDS=" + " | ".join(res_c).replace("%", "%25"))
 
-          # Also test DuckDuckGo & Yandex & Google for all 4 domains
-          alt_lines = []
-          for dom in ["latanime.org", "pelisjuanita.com", "repelishd.hair", "animeonline.ninja", "ww4.animeonline.ninja", "ver2.animeonline.ninja"]:
-              row = [dom]
-              for label, u in [
-                  ("DDG", f"https://icons.duckduckgo.com/ip3/{dom}.ico"),
-                  ("YAN", f"https://favicon.yandex.net/favicon/{dom}?size=120"),
-              ]:
-                  try:
-                      resp = requests.get(u, timeout=10)
-                      im = Image.open(io.BytesIO(resp.content))
-                      row.append(f"{label}:{resp.status_code} {im.format} {im.size[0]}x{im.size[1]} {len(resp.content)}B")
-                  except Exception as e:
-                      row.append(f"{label}:ERR({str(e)[:40]})")
-              alt_lines.append(" ".join(row))
-          print("::notice::ALTS=" + " | ".join(alt_lines).replace("%", "%25"))
+          # Check CDX for repelishd.hair images
+          try:
+              cdx = requests.get("https://web.archive.org/cdx/search/cdx?url=repelishd.hair/brand/*&output=json&limit=10", timeout=15)
+              print("::notice::CDX_BRAND=" + cdx.text[:1500].replace("%", "%25"))
+          except Exception as e:
+              print("::notice::CDX_ERR=" + str(e)[:200])
+
+          # Also check PelisJuanita favicon.png vs apple-touch-icon.png vs logo-juanita.png, and Latanime logito.png top colors
+          for label, u in [
+              ("Latanime_logito", "https://latanime.org/img/logito.png"),
+              ("PelisJuanita_fav", "https://pelisjuanita.com/favicon.png"),
+              ("PelisJuanita_apple", "https://pelisjuanita.com/apple-touch-icon.png"),
+              ("AnimeOnline_ver2", "https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png"),
+          ]:
+              r = cfreq.get(u, impersonate="chrome131", timeout=15)
+              im = Image.open(io.BytesIO(r.content))
+              rgba = im.convert("RGBA")
+              top = [(f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}a{c[3]:02x}", n) for c, n in Counter(rgba.getdata()).most_common(4)]
+              print(f"::notice::DETAIL_{label}={r.status_code} {im.format} {im.mode} {im.size} {len(r.content)}B top={top}".replace("%", "%25"))
           PY
