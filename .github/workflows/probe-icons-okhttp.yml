@@ -1,0 +1,156 @@
+name: Probe Icons OkHttp
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/probe-icons-okhttp.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias Python y OkHttp jar
+        run: |
+          pip install -q pillow requests curl_cffi
+          mkdir -p /tmp/okhttp
+          curl -fsSL -o /tmp/okhttp/okhttp.jar https://repo1.maven.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar
+          curl -fsSL -o /tmp/okhttp/okio.jar https://repo1.maven.org/maven2/com/squareup/okio/okio/3.6.0/okio-3.6.0.jar
+          curl -fsSL -o /tmp/okhttp/okio-jvm.jar https://repo1.maven.org/maven2/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
+          curl -fsSL -o /tmp/okhttp/kotlin-stdlib.jar https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.22/kotlin-stdlib-1.9.22.jar
+      - name: Probar plugins.json live y todos los íconos con OkHttp real
+        run: |
+          cat > /tmp/okhttp/ProbeOkHttp.java <<'JAVA'
+          import okhttp3.*;
+          import javax.imageio.ImageIO;
+          import java.awt.image.BufferedImage;
+          import java.io.*;
+          import java.util.concurrent.TimeUnit;
+
+          public class ProbeOkHttp {
+              static final String CS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+
+              static String fetch(OkHttpClient client, String url, String ua) {
+                  try {
+                      Request.Builder rb = new Request.Builder().url(url);
+                      if (ua != null) rb.header("User-Agent", ua);
+                      try (Response resp = client.newCall(rb.build()).execute()) {
+                          int code = resp.code();
+                          String ct = resp.header("Content-Type", "");
+                          byte[] body = resp.body() != null ? resp.body().bytes() : new byte[0];
+                          String finalUrl = resp.request().url().toString();
+                          String imgInfo = "n/a";
+                          if (code == 200 && body.length > 0) {
+                              try {
+                                  BufferedImage img = ImageIO.read(new ByteArrayInputStream(body));
+                                  if (img != null) {
+                                      imgInfo = img.getWidth() + "x" + img.getHeight() + " type=" + img.getType();
+                                  } else {
+                                      String head = new String(body, 0, Math.min(body.length, 40)).replaceAll("\\s+", " ");
+                                      imgInfo = "NOT_DECODED(" + head + ")";
+                                  }
+                              } catch (Exception e) {
+                                  imgInfo = "IMG_ERR(" + e.getMessage() + ")";
+                              }
+                          }
+                          return "code=" + code + " ct=" + ct + " len=" + body.length + " img=" + imgInfo + (finalUrl.equals(url) ? "" : " redir=" + finalUrl);
+                      }
+                  } catch (Exception e) {
+                      return "EX=" + e.getClass().getSimpleName() + ":" + e.getMessage();
+                  }
+              }
+
+              public static void main(String[] args) throws Exception {
+                  OkHttpClient client = new OkHttpClient.Builder()
+                      .followRedirects(true)
+                      .followSslRedirects(true)
+                      .connectTimeout(15, TimeUnit.SECONDS)
+                      .readTimeout(15, TimeUnit.SECONDS)
+                      .build();
+                  for (String line : args) {
+                      int idx = line.indexOf('|');
+                      String name = line.substring(0, idx);
+                      String url = line.substring(idx + 1);
+                      String rBare = fetch(client, url, null);
+                      String rCs = fetch(client, url, CS_UA);
+                      System.out.println(name + " || BARE=[" + rBare + "] || CS_UA=[" + rCs + "]");
+                  }
+              }
+          }
+          JAVA
+          javac -cp "/tmp/okhttp/*" /tmp/okhttp/ProbeOkHttp.java
+          python3 - <<'PY'
+          import io, json, subprocess, requests
+          from PIL import Image
+          from curl_cffi import requests as cfreq
+
+          for tag in ["cloudstream", "beta"]:
+              u = f"https://github.com/Menorah/CloudStream-Latino/releases/download/{tag}/plugins.json"
+              r = requests.get(u, timeout=15)
+              print(f"RELEASE {tag} plugins.json status={r.status_code} len={len(r.content)}")
+              if r.status_code == 200:
+                  data = r.json()
+                  lines = [f"{p.get('internalName')}:v{p.get('version')}:{p.get('language')}:{p.get('iconUrl')}" for p in data]
+                  msg = f"PLUGINS_{tag.upper()}({len(data)}): " + " | ".join(lines)
+                  print("::notice::" + msg.replace("%", "%25")[:3800])
+
+          # Collect all 13 iconUrls from live cloudstream plugins.json + repo-icon
+          r = requests.get("https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/plugins.json", timeout=15)
+          items = []
+          for p in r.json():
+              url = (p.get("iconUrl") or "").replace("%size%", "128").replace("%exact_size%", "64")
+              items.append((p["internalName"], url))
+          items.append(("REPO_ICON", "https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo-icon.png"))
+
+          args = [f"{name}|{url}" for name, url in items]
+          out = subprocess.check_output(["java", "-cp", "/tmp/okhttp:/tmp/okhttp/*", "ProbeOkHttp"] + args, text=True)
+          for line in out.strip().splitlines():
+              print(line)
+              print("::notice::OKHTTP_" + line.replace("%", "%25")[:1800])
+
+          # Pixel/visual analysis of the 4 failing + PeliCineHD + repo-icon using curl_cffi and requests
+          focus = [
+              ("Latanime", "https://latanime.org/img/logito.png"),
+              ("PelisJuanita", "https://pelisjuanita.com/favicon.png"),
+              ("RePelisHD_G128", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=128"),
+              ("RePelisHD_G64", "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=64"),
+              ("PeliCineHD_G128", "https://www.google.com/s2/favicons?domain=pelicinehd.com&sz=128"),
+              ("AnimeOnline_ver2", "https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png"),
+              ("AnimeOnline_ww4", "https://ww4.animeonline.ninja/fh_assets/apple-touch-icon.png"),
+          ]
+          for name, url in focus:
+              for mode_name, fn in [("req_bare", lambda u: requests.get(u, timeout=12)),
+                                    ("cf_chrome", lambda u: cfreq.get(u, impersonate="chrome131", timeout=15))]:
+                  try:
+                      resp = fn(url)
+                      info = f"HTTP {resp.status_code} ct={resp.headers.get('Content-Type','')} len={len(resp.content)}"
+                      if resp.status_code == 200:
+                          try:
+                              im = Image.open(io.BytesIO(resp.content))
+                              rgba = im.convert("RGBA")
+                              px = list(rgba.getdata())
+                              non_trans = [p for p in px if p[3] > 20]
+                              opaque_pct = round(100.0 * len(non_trans) / max(1, len(px)), 1)
+                              avg_lum = round(sum((0.299*p[0]+0.587*p[1]+0.114*p[2]) for p in non_trans) / max(1, len(non_trans)), 1) if non_trans else -1
+                              max_rgb = max((max(p[0], p[1], p[2]) for p in non_trans), default=-1)
+                              min_rgb = min((min(p[0], p[1], p[2]) for p in non_trans), default=-1)
+                              # sample border vs center
+                              w, h = im.size
+                              center = rgba.getpixel((w//2, h//2))
+                              corner = rgba.getpixel((0, 0))
+                              info += f" fmt={im.format} mode={im.mode} size={w}x{h} opaque={opaque_pct}% lum={avg_lum} rgb=[{min_rgb},{max_rgb}] corner={corner} center={center}"
+                          except Exception as e:
+                              info += f" PIL_ERR={e}"
+                      print(f"::notice::PIX[{name}|{mode_name}] {info}".replace("%", "%25"))
+                  except Exception as e:
+                      print(f"::notice::PIX[{name}|{mode_name}] ERR={str(e)[:200]}".replace("%", "%25"))
+          PY
