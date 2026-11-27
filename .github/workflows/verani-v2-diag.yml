@@ -7,51 +7,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_byse_routes:
+  probe_byse_405:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Byse routes and /playback vs /embed/playback
+      - name: Check Zt() and OPTIONS/POST/GET with curl on Byse
         run: |
           python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
+          import base64, json, re, subprocess, urllib.request, zlib
           UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          def req_test(url, method='GET', body=None, headers=None):
-              hdrs = {'User-Agent': UA, 'Accept': '*/*'}
-              if headers:
-                  hdrs.update(headers)
-              r = urllib.request.Request(url, data=body, headers=hdrs, method=method)
-              try:
-                  with urllib.request.urlopen(r, timeout=20) as resp:
-                      return {'code': resp.status, 'text': resp.read(20000).decode('utf-8', 'replace')[:1200]}
-              except urllib.error.HTTPError as e:
-                  return {'code': e.code, 'text': e.read(20000).decode('utf-8', 'replace')[:800]}
-              except Exception as e:
-                  return {'code': -1, 'err': str(e)}
-
-          out = {}
-          # Check routes in index-DocunfmE.js and videoPagesBundle
-          idx = urllib.request.urlopen(urllib.request.Request('https://n1mwq.org/assets/index-DocunfmE.js', headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
-          out['idx_routes'] = [idx[max(0, m.start()-80):m.end()+160] for m in re.finditer(r'path:\s*["\'][^"\']*["\']|videoPagesBundle', idx)][:20]
           vp = urllib.request.urlopen(urllib.request.Request('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js', headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
-          out['vp_t_watch_embed'] = [vp[max(0, m.start()-120):m.end()+200] for m in re.finditer(r'Et\(|\bembed\b.*?\bsurface\b|"private-download"|embedParentOrigin', vp)][:12]
+          out = {'vp_top': vp[:1500]}
+          m = re.search(r'function Zt\b|Zt\s*=', vp)
+          if m:
+              out['zt_in_vp'] = vp[max(0, m.start()-100):m.start()+500]
+          idx = urllib.request.urlopen(urllib.request.Request('https://n1mwq.org/assets/index-DocunfmE.js', headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
+          m2 = re.search(r'export\{[^}]*as Z', idx)
+          if m2:
+              out['idx_exports'] = idx[max(0, m2.start()-500):m2.end()+100]
 
-          # Probe live playback URLs on byselapuix.com AND n1mwq.org!
-          for name, method, url, hdrs, body in [
-              ('byse_watch_get', 'GET', 'https://byselapuix.com/api/videos/1t8mpxujis4x/playback', {'Referer': 'https://byselapuix.com/e/1t8mpxujis4x'}, None),
-              ('byse_embed_get', 'GET', 'https://byselapuix.com/api/videos/1t8mpxujis4x/embed/playback', {'Referer': 'https://byselapuix.com/e/1t8mpxujis4x', 'X-Embed-Origin': 'verani.me', 'X-Embed-Parent': 'https://verani.me/'}, None),
-              ('n1_watch_get', 'GET', 'https://n1mwq.org/api/videos/1t8mpxujis4x/playback', {'Referer': 'https://n1mwq.org/qre/1t8mpxujis4x'}, None),
-              ('n1_watch_post', 'POST', 'https://n1mwq.org/api/videos/1t8mpxujis4x/playback', {'Referer': 'https://n1mwq.org/qre/1t8mpxujis4x', 'Origin': 'https://n1mwq.org', 'Content-Type': 'application/json'}, b'{}'),
-              ('n1_embed_post_json', 'POST', 'https://n1mwq.org/api/videos/1t8mpxujis4x/embed/playback', {'Referer': 'https://n1mwq.org/qre/1t8mpxujis4x', 'Origin': 'https://n1mwq.org', 'Content-Type': 'application/json', 'X-Embed-Parent': 'https://byselapuix.com/e/1t8mpxujis4x', 'X-Embed-Origin': 'byselapuix.com'}, b'{}'),
-              ('n1_challenge', 'POST', 'https://n1mwq.org/api/videos/access/challenge', {'Referer': 'https://n1mwq.org/qre/1t8mpxujis4x', 'Origin': 'https://n1mwq.org'}, b''),
-          ]:
-              out[name] = req_test(url, method=method, body=body, headers=hdrs)
+          def run_curl(args):
+              p = subprocess.run(['curl', '-sS', '-i', '--max-time', '15'] + args, capture_output=True, text=True)
+              return p.stdout[:1200] + "\nERR:" + p.stderr[:200]
+
+          for mth in ['OPTIONS', 'GET', 'POST', 'PUT', 'PATCH']:
+              out[f'n1_embed_{mth}'] = run_curl(['-X', mth, '-A', UA, '-H', 'Origin: https://n1mwq.org', '-H', 'Referer: https://n1mwq.org/qre/1t8mpxujis4x', '-H', 'X-Embed-Parent: https://byselapuix.com/e/1t8mpxujis4x', '-H', 'Content-Type: application/json', 'https://n1mwq.org/api/videos/1t8mpxujis4x/embed/playback'] + (['-d', '{}'] if mth in ('POST','PUT','PATCH') else []))
+          out['byse_details_curl'] = run_curl(['-A', UA, '-H', 'Referer: https://byselapuix.com/e/1t8mpxujis4x', 'https://byselapuix.com/api/videos/1t8mpxujis4x/embed/details'])
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
           chunks = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
           for idx_i, ch in enumerate(chunks):
-              print(f"::notice title=BR_{idx_i}_{len(chunks)}::{ch}")
+              print(f"::notice title=B405_{idx_i}_{len(chunks)}::{ch}")
           PY
