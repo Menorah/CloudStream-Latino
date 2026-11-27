@@ -1,129 +1,379 @@
 package com.menorah.repelishd
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
+import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.Score
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SearchResponseList
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.amap
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newMovieLoadResponse
+import com.lagradost.cloudstream3.newMovieSearchResponse
+import com.lagradost.cloudstream3.newSearchResponseList
+import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.newTvSeriesLoadResponse
+import com.lagradost.cloudstream3.newTvSeriesSearchResponse
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newDrmExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import java.net.URI
-import java.net.URLEncoder
 import java.util.Collections
-import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RePelisHDProvider : MainAPI() {
-    override var mainUrl = RePelisHDMarkup.BASE
+    override var mainUrl = RePelisHDMarkup.DEFAULT_MAIN_URL
     override var name = "RePelisHD"
-    override var lang = "es"
     override val hasMainPage = true
-    override val hasQuickSearch = true
+    override var lang = "es"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
     override val mainPage = mainPageOf(
-        "/explorar?t=movie" to "Películas", "/explorar?t=tv" to "Series",
-        "/explorar?sort=popular" to "Populares", "/explorar?sort=nuevo" to "Estrenos",
-        "/explorar?sort=valoracion" to "Mejor valoradas", "/explorar?sort=titulo" to "A–Z",
-        "/explorar?ver=latino" to "Latino", "/explorar?ver=castellano" to "Castellano", "/explorar?ver=subtitulado" to "Subtituladas",
-        "/explorar?g=accion" to "Acción", "/explorar?g=accion-y-aventura" to "Acción y aventura",
-        "/explorar?g=animacion" to "Animación", "/explorar?g=aventura" to "Aventura", "/explorar?g=belica" to "Bélica",
-        "/explorar?g=ciencia-ficcion" to "Ciencia ficción", "/explorar?g=ciencia-ficcion-y-fantasia" to "Ciencia ficción y fantasía",
-        "/explorar?g=comedia" to "Comedia", "/explorar?g=crimen" to "Crimen", "/explorar?g=documental" to "Documental",
-        "/explorar?g=drama" to "Drama", "/explorar?g=familia" to "Familia", "/explorar?g=fantasia" to "Fantasía",
-        "/explorar?g=guerra-y-politica" to "Guerra y política", "/explorar?g=historia" to "Historia", "/explorar?g=infantil" to "Infantil",
-        "/explorar?g=misterio" to "Misterio", "/explorar?g=musica" to "Música", "/explorar?g=noticias" to "Noticias",
-        "/explorar?g=pelicula-de-tv" to "Película de TV", "/explorar?g=romance" to "Romance", "/explorar?g=suspense" to "Suspense",
-        "/explorar?g=talk-show" to "Talk show", "/explorar?g=telenovela" to "Telenovela", "/explorar?g=telerrealidad" to "Telerrealidad",
-        "/explorar?g=terror" to "Terror", "/explorar?g=western" to "Western"
+        "$mainUrl/explorar?sort=popular" to "Populares",
+        "$mainUrl/explorar?sort=reciente" to "Recientes",
+        "$mainUrl/cine" to "En Cines",
+        "$mainUrl/tendencias" to "Tendencias",
+        "$mainUrl/top-espana" to "Top España",
+        "$mainUrl/explorar?t=movie&sort=popular" to "Películas",
+        "$mainUrl/explorar?t=tv&sort=popular" to "Series",
+        "$mainUrl/explorar?ver=latino&sort=popular" to "Audio Latino",
+        "$mainUrl/explorar?ver=castellano&sort=popular" to "Audio Castellano",
+        "$mainUrl/explorar?ver=subtitulado&sort=popular" to "Subtitulado",
+        "$mainUrl/explorar?g=accion&sort=popular" to "Acción",
+        "$mainUrl/explorar?g=animacion&sort=popular" to "Animación",
+        "$mainUrl/explorar?g=aventura&sort=popular" to "Aventura",
+        "$mainUrl/explorar?g=belica&sort=popular" to "Bélica",
+        "$mainUrl/explorar?g=ciencia-ficcion&sort=popular" to "Ciencia Ficción",
+        "$mainUrl/explorar?g=comedia&sort=popular" to "Comedia",
+        "$mainUrl/explorar?g=crimen&sort=popular" to "Crimen",
+        "$mainUrl/explorar?g=documental&sort=popular" to "Documental",
+        "$mainUrl/explorar?g=drama&sort=popular" to "Drama",
+        "$mainUrl/explorar?g=familia&sort=popular" to "Familia",
+        "$mainUrl/explorar?g=fantasia&sort=popular" to "Fantasía",
+        "$mainUrl/explorar?g=historia&sort=popular" to "Historia",
+        "$mainUrl/explorar?g=kids&sort=popular" to "Infantil",
+        "$mainUrl/explorar?g=misterio&sort=popular" to "Misterio",
+        "$mainUrl/explorar?g=musica&sort=popular" to "Música",
+        "$mainUrl/explorar?g=romance&sort=popular" to "Romance",
+        "$mainUrl/explorar?g=suspense&sort=popular" to "Suspense",
+        "$mainUrl/explorar?g=terror&sort=popular" to "Terror",
+        "$mainUrl/explorar?g=western&sort=popular" to "Western",
     )
-    private suspend fun fetch(input: String): Document {
-        val url = URI("$mainUrl/").resolve(input).toString()
-        require(RePelisHDMarkup.siteUrl(url)) { "Dirección fuera de RePelisHD" }
-        val res = app.get(url, timeout = 18)
-        if (!res.isSuccessful || !RePelisHDMarkup.siteUrl(res.url)) throw IllegalStateException("RePelisHD no respondió (HTTP ${res.code}).")
-        return Jsoup.parse(res.text, res.url)
-    }
-    private fun responses(cards: List<Card>): List<SearchResponse> = cards.map {
-        if (it.movie) newMovieSearchResponse(it.title, it.url, TvType.Movie) { posterUrl = it.poster }
-        else newTvSeriesSearchResponse(it.title, it.url, TvType.TvSeries) { posterUrl = it.poster }
-    }
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = fetch(request.data + if (page > 1) "&page=$page" else "")
-        return newHomePageResponse(HomePageList(request.name, responses(RePelisHDMarkup.cards(doc))), hasNext = RePelisHDMarkup.hasNext(doc, page))
-    }
-    override suspend fun search(query: String): List<SearchResponse> = if (query.isBlank()) emptyList() else responses(RePelisHDMarkup.cards(fetch("/buscar?q=${URLEncoder.encode(query.trim(), "UTF-8")}")))
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
-    override suspend fun load(url: String): LoadResponse? {
-        val doc = fetch(url)
-        val title = doc.selectFirst(".chh-dati h1")?.ownText()?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        val poster = RePelisHDMarkup.poster(doc)
-        val background = doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf { it.startsWith("https://") }
-        val description = RePelisHDMarkup.plot(doc)
-        val publishedYear = RePelisHDMarkup.year(doc); val genres = RePelisHDMarkup.genres(doc)
-        if (URI(doc.location()).path.startsWith("/ver-pelicula/")) return newMovieLoadResponse(title, doc.location(), TvType.Movie, doc.location()) {
-            posterUrl = poster; backgroundPosterUrl = background; plot = description; year = publishedYear; tags = genres
-        }
-        val state = RePelisHDMarkup.initial(doc) ?: return null
-        val seasons = RePelisHDMarkup.seasons(state)
-        if (seasons.isEmpty() || seasons.size > 100) return null
-        val seriesUrl = URI(doc.location()).let { "${it.scheme}://${it.authority}${it.path.trimEnd('/')}" }
-        val permits = Semaphore(4)
-        val collected = coroutineScope {
-            seasons.map { (number, expected) -> async { permits.withPermit {
-                val seasonState = if (state.path("stagione").asInt(-1) == number) state else RePelisHDMarkup.initial(fetch("$seriesUrl/temporada-$number"))
-                    ?: throw IllegalStateException("No se pudo cargar la temporada $number de $title")
-                val episodes = RePelisHDMarkup.episodes(seasonState).filter { it.season == number }
-                if (episodes.size < expected) throw IllegalStateException("Temporada $number incompleta: ${episodes.size} de $expected capítulos disponibles")
-                episodes
-            } } }.awaitAll().flatten()
-        }
-        val episodes = collected.distinctBy { it.season to it.number }.sortedWith(compareBy({ it.season }, { it.number })).map { item ->
-            newEpisode("$seriesUrl/temporada-${item.season}/episodio-${item.number}") {
-                name = item.title; season = item.season; episode = item.number; posterUrl = item.poster; this.description = item.description
+
+    private val cfKiller by lazy { CloudflareKiller() }
+
+    private val defaultHeaders = mapOf(
+        "user-agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "es-ES,es;q=0.9,en;q=0.8",
+    )
+
+    private suspend fun getSiteDocument(url: String, referer: String = "$mainUrl/") =
+        app.get(url, referer = referer, headers = defaultHeaders, interceptor = cfKiller, timeout = 25L)
+
+    private fun RePelisHDCard.toSearchResponse(): SearchResponse =
+        if (isSeries) {
+            newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
+                this.posterUrl = this@toSearchResponse.posterUrl
+                this.year = this@toSearchResponse.year
+            }
+        } else {
+            newMovieSearchResponse(title, url, TvType.Movie) {
+                this.posterUrl = this@toSearchResponse.posterUrl
+                this.year = this@toSearchResponse.year
             }
         }
-        if (episodes.isEmpty()) return null
-        return newTvSeriesLoadResponse(title, seriesUrl, TvType.TvSeries, episodes) { posterUrl = poster; backgroundPosterUrl = background; plot = description; year = publishedYear; tags = genres }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val targetUrl = RePelisHDMarkup.buildMainPageUrl(request.data, page, mainUrl)
+        val res = getSiteDocument(targetUrl)
+        val doc = Jsoup.parse(res.text, res.url)
+        val items = RePelisHDMarkup.parseCards(doc, mainUrl).map { it.toSearchResponse() }
+        val hasNext = RePelisHDMarkup.parseHasNext(doc, page, items.size)
+        return newHomePageResponse(request, items, hasNext = hasNext)
     }
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val doc = fetch(data)
-        val imdb = RePelisHDMarkup.imdb(doc) ?: return false
-        val ep = Regex("/temporada-([0-9]+)/episodio-([0-9]+)").find(URI(doc.location()).path.orEmpty())
-        val season = ep?.groupValues?.get(1)?.toIntOrNull(); val number = ep?.groupValues?.get(2)?.toIntOrNull()
-        val type = if (ep != null) "tv" else "movie"
-        val player = if (type == "movie") "${RePelisHDMarkup.PLAYER}/movie/$imdb?lang=latino" else "${RePelisHDMarkup.PLAYER}/serial/$imdb?season=$season&episode=$number&lang=latino"
-        val response = app.get(player, referer = doc.location(), timeout = 15)
-        if (!response.isSuccessful || !RePelisHDMarkup.playerUrl(response.url)) return false
-        val token = RePelisHDMarkup.token(response.text) ?: return false
-        if (token.type != type || token.id != imdb) return false
-        val api = app.post("${RePelisHDMarkup.PLAYER}/api/embed-links", json = mapOf("type" to type, "id" to imdb, "token" to token.token), headers = mapOf("Referer" to response.url, "Origin" to RePelisHDMarkup.PLAYER), timeout = 18)
-        if (!api.isSuccessful || !RePelisHDMarkup.playerUrl(api.url)) return false
-        val parsed = RePelisHDMarkup.parseJson(api.text); if (!parsed.path("ok").asBoolean(false)) return false
-        val sources = RePelisHDMarkup.sources(parsed, season, number).take(20)
-        val emitted = AtomicBoolean(false); val lock = Any(); val permits = Semaphore(5)
-        withTimeoutOrNull(45_000L) { coroutineScope {
-            sources.map { source -> async { permits.withPermit {
-                withTimeoutOrNull(15_000L) {
-                    val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                    try { loadExtractor(source.url, response.url, subtitleCallback) { links.add(it) } }
-                    catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                    for (link in synchronized(links) { links.toList() }) {
-                        val labeled = label(link, source.language)
-                        synchronized(lock) { emitted.set(true); callback(labeled) }
+
+    override suspend fun search(query: String, page: Int): SearchResponseList {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return newSearchResponseList(emptyList(), hasNext = false)
+        val targetUrl = RePelisHDMarkup.buildSearchUrl(trimmed, page, mainUrl)
+        val res = getSiteDocument(targetUrl)
+        val doc = Jsoup.parse(res.text, res.url)
+        val items = RePelisHDMarkup.parseCards(doc, mainUrl).map { it.toSearchResponse() }
+        val hasNext = RePelisHDMarkup.parseHasNext(doc, page, items.size)
+        return newSearchResponseList(items, hasNext = hasNext)
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> =
+        search(query, 1).items
+
+    override suspend fun load(url: String): LoadResponse? {
+        val resolved = RePelisHDMarkup.resolveUrl(mainUrl, url) ?: url
+        val res = getSiteDocument(resolved)
+        if (!res.isSuccessful) return null
+        val doc = Jsoup.parse(res.text, res.url)
+        val detail = RePelisHDMarkup.parseDetail(doc, res.url, mainUrl) ?: return null
+
+        return if (detail.isSeries) {
+            val allEpisodes = mutableListOf<RePelisHDEpisode>()
+            val ini = detail.iniziale
+            if (ini != null) {
+                allEpisodes += ini.episodes
+                val loadedSeason = ini.activeSeason ?: ini.episodes.firstOrNull()?.season
+                val extraSeasons = ini.seasons.filter { it.seasonNumber != loadedSeason && it.availableCount > 0 }
+                val basePath = ini.basePath
+                if (basePath != null && extraSeasons.isNotEmpty()) {
+                    val fetchedSeasons = extraSeasons.amap { s ->
+                        val sUrl = RePelisHDMarkup.resolveUrl(mainUrl, "$basePath/temporada-${s.seasonNumber}/episodio-1")
+                            ?: return@amap emptyList()
+                        runCatching {
+                            val sRes = getSiteDocument(sUrl, referer = res.url)
+                            if (sRes.isSuccessful) {
+                                RePelisHDMarkup.parseIniziale(Jsoup.parse(sRes.text, sRes.url), mainUrl, sRes.url)?.episodes.orEmpty()
+                            } else emptyList()
+                        }.getOrDefault(emptyList())
+                    }
+                    fetchedSeasons.forEach { allEpisodes += it }
+                }
+            }
+            val uniqueEpisodes = allEpisodes
+                .distinctBy { it.season to it.episode }
+                .sortedWith(compareBy({ it.season }, { it.episode }))
+                .map { ep ->
+                    newEpisode(ep.playDataUrl) {
+                        this.name = ep.title
+                        this.season = ep.season
+                        this.episode = ep.episode
+                        this.description = ep.overview
+                        this.posterUrl = ep.posterUrl
                     }
                 }
-            } } }.awaitAll()
-        } }
+
+            newTvSeriesLoadResponse(detail.title, detail.url, TvType.TvSeries, uniqueEpisodes) {
+                this.posterUrl = detail.posterUrl
+                this.backgroundPosterUrl = detail.backgroundUrl ?: detail.posterUrl
+                this.plot = detail.plot
+                this.year = detail.year
+                detail.rating10?.let { this.score = Score.from10(it) }
+                detail.imdbId?.let { addImdbId(it) }
+                if (detail.genres.isNotEmpty()) this.tags = detail.genres
+                if (detail.actors.isNotEmpty()) addActors(detail.actors)
+                detail.trailerUrl?.let { addTrailer(it) }
+                if (detail.recommendations.isNotEmpty()) {
+                    this.recommendations = detail.recommendations.map { it.toSearchResponse() }
+                }
+            }
+        } else {
+            val movieData = detail.playerUrl ?: detail.url
+            newMovieLoadResponse(detail.title, detail.url, TvType.Movie, movieData) {
+                this.posterUrl = detail.posterUrl
+                this.backgroundPosterUrl = detail.backgroundUrl ?: detail.posterUrl
+                this.plot = detail.plot
+                this.year = detail.year
+                detail.durationMinutes?.let { this.duration = it }
+                detail.rating10?.let { this.score = Score.from10(it) }
+                detail.imdbId?.let { addImdbId(it) }
+                if (detail.genres.isNotEmpty()) this.tags = detail.genres
+                if (detail.actors.isNotEmpty()) addActors(detail.actors)
+                detail.trailerUrl?.let { addTrailer(it) }
+                if (detail.recommendations.isNotEmpty()) {
+                    this.recommendations = detail.recommendations.map { it.toSearchResponse() }
+                }
+            }
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        var playlatinUrl = RePelisHDMarkup.normalizePlayLatinUrl(data)
+        var detailFallback: RePelisHDDetail? = null
+        if (!playlatinUrl.contains("playlatinsrc.co", ignoreCase = true)) {
+            val pageRes = runCatching { getSiteDocument(playlatinUrl) }.getOrNull()
+            if (pageRes != null && pageRes.isSuccessful) {
+                val doc = Jsoup.parse(pageRes.text, pageRes.url)
+                detailFallback = RePelisHDMarkup.parseDetail(doc, pageRes.url, mainUrl)
+                playlatinUrl = detailFallback?.playerUrl
+                    ?: detailFallback?.iniziale?.let { ini ->
+                        val s = ini.activeSeason ?: 1
+                        val e = ini.activeEpisode ?: 1
+                        val seriesId = ini.imdbId ?: RePelisHDMarkup.extractSlugTmdbId(pageRes.url)
+                        seriesId?.let { "${RePelisHDMarkup.PLAYLATIN_BASE}/serial/$it?season=$s&episode=$e&lang=latino" }
+                    }
+                    ?: ""
+            } else {
+                playlatinUrl = ""
+            }
+            if (playlatinUrl.isEmpty()) {
+                val tmdbFallback = RePelisHDMarkup.extractSlugTmdbId(data)
+                if (tmdbFallback != null) {
+                    val isSerie = data.contains("/ver-serie/", ignoreCase = true)
+                    playlatinUrl = if (isSerie) {
+                        "${RePelisHDMarkup.PLAYLATIN_BASE}/serial/$tmdbFallback?season=1&episode=1&lang=latino"
+                    } else {
+                        "${RePelisHDMarkup.PLAYLATIN_BASE}/movie/$tmdbFallback?lang=latino"
+                    }
+                }
+            }
+        }
+
+        val emitted = AtomicBoolean(false)
+        val seen = Collections.synchronizedSet(mutableSetOf<String>())
+        val lock = Any()
+
+        suspend fun emitLabeled(link: ExtractorLink, langTag: String, fallbackHost: String) {
+            val hostPart = link.name.trim().ifEmpty { fallbackHost }
+            val labeled = labelLink(link, langTag, hostPart)
+            if (!seen.add("${labeled.url}|${labeled.name}")) return
+            synchronized(lock) {
+                emitted.set(true)
+                callback(labeled)
+            }
+        }
+
+        if (playlatinUrl.isNotEmpty()) {
+            playlatinUrl = RePelisHDMarkup.normalizePlayLatinUrl(playlatinUrl)
+            val (targetSeason, targetEpisode) = PlayLatinSrcParser.extractSeasonAndEpisode(playlatinUrl)
+            val playerHeaders = defaultHeaders + mapOf("Referer" to "$mainUrl/")
+            val playerRes = runCatching { app.get(playlatinUrl, headers = playerHeaders, timeout = 20L) }.getOrNull()
+            if (playerRes != null && playerRes.isSuccessful) {
+                val playerHtml = playerRes.text
+                val specs = PlayLatinSrcParser.extractResolveSpecs(playerHtml, playlatinUrl)
+                val allSources = mutableListOf<PlayLatinSrcParser.ResolvedSource>()
+
+                for (spec in specs) {
+                    val endpointUrl = RePelisHDMarkup.resolveUrl(RePelisHDMarkup.PLAYLATIN_BASE, spec.endpoint)
+                        ?: continue
+                    val apiHeaders = mapOf(
+                        "user-agent" to defaultHeaders["user-agent"]!!,
+                        "Referer" to playlatinUrl,
+                        "Origin" to RePelisHDMarkup.PLAYLATIN_BASE,
+                        "Accept" to "application/json, */*",
+                        "X-Requested-With" to "XMLHttpRequest",
+                    )
+                    val body = spec.payloadJson.toRequestBody("application/json; charset=utf-8".toMediaType())
+                    val apiRes = runCatching {
+                        app.post(endpointUrl, headers = apiHeaders, requestBody = body, timeout = 20L)
+                    }.getOrNull() ?: continue
+                    if (!apiRes.isSuccessful) continue
+
+                    val resolved = PlayLatinSrcParser.parseApiResponse(apiRes.text, targetSeason, targetEpisode)
+                    for ((lbl, subUrl) in resolved.captions) {
+                        subtitleCallback(newSubtitleFile(lbl, subUrl))
+                    }
+                    if (resolved.sources.isNotEmpty()) {
+                        allSources += resolved.sources
+                        break
+                    }
+                }
+
+                allSources.amap { src ->
+                    val langTag = PlayLatinSrcParser.normalizeVersionLabel(src.version, playlatinUrl)
+                    if (src.kind.equals("hls", ignoreCase = true) || src.url.contains(".m3u8")) {
+                        val raw = newExtractorLink(source = src.name, name = src.name, url = src.url, type = ExtractorLinkType.M3U8) {
+                            this.referer = playlatinUrl
+                            this.headers = mapOf(
+                                "Origin" to RePelisHDMarkup.PLAYLATIN_BASE,
+                                "Referer" to playlatinUrl,
+                                "user-agent" to defaultHeaders["user-agent"]!!,
+                            )
+                            this.quality = Qualities.P1080.value
+                        }
+                        emitLabeled(raw, langTag, src.name)
+                    } else {
+                        val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                        runCatching {
+                            when {
+                                src.url.contains("dr0pstream.com", ignoreCase = true) ->
+                                    RePelisHDDr0pstreamExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                                src.url.contains("dropload.io", ignoreCase = true) ->
+                                    RePelisHDDroploadIoExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                                src.url.contains("superplayer.ws", ignoreCase = true) ->
+                                    RePelisHDSuperplayerExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                                src.url.contains("supervideo.tv", ignoreCase = true) ->
+                                    RePelisHDSupervideoExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                                src.url.contains("voe.", ignoreCase = true) ||
+                                    src.url.contains("caseyseemavoid.", ignoreCase = true) ->
+                                    RePelisHDVoeExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                                else ->
+                                    loadExtractor(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                            }
+                        }
+                        for (link in synchronized(found) { found.toList() }) {
+                            emitLabeled(link, langTag, src.name)
+                        }
+                    }
+                }
+
+                // Fallback to UnlimPlay (var ALT_URL) whenever PlayLatinSRC returned no playable links.
+                val altUrl = PlayLatinSrcParser.extractAltUrl(playerHtml)
+                if ((allSources.isEmpty() || !emitted.get()) && altUrl != null) {
+                    runCatching {
+                        RePelisHDUnlimPlayExtractor().extractWithLanguage(altUrl, playlatinUrl, subtitleCallback) { langTag, link ->
+                            emitLabeled(link, langTag, "UnlimPlay")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Optional direct host download mirrors (.dl-box a.dl-btn) if present and not yet resolved
+        detailFallback?.downloadLinks.orEmpty().amap { dl ->
+            val langTag = dl.language ?: "Latino"
+            val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+            runCatching {
+                loadExtractor(dl.url, detailFallback?.url ?: "$mainUrl/", subtitleCallback) { found.add(it) }
+            }
+            for (link in synchronized(found) { found.toList() }) {
+                emitLabeled(link, langTag, dl.host)
+            }
+        }
+
         return emitted.get()
     }
-    private suspend fun label(link: ExtractorLink, language: String): ExtractorLink {
-        val label = "[$language] ${link.name}"
-        if (link is DrmExtractorLink) return newDrmExtractorLink(link.source, label, link.url, link.type, link.uuid) {
-            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
-            kid = link.kid; key = link.key; kty = link.kty; keyRequestParameters = link.keyRequestParameters; licenseUrl = link.licenseUrl
+
+    private suspend fun labelLink(link: ExtractorLink, language: String, hostFallback: String): ExtractorLink {
+        val hostPart = link.name.trim().ifEmpty { hostFallback }
+        val finalName = "[$language] $hostPart"
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, finalName, link.url, link.type, link.uuid) {
+                referer = link.referer
+                quality = link.quality
+                headers = link.headers
+                extractorData = link.extractorData
+                audioTracks = link.audioTracks
+                kid = link.kid
+                key = link.key
+                kty = link.kty
+                keyRequestParameters = link.keyRequestParameters
+                licenseUrl = link.licenseUrl
+            }
         }
-        return newExtractorLink(link.source, label, link.url, link.type) {
-            referer = link.referer; quality = link.quality; headers = link.headers; extractorData = link.extractorData; audioTracks = link.audioTracks
+        return newExtractorLink(link.source, finalName, link.url, link.type) {
+            referer = link.referer
+            quality = link.quality
+            headers = link.headers
+            extractorData = link.extractorData
+            audioTracks = link.audioTracks
         }
     }
 }

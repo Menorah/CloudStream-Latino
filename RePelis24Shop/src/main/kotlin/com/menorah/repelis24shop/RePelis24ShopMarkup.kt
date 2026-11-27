@@ -4,366 +4,381 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
-import java.util.Base64
+import java.net.URLEncoder
 
-internal data class Card(val title: String, val url: String, val poster: String?, val movie: Boolean)
-internal data class SeasonLink(val url: String, val number: Int)
-internal data class EpisodeItem(val title: String, val url: String, val season: Int, val number: Int, val poster: String?)
-internal data class PlayerOption(val url: String, val language: String, val position: Int)
+data class RePelis24ShopCard(
+    val title: String,
+    val url: String,
+    val posterUrl: String?,
+    val isSeries: Boolean,
+    val year: Int? = null,
+    val plotPreview: String? = null,
+)
 
-internal data class NuUploadStream(val url: String, val session: String) {
-    /** The player appends the session token to the manifest URL, so it is kept separately. */
-    fun manifest(): String = if (session.isBlank()) url else "$url?s=$session"
-}
+data class RePelis24ShopSeasonLink(
+    val seasonNumber: Int,
+    val title: String,
+    val url: String,
+)
 
-/**
- * HTML parsing for repelis24.shop. Everything here is pure so it can be unit tested without
- * network access. The site is a WordPress/DooPlay-derived theme with a custom "plusdes" player
- * markup:
- *
- * - catalog cards: `div.movie-item > a[href]` with `img.poster` and the title in `.item-detail`
- * - movie/series pages: `.backdrop-info` with `h1.title`, `figure.poster img`, `.description p`
- * - series seasons: `p.item-season-title a[href*="/temporada/"]`
- * - season episodes: `div.item-season-episodes > a[href*="/episodio/"]`
- * - players: `li.tab-video-item` (one per audio track) containing `li[data-server]`, where
- *   `data-server` is Base64 of a `nupload.my` wrapper URL
- */
-internal object RePelis24ShopMarkup {
-    const val BASE = "https://repelis24.shop"
-    const val NUPLOAD = "https://nupload.my"
-    const val NUPLOAD_REFERER = "$NUPLOAD/"
-    private const val MAX_SEASONS = 100
-    private val seasonPattern = Regex("/temporada/([^/]+)-([0-9]{1,3})/?$")
-    private val episodePattern = Regex("/episodio/([^/]+)-([0-9]{1,3})x([0-9]{1,4})/?$")
+data class RePelis24ShopEpisodeLink(
+    val title: String,
+    val url: String,
+    val season: Int,
+    val episode: Int,
+    val posterUrl: String?,
+)
 
-    // ---------------------------------------------------------------- URLs
+data class RePelis24ShopDetail(
+    val title: String,
+    val url: String,
+    val isSeries: Boolean,
+    val posterUrl: String?,
+    val backgroundUrl: String?,
+    val plot: String?,
+    val year: Int?,
+    val durationMinutes: Int?,
+    val genres: List<String>,
+    val actors: List<String>,
+    val trailerUrl: String?,
+    val seasonLinks: List<RePelis24ShopSeasonLink>,
+    val episodeLinks: List<RePelis24ShopEpisodeLink>,
+    val recommendations: List<RePelis24ShopCard>,
+)
 
-    fun host(url: String, name: String): Boolean = runCatching {
-        val uri = URI(url)
-        uri.scheme.equals("https", true) && uri.host.equals(name, true) &&
-            uri.port in listOf(-1, 443) && uri.userInfo == null
-    }.getOrDefault(false)
+data class RePelis24ShopServerOption(
+    val label: String,
+    val url: String,
+    val language: String = "Latino",
+    val qualityLabel: String? = null,
+)
 
-    fun siteUrl(url: String) = host(url, "repelis24.shop")
+object RePelis24ShopMarkup {
+    const val DEFAULT_MAIN_URL = "https://repelis24.shop"
 
-    fun nuploadUrl(url: String) = host(url, "nupload.my")
-
-    fun resolve(base: String, raw: String?): String? {
-        val value = raw?.trim().orEmpty()
-        if (value.isEmpty() || value.startsWith("data:") || value.startsWith("javascript:")) return null
-        val absolute = runCatching { URI(base).resolve(value).toString() }.getOrNull() ?: return null
-        val uri = runCatching { URI(absolute) }.getOrNull() ?: return null
-        return absolute.takeIf {
-            uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank() && uri.userInfo == null
-        }
+    private const val B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    private val B64_TABLE = IntArray(256) { -1 }.apply {
+        for (i in B64_ALPHABET.indices) this[B64_ALPHABET[i].code] = i
+        this['-'.code] = 62
+        this['_'.code] = 63
     }
 
-    /** The site serves catalog images with protocol-relative URLs (`//host/file.webp`). */
-    fun image(base: String, raw: String?): String? = resolve(base, raw)?.let { url ->
-        when {
-            url.startsWith("http://") -> "https://" + url.removePrefix("http://")
-            else -> url
-        }
-    }
+    private val YEAR_REGEX = Regex("""\b((?:19|20)\d{2})\b""")
+    private val DURATION_HM_REGEX = Regex("""(\d+)\s*h(?:\s*(\d+)\s*min?)?""", RegexOption.IGNORE_CASE)
+    private val DURATION_M_REGEX = Regex("""(\d+)\s*min""", RegexOption.IGNORE_CASE)
+    private val PAGE_NUM_REGEX = Regex("""/page/(\d+)/?""")
+    private val SEASON_NUM_REGEX = Regex("""-(\d+)/?$""")
+    private val EP_SE_REGEX = Regex("""-(\d+)x(\d+)/?$""", RegexOption.IGNORE_CASE)
+    private val EP_TEXT_SE_REGEX = Regex("""(\d+)x(\d+)""")
+    private val EP_NUM_TEXT_REGEX = Regex("""Episodio\s+(\d+)""", RegexOption.IGNORE_CASE)
+    private val CSS_BG_URL_REGEX = Regex("""url\(\s*['"]?([^'")\s]+)['"]?\s*\)""", RegexOption.IGNORE_CASE)
 
-    fun pageUrl(path: String, page: Int): String {
-        require(page >= 1)
-        val parts = path.split('?', limit = 2)
-        val base = parts[0].trimEnd('/')
-        val paged = if (page > 1) "$base/page/$page" else base
-        return paged + if (parts.size == 2) "?${parts[1]}" else ""
-    }
-
-    fun hasNext(doc: Document): Boolean = doc.select("a.next.page-numbers").any { a ->
-        siteUrl(a.absUrl("href"))
-    }
-
-    fun searchUrl(query: String): String = "/busqueda/${encodeSegment(query.trim())}"
-
-    fun searchPageUrl(query: String, page: Int): String {
-        require(page >= 1)
-        val base = searchUrl(query)
-        return if (page > 1) "$base/page/$page" else base
-    }
-
-    /**
-     * Percent-encodes one path segment. `URLEncoder` produces form data (`+` for spaces, `%2F`
-     * rules are wrong for paths), so everything except RFC 3986 unreserved characters is escaped.
-     */
-    fun encodeSegment(value: String): String {
-        val out = StringBuilder()
-        for (byte in value.toByteArray(Charsets.UTF_8)) {
-            val char = byte.toInt().toChar()
-            if (char.isLetterOrDigit() && char.code < 128 || char in "-._~") out.append(char)
-            else out.append('%').append("%02X".format(byte))
-        }
-        return out.toString()
-    }
-
-    fun decodeSegment(value: String): String = runCatching {
-        URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
-    }.getOrDefault(value)
-
-    fun seasonNumber(url: String): Int? {
-        if (!siteUrl(url)) return null
-        return seasonPattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault(""))
-            ?.groupValues?.get(2)?.toIntOrNull()?.takeIf { it in 0..MAX_SEASONS }
-    }
-
-    fun seasonIsSeries(url: String, slug: String): Boolean {
-        val match = seasonPattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault("")) ?: return false
-        return match.groupValues[1] == slug
-    }
-
-    fun seasonUrl(slug: String, number: Int): String {
-        require(number in 0..MAX_SEASONS)
-        return "$BASE/temporada/$slug-$number/"
-    }
-
-    fun episodeKey(url: String): Pair<Int, Int>? {
-        if (!siteUrl(url)) return null
-        val match = episodePattern.find(runCatching { URI(url).path.orEmpty() }.getOrDefault("")) ?: return null
-        val season = match.groupValues[2].toIntOrNull() ?: return null
-        val number = match.groupValues[3].toIntOrNull() ?: return null
-        return season to number
-    }
-
-    // ------------------------------------------------------------- catalog
-
-    /**
-     * Cloudflare's interstitial answers with HTTP 200 and no catalog, so it has to be detected
-     * from the body instead of the status code.
-     */
-    fun isChallenge(html: String): Boolean {
-        val head = html.take(4000).lowercase()
-        return "just a moment" in head && ("cf-browser-verification" in html.lowercase() || "challenge-platform" in html.lowercase())
-    }
-
-    /**
-     * Headers CloudStream's image loader must send for the CDN assets of this site.
-     *
-     * The CDN is behind Cloudflare, which answers an interstitial (HTTP 403, no image) when the
-     * request has no `Referer`. Coil, the app's image loader, sends its own desktop User-Agent but
-     * no Referer, so posters and backdrops only load when the response carries these headers.
-     * `MainAPI.posterHeaders` forwards them to every image the app renders for this provider.
-     */
-    val posterHeaders: Map<String, String> = mapOf(
-        "Referer" to "$BASE/",
-        "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language" to "es-AR,es;q=0.9,en;q=0.8"
-    )
-
-    fun isSiteAsset(url: String?): Boolean = url != null && url.startsWith("$BASE/cdn/")
-
-    fun cards(doc: Element): List<Card> = cards(doc, doc.baseUri())
-
-    fun cards(doc: Element, location: String): List<Card> = doc.select("div.movie-item a[href]").mapNotNull { link ->
-        val base = doc.baseUri().ifBlank { location }
-        val url = resolve(base, link.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
-        val path = URI(url).path.orEmpty()
-        val movie = path.startsWith("/pelicula/")
-        if (!movie && !path.startsWith("/serie/")) return@mapNotNull null
-        val image = link.selectFirst("img.poster") ?: link.selectFirst("img")
-        val title = link.selectFirst(".item-detail p")?.text()?.trim().orEmpty()
-            .ifBlank { image?.attr("alt")?.trim().orEmpty() }
-            .ifBlank { link.attr("title").trim() }
-        if (title.isBlank()) return@mapNotNull null
-        Card(
-            title = title,
-            url = url,
-            poster = image(image?.baseUri() ?: base, image?.attr("src") ?: image?.attr("data-src")),
-            movie = movie
-        )
-    }.distinctBy { it.url }
-
-    // -------------------------------------------------------------- details
-
-    fun isMovie(doc: Document): Boolean = URI(doc.location()).path.orEmpty().startsWith("/pelicula/")
-
-    fun title(doc: Document): String? {
-        doc.selectFirst(".backdrop-info h1.title span[itemprop=name]")?.text()?.trim()
-            ?.removePrefix("Ver Película ")?.removePrefix("Ver Serie ")?.trim()
-            ?.takeIf { it.isNotEmpty() }?.let { return it }
-        return doc.selectFirst("h1.title")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-            ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
-    }
-
-    fun poster(doc: Document): String? = image(
-        doc.location(),
-        doc.selectFirst(".backdrop-info figure.poster img[itemprop=image]")?.attr("src")
-            ?: doc.selectFirst("figure.poster img")?.attr("src")
-            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
-    )
-
-    fun plot(doc: Document): String? = doc.selectFirst(".description p")?.text()?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
-
-    fun year(doc: Document): Int? = doc.selectFirst("[itemprop=datePublished]")?.text()?.trim()
-        ?.let { Regex("[0-9]{4}").find(it)?.value }?.toIntOrNull()
-        ?: doc.selectFirst(".card-hover-year")?.text()?.trim()?.toIntOrNull()
-
-    fun genres(doc: Document): List<String> = doc.select(".info-list li")
-        .firstOrNull { it.text().contains("Géneros", ignoreCase = true) || it.text().contains("Generos", ignoreCase = true) }
-        ?.select("a span[itemprop=genre]")?.map { it.text().trim().trimEnd(',') }
-        ?.filter { it.isNotEmpty() }?.distinct().orEmpty()
-
-    /** Actors are plain `a[href=/buscar/<name>]` links in the same info list as the genres. */
-    fun actors(doc: Document): List<String> = doc.select(".info-list li")
-        .firstOrNull { it.selectFirst("strong")?.text()?.contains("Actores", ignoreCase = true) == true }
-        ?.select("a")?.mapNotNull { anchor ->
-            val name = anchor.text().trim().trimEnd(',').trim()
-            if (name.isEmpty()) null else name
-        }?.distinct().orEmpty()
-
-    fun durationMinutes(doc: Document): Int? {
-        val text = doc.selectFirst("[itemprop=duration]")?.text()?.trim() ?: return null
-        val hours = Regex("([0-9]{1,2})\\s*h", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull()
-        val minutes = Regex("([0-9]{1,3})\\s*min", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull()
-        val total = (hours ?: 0) * 60 + (minutes ?: 0)
-        return total.takeIf { it > 0 }
-    }
-
-    fun recommendations(doc: Document): List<Card> {
-        val section = doc.select("section.section-separator")
-            .firstOrNull { it.selectFirst("dt.section-title")?.text()?.contains("Sugerencias", ignoreCase = true) == true }
-            ?: return emptyList()
-        return cards(section)
-    }
-
-    // ---------------------------------------------------------------- series
-
-    /** The series page links to each season as `/temporada/<slug>-<number>/`. */
-    fun seasons(doc: Document): List<SeasonLink> {
-        val slug = seriesSlug(doc.location())
-        return doc.select("p.item-season-title a[href*='/temporada/']").mapNotNull { anchor ->
-            val url = resolve(doc.location(), anchor.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
-            val number = seasonNumber(url) ?: return@mapNotNull null
-            if (slug != null && !seasonIsSeries(url, slug)) return@mapNotNull null
-            SeasonLink(url.trimEnd('/') + "/", number)
-        }.distinctBy { it.number }.sortedBy { it.number }
-    }
-
-    fun seriesSlug(url: String): String? = Regex("/serie/([^/]+)/?").find(
-        runCatching { URI(url).path.orEmpty() }.getOrDefault("")
-    )?.groupValues?.get(1)
-
-    fun episodes(doc: Document, season: Int): List<EpisodeItem> =
-        doc.select("div.item-season-episodes a[href*='/episodio/']").mapNotNull { anchor ->
-            val url = resolve(doc.location(), anchor.attr("href"))?.takeIf(::siteUrl) ?: return@mapNotNull null
-            val key = episodeKey(url) ?: return@mapNotNull null
-            if (key.first != season) return@mapNotNull null
-            val img = anchor.selectFirst("img")
-            val name = anchor.selectFirst("span[itemprop=name]")?.text()?.trim().orEmpty()
-            EpisodeItem(
-                title = name.ifBlank { "Episodio ${key.second}" },
-                url = url,
-                season = key.first,
-                number = key.second,
-                poster = image(anchor.baseUri().ifBlank { doc.location() }, img?.attr("src") ?: img?.attr("data-src"))
-            )
-        }.distinctBy { it.season to it.number }.sortedBy { it.number }
-
-    // --------------------------------------------------------------- players
-
-    /** Reads the audio label of a `li.tab-video-item` block ("Latino", "Español Castellano", ...). */
-    fun language(tab: Element): String {
-        val name = tab.selectFirst(".tab-item-name")?.text()?.trim().orEmpty()
-        val cleaned = name.split("Calidad").first().replace(Regex("\\s+"), " ").trim()
-        val lowered = cleaned.lowercase()
-        return when {
-            cleaned.isEmpty() -> "Idioma no indicado"
-            "latino" in lowered -> "Latino"
-            "castellano" in lowered || lowered == "español" || lowered == "espanol" -> "Español Castellano"
-            "subtitul" in lowered -> "Subtitulado"
-            "ingl" in lowered || "original" in lowered -> "Inglés"
-            else -> cleaned.take(40)
-        }
-    }
-
-    /**
-     * Player options of a movie or episode page. Each tab holds one audio track and each
-     * `li[data-server]` is Base64 of the wrapper URL the site opens in its own player.
-     */
-    fun players(doc: Document): List<PlayerOption> {
-        val options = doc.select("li.tab-video-item").flatMap { tab ->
-            val language = language(tab)
-            tab.select("li[data-server]").mapNotNull { item ->
-                decodeServer(item.attr("data-server"))?.let { url ->
-                    PlayerOption(url, language, item.elementSiblingIndex())
-                }
+    fun decodeBase64Utf8(input: String): String {
+        val cleaned = input.trim().replace("\r", "").replace("\n", "").trimEnd('=')
+        if (cleaned.isEmpty()) return ""
+        val out = ByteArray((cleaned.length * 3) / 4)
+        var outIdx = 0
+        var acc = 0
+        var bits = 0
+        for (ch in cleaned) {
+            val code = ch.code
+            val v = if (code in B64_TABLE.indices) B64_TABLE[code] else -1
+            if (v < 0) continue
+            acc = (acc shl 6) or v
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                if (outIdx < out.size) out[outIdx++] = ((acc ushr bits) and 0xFF).toByte()
             }
         }
-        if (options.isNotEmpty()) return options.distinctBy { it.url }
-
-        // Fallback: pages without the tab markup keep the raw encoded payload.
-        return doc.select("li[data-server]").mapNotNull { item ->
-            decodeServer(item.attr("data-server"))?.let { PlayerOption(it, "Idioma no indicado", item.elementSiblingIndex()) }
-        }.distinctBy { it.url }
+        return String(out, 0, outIdx, Charsets.UTF_8)
     }
 
-    fun decodeServer(raw: String): String? {
-        val value = raw.trim()
-        if (value.length < 8) return null
-        val decoded = runCatching { String(Base64.getDecoder().decode(value), Charsets.UTF_8) }.getOrNull()
-            ?: runCatching { String(Base64.getMimeDecoder().decode(value), Charsets.UTF_8) }.getOrNull()
-            ?: return null
-        val trimmed = decoded.trim()
-        return trimmed.takeIf { nuploadUrl(it) || siteUrl(it) }
-    }
-
-    /**
-     * Resolves a `nupload.my` player URL: the `/iframe/?url=` wrapper for external hosts and
-     * `/watch/<uid>` pages, which decode their own stream base through the `?s=` session token.
-     */
-    fun nuploadTarget(url: String): String? {
-        if (!nuploadUrl(url)) return null
-        val uri = runCatching { URI(url) }.getOrNull() ?: return null
-        if (uri.path.orEmpty().startsWith("/iframe")) {
-            val target = uri.rawQuery.orEmpty().split('&')
-                .firstOrNull { it.startsWith("url=") }
-                ?.substringAfter('=')
-                ?.let { decodeSegment(it) }
-                ?: return null
-            val host = runCatching { URI(target).host }.getOrNull() ?: return null
-            if (host.equals("nupload.my", true) || host.equals("nupload.me", true)) return null
-            return target.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+    fun resolveUrl(baseUrl: String, href: String?): String? {
+        val raw = href?.trim().orEmpty()
+        if (raw.isEmpty() || raw.startsWith("#") || raw.startsWith("javascript:", ignoreCase = true)) {
+            return null
         }
-        // Only `/watch/<uid>` pages hold a decodable player; an empty uid can never play.
-        val path = uri.path.orEmpty()
-        if (!path.startsWith("/watch/") || path.removePrefix("/watch/").trim('/').isEmpty()) return null
-        return url
+        return runCatching {
+            val base = URI(baseUrl.trimEnd('/') + "/")
+            val resolved = if (raw.startsWith("//")) URI("https:$raw") else base.resolve(raw)
+            val s = resolved.toString()
+            if (s.startsWith("http://") || s.startsWith("https://")) s else null
+        }.getOrNull()
     }
 
-    /**
-     * Decodes a `/watch/<uid>` page. The page concatenates one obfuscated Base64 array into a
-     * manifest URL: every item is Base64 of decimal digits and subtracting a per-page offset
-     * yields one character. The player then appends a `?s=` session token.
-     */
-    fun nuploadStream(html: String, pageUrl: String): NuUploadStream? {
-        if (!nuploadUrl(pageUrl)) return null
-        val offset = Regex("fromCharCode\\(parseInt\\(atob\\(value\\)\\.replace\\(/\\\\D/g,''?\\)\\)\\s*-\\s*([0-9]+)")
-            .find(html)?.groupValues?.get(1)?.toLongOrNull() ?: return null
-        val chars = Regex("var\\s+[A-Za-z0-9_$]+\\s*=\\s*\\[([^\\]]{16,})]").findAll(html)
-            .map { array -> Regex("\"([A-Za-z0-9+/=]{8,})\"").findAll(array.groupValues[1]).map { it.groupValues[1] }.toList() }
-            .map { values -> values.map { decodeChar(it, offset) } }
-            .firstOrNull { decoded -> decoded.isNotEmpty() && decoded.all { it != '\u0000' } }
-            ?.joinToString("")
-            ?.takeIf { it.startsWith("http") }
-            ?: return null
-        val session = Regex("var\\s+[A-Za-z0-9_$]+\\s*=\\s*\"([A-Za-z0-9]{24,})\"")
-            .findAll(html).map { it.groupValues[1] }
-            .firstOrNull { token -> token.any { it.isDigit() } && token.any { it.isLetter() } }
-            ?: return null
-        val absolute = resolve("$NUPLOAD/", chars) ?: return null
-        if (URI(absolute).host.isNullOrBlank() || !absolute.startsWith("https://")) return null
-        return NuUploadStream(absolute, session)
+    fun buildSectionPageUrl(sectionUrl: String, page: Int, mainUrl: String = DEFAULT_MAIN_URL): String {
+        val base = resolveUrl(mainUrl, sectionUrl)?.trimEnd('/') ?: mainUrl
+        if (page <= 1) return "$base/"
+        return "$base/page/$page"
     }
 
-    private fun decodeChar(value: String, offset: Long): Char {
-        val digits = runCatching { String(Base64.getDecoder().decode(value), Charsets.ISO_8859_1) }
-            .getOrNull()?.filter { it.isDigit() }.orEmpty()
-        val code = digits.toLongOrNull()?.minus(offset) ?: return '\u0000'
-        return if (code in 32..0x10FFFF) code.toInt().toChar() else '\u0000'
+    fun buildSearchUrl(query: String, page: Int = 1, mainUrl: String = DEFAULT_MAIN_URL): String {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
+        val root = mainUrl.trimEnd('/')
+        return if (page <= 1) "$root/busqueda/$encoded" else "$root/busqueda/$encoded/page/$page"
+    }
+
+    fun normalizeLanguage(raw: String?): String {
+        val lowered = raw?.lowercase()?.trim().orEmpty()
+        return when {
+            lowered.contains("latino") || lowered.endsWith("/lat.png") -> "Latino"
+            lowered.contains("castellano") || lowered.endsWith("/cas.png") || lowered == "español" || lowered == "espanol" -> "Castellano"
+            lowered.contains("subtitul") || lowered.endsWith("/sub.png") || lowered.contains("vose") -> "Subtitulado"
+            lowered.contains("ingl") || lowered.endsWith("/en.png") -> "Inglés"
+            else -> "Latino"
+        }
+    }
+
+    fun parseCards(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<RePelis24ShopCard> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<RePelis24ShopCard>()
+        for (item in doc.select("div.movie-item")) {
+            val a = item.selectFirst("a[href]") ?: continue
+            val href = resolveUrl(mainUrl, a.attr("href")) ?: continue
+            if (!href.contains("/pelicula/") && !href.contains("/serie/")) continue
+            if (!seen.add(href)) continue
+
+            val img = item.selectFirst("img.poster, img")
+            val rawAlt = img?.attr("alt")?.trim().orEmpty()
+                .replace(Regex("""^(?:Poster|Ver)\s+""", RegexOption.IGNORE_CASE), "")
+                .trim()
+            val title = item.selectFirst(".item-detail p, .item-detail")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: rawAlt.takeIf { it.isNotEmpty() }
+                ?: continue
+
+            val poster = resolveUrl(mainUrl, img?.attr("data-src")?.ifEmpty { img.attr("src") } ?: img?.attr("src"))
+            val yearText = item.selectFirst("span.year, .card-hover-year")?.text().orEmpty()
+            val year = YEAR_REGEX.find(yearText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val plotPreview = item.selectFirst(".card-hover-info-overview p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+
+            out += RePelis24ShopCard(
+                title = title,
+                url = href,
+                posterUrl = poster,
+                isSeries = href.contains("/serie/"),
+                year = year,
+                plotPreview = plotPreview,
+            )
+        }
+        return out
+    }
+
+    fun parseHasNext(doc: Document, currentPage: Int): Boolean {
+        if (doc.selectFirst("ul.pagination a.next, a.next.page-numbers, link[rel=next]") != null) {
+            return true
+        }
+        val nextPage = currentPage + 1
+        return doc.select("ul.pagination a.page-link[href], ul.pagination a[href]").any { a ->
+            val p = PAGE_NUM_REGEX.find(a.attr("href"))?.groupValues?.getOrNull(1)?.toIntOrNull()
+            p != null && p >= nextPage
+        }
+    }
+
+    private fun cleanPageTitle(raw: String): String {
+        var t = raw.trim()
+        t = t.replace(Regex("""\s*-\s*Ver\s+(?:Completa|Episodio|Cap[ií]tulo).*$""", RegexOption.IGNORE_CASE), "")
+        t = t.replace(Regex("""\s*\|\s*RePelis24.*$""", RegexOption.IGNORE_CASE), "")
+        t = t.replace(Regex("""^(?:Ver\s+)?(?:Pel[ií]cula|Serie)\s+""", RegexOption.IGNORE_CASE), "")
+        t = t.replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
+        t = t.replace(Regex("""\s+es\s+una\s+(?:pel[ií]cula|serie).*$""", RegexOption.IGNORE_CASE), "")
+        return t.trim()
+    }
+
+    fun parseServerOptions(doc: Document): List<RePelis24ShopServerOption> {
+        val out = mutableListOf<RePelis24ShopServerOption>()
+        val seen = linkedSetOf<String>()
+        for (li in doc.select("li[role=presentation][data-server], li[data-server]")) {
+            val b64 = li.attr("data-server").trim()
+            if (b64.isEmpty()) continue
+            val decoded = decodeBase64Utf8(b64).trim()
+            if (!decoded.startsWith("http://") && !decoded.startsWith("https://")) continue
+
+            val label = li.select("span").firstOrNull()?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: li.text().trim().ifEmpty { "Servidor" }
+
+            val tabItem: Element? = li.parents().firstOrNull { it.hasClass("tab-video-item") }
+            val tabName = tabItem?.selectFirst(".tab-item-name")?.ownText()?.trim()
+            val tabImg = tabItem?.selectFirst("img.tab-item-image")
+            val langCandidate = tabName?.takeIf { it.isNotEmpty() }
+                ?: tabImg?.attr("alt")?.takeIf { it.isNotEmpty() }
+                ?: tabImg?.attr("src")?.takeIf { it.isNotEmpty() }
+                ?: label
+            val language = normalizeLanguage(langCandidate)
+            val quality = tabItem?.selectFirst(".tab-item-name div")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+
+            if (!seen.add("$language|$decoded")) continue
+            out += RePelis24ShopServerOption(
+                label = label,
+                url = decoded,
+                language = language,
+                qualityLabel = quality,
+            )
+        }
+        return out
+    }
+
+    fun parseSeasonLinks(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<RePelis24ShopSeasonLink> {
+        val out = mutableListOf<RePelis24ShopSeasonLink>()
+        val seen = linkedSetOf<String>()
+        for ((idx, a) in doc.select("a[href*=/temporada/]").withIndex()) {
+            val href = resolveUrl(mainUrl, a.attr("href")) ?: continue
+            if (!seen.add(href)) continue
+            val label = a.text().trim().ifEmpty { "Temporada ${idx + 1}" }
+            val sNum = Regex("""Temporada\s+(\d+)""", RegexOption.IGNORE_CASE).find(label)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: SEASON_NUM_REGEX.find(href)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: (idx + 1)
+            out += RePelis24ShopSeasonLink(seasonNumber = sNum, title = label, url = href)
+        }
+        return out.sortedBy { it.seasonNumber }
+    }
+
+    fun parseEpisodeLinks(doc: Document, mainUrl: String = DEFAULT_MAIN_URL, fallbackSeason: Int = 1): List<RePelis24ShopEpisodeLink> {
+        val out = mutableListOf<RePelis24ShopEpisodeLink>()
+        val seen = linkedSetOf<String>()
+        for ((idx, a) in doc.select("a[href*=/episodio/]").withIndex()) {
+            val href = resolveUrl(mainUrl, a.attr("href")) ?: continue
+            if (!seen.add(href)) continue
+
+            val text = a.text().trim()
+            val seMatch = EP_SE_REGEX.find(href) ?: EP_TEXT_SE_REGEX.find(text)
+            val sNum = seMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: fallbackSeason
+            val eNum = seMatch?.groupValues?.getOrNull(2)?.toIntOrNull()
+                ?: EP_NUM_TEXT_REGEX.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: (idx + 1)
+
+            val epPoster = resolveUrl(mainUrl, a.selectFirst("img")?.attr("src"))
+            val epTitle = a.selectFirst("span[itemprop=name]")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: "Episodio $eNum"
+            out += RePelis24ShopEpisodeLink(
+                title = epTitle,
+                url = href,
+                season = sNum,
+                episode = eNum,
+                posterUrl = epPoster,
+            )
+        }
+        return out.sortedWith(compareBy({ it.season }, { it.episode }))
+    }
+
+    fun parseDetail(doc: Document, url: String, mainUrl: String = DEFAULT_MAIN_URL): RePelis24ShopDetail? {
+        val resolvedUrl = resolveUrl(mainUrl, url) ?: url
+        val isSeries = resolvedUrl.contains("/serie/") || resolvedUrl.contains("/temporada/")
+
+        val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content")?.let(::cleanPageTitle)
+        val h1Text = doc.selectFirst("h1.title span[itemprop=name], h1.title, h1")?.text()?.let(::cleanPageTitle)
+        val headingDesc = doc.select("h2").firstOrNull {
+            it.text().contains("es una pelicula", ignoreCase = true) ||
+                it.text().contains("es una película", ignoreCase = true) ||
+                it.text().contains("es una serie", ignoreCase = true)
+        }
+        val headingTitle = headingDesc?.text()?.let(::cleanPageTitle)
+        val title = h1Text?.takeIf { it.isNotEmpty() }
+            ?: ogTitle?.takeIf { it.isNotEmpty() }
+            ?: headingTitle?.takeIf { it.isNotEmpty() }
+            ?: return null
+
+        val posterEl = doc.selectFirst("article.backdrop-info figure.poster img")
+            ?: doc.select("img[src*='/cdn/p/']").firstOrNull()
+            ?: doc.selectFirst("img.poster")
+        val posterUrl = resolveUrl(mainUrl, posterEl?.attr("src"))
+
+        val bgStyleUrl = (doc.selectFirst("div.backdrop-image[style], div.video-play[style]")?.attr("style").orEmpty()).let { st ->
+            CSS_BG_URL_REGEX.findAll(st).mapNotNull { it.groupValues.getOrNull(1) }.lastOrNull()
+        }
+        val bgUrl = resolveUrl(
+            mainUrl,
+            doc.selectFirst("[data-backdrop]")?.attr("data-backdrop")
+                ?: doc.selectFirst("img[src*='/cdn/b/']")?.attr("src")
+                ?: bgStyleUrl,
+        )
+
+        val nextSibling: Element? = headingDesc?.parent()?.children()?.let { kids ->
+            val idx = kids.indexOf(headingDesc)
+            if (idx >= 0 && idx + 1 < kids.size) kids[idx + 1] else null
+        }
+        val plot = doc.selectFirst("div.description[itemprop=description] p, div.description p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: nextSibling?.takeIf { it.tagName() == "p" }?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
+
+        val metaDurationText = doc.selectFirst("article.backdrop-info span[itemprop=duration]")?.text().orEmpty()
+        val metaYearText = doc.selectFirst("article.backdrop-info span[itemprop=datePublished]")?.text().orEmpty()
+        val headingParent: Element? = headingDesc?.parent()
+        val topBlockText = metaDurationText + " " + metaYearText + " " + headingParent?.text().orEmpty() + " " + doc.select(".movie-info, .info, .details").text()
+        val year = YEAR_REGEX.find(metaYearText.ifEmpty { topBlockText })?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val duration = DURATION_HM_REGEX.find(metaDurationText.ifEmpty { topBlockText })?.let { m ->
+            val h = m.groupValues[1].toIntOrNull() ?: 0
+            val min = m.groupValues.getOrNull(2)?.toIntOrNull() ?: 0
+            h * 60 + min
+        } ?: DURATION_M_REGEX.find(metaDurationText.ifEmpty { topBlockText })?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+        val excludedContainers = setOf("nav", "header", "aside")
+        val genres = doc.select("a[href*=/genero/]").filter { a ->
+            a.parents().none { p -> p.tagName() in excludedContainers || p.hasClass("showcase-sidebar") }
+        }.map { it.text().trim().trimEnd(',').trim() }
+            .filter { it.isNotEmpty() && !it.equals("Series", ignoreCase = true) }
+            .distinct()
+
+        val actors = doc.select("ul.info-list a[href*=/buscar/]")
+            .map { it.text().trim().trimEnd(',').trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+
+        val seasonLinks = if (isSeries) parseSeasonLinks(doc, mainUrl) else emptyList()
+        val episodeLinks = if (isSeries) parseEpisodeLinks(doc, mainUrl) else emptyList()
+
+        val recs = parseCards(doc, mainUrl).filter { it.url != resolvedUrl }.ifEmpty {
+            val sugHeading = doc.select("h2").firstOrNull { it.text().contains("Sugerencias", ignoreCase = true) }
+            val container: Element? = sugHeading?.parent()
+            val out = mutableListOf<RePelis24ShopCard>()
+            val seen = linkedSetOf<String>()
+            container?.select("a[href*=/pelicula/], a[href*=/serie/]")?.forEach { a ->
+                val rUrl = resolveUrl(mainUrl, a.attr("href")) ?: return@forEach
+                if (rUrl == resolvedUrl || !seen.add(rUrl)) return@forEach
+                val rPoster = resolveUrl(mainUrl, a.selectFirst("img")?.attr("src"))
+                val rAlt = a.selectFirst("img")?.attr("alt")
+                    ?.replace(Regex("""^(?:Poster|Ver)\s+""", RegexOption.IGNORE_CASE), "")
+                    ?.trim()
+                val rTitle = rAlt?.takeIf { it.isNotEmpty() } ?: a.text().trim().takeIf { it.isNotEmpty() } ?: return@forEach
+                out += RePelis24ShopCard(
+                    title = rTitle,
+                    url = rUrl,
+                    posterUrl = rPoster,
+                    isSeries = rUrl.contains("/serie/"),
+                )
+            }
+            out
+        }
+
+        return RePelis24ShopDetail(
+            title = title,
+            url = resolvedUrl,
+            isSeries = isSeries,
+            posterUrl = posterUrl,
+            backgroundUrl = bgUrl,
+            plot = plot,
+            year = year,
+            durationMinutes = duration,
+            genres = genres,
+            actors = actors,
+            trailerUrl = null,
+            seasonLinks = seasonLinks,
+            episodeLinks = episodeLinks,
+            recommendations = recs,
+        )
+    }
+
+    fun extractQueryParam(url: String, paramName: String): String? {
+        val query = url.substringAfter('?', "").substringBefore('#')
+        if (query.isEmpty()) return null
+        for (pair in query.split('&')) {
+            val eq = pair.indexOf('=')
+            val key = if (eq >= 0) pair.substring(0, eq) else pair
+            if (key.equals(paramName, ignoreCase = true)) {
+                val rawVal = if (eq >= 0) pair.substring(eq + 1) else ""
+                return URLDecoder.decode(rawVal, "UTF-8").trim().takeIf { it.isNotEmpty() }
+            }
+        }
+        return null
     }
 }

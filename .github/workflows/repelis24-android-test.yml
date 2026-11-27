@@ -1,9 +1,6 @@
 name: Pruebas Android de RePelis24.cz
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths: ['Repelis24CZ/**', '.github/workflows/repelis24-android-test.yml']
 permissions:
   contents: read
 jobs:

@@ -1,69 +1,421 @@
 package com.menorah.cinecalidadam
+
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.net.URLDecoder
+import java.net.URLEncoder
 
-internal data class Item(val title: String, val url: String, val poster: String?, val movie: Boolean)
-internal data class EpisodeItem(val title: String, val url: String, val season: Int, val number: Int, val poster: String?)
-internal data class Player(val url: String, val language: String)
-internal object CinecalidadAMMarkup {
-    const val BASE = "https://www.cinecalidad.am"
-    fun siteUrl(url: String): Boolean = runCatching { URI(url).let { it.scheme == "https" && it.host.equals("www.cinecalidad.am", true) && it.port in listOf(-1,443) && it.userInfo == null } }.getOrDefault(false)
-    fun safeHost(url: String, host: String): Boolean = runCatching { URI(url).let { it.scheme == "https" && it.host.equals(host, true) && it.port in listOf(-1,443) && it.userInfo == null } }.getOrDefault(false)
-    fun img(e: Element?): String? {
-        if (e == null) return null
-        return listOf(e.attr("data-src"), e.attr("src")).firstNotNullOfOrNull { x -> runCatching { URI(e.baseUri()).resolve(x).toString() }.getOrNull()?.takeIf { x.isNotBlank() && !x.startsWith("data:") && it.startsWith("https://") } }
+data class CinecalidadAMCard(
+    val title: String,
+    val url: String,
+    val posterUrl: String?,
+    val isSeries: Boolean,
+    val rating10: Double? = null,
+    val year: Int? = null,
+)
+
+data class CinecalidadAMEpisode(
+    val title: String,
+    val url: String,
+    val season: Int,
+    val episode: Int,
+    val posterUrl: String?,
+)
+
+data class CinecalidadAMDetail(
+    val title: String,
+    val url: String,
+    val isSeries: Boolean,
+    val posterUrl: String?,
+    val backgroundUrl: String?,
+    val plot: String?,
+    val year: Int?,
+    val rating10: Double?,
+    val genres: List<String>,
+    val actors: List<String>,
+    val trailerUrl: String?,
+    val episodes: List<CinecalidadAMEpisode>,
+    val recommendations: List<CinecalidadAMCard>,
+)
+
+data class CinecalidadAMPlayerOption(
+    val name: String,
+    val url: String,
+    val language: String? = null,
+    val quality: String? = null,
+)
+
+data class CinecalidadAMDownloadOption(
+    val label: String,
+    val url: String,
+    val isMagnet: Boolean = false,
+)
+
+object CinecalidadAMMarkup {
+    const val DEFAULT_MAIN_URL = "https://www.cinecalidad.am"
+
+    private const val B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    private val B64_TABLE = IntArray(256) { -1 }.apply {
+        for (i in B64_ALPHABET.indices) this[B64_ALPHABET[i].code] = i
+        this['-'.code] = 62
+        this['_'.code] = 63
     }
-    fun cards(doc: Document): List<Item> = doc.select("article.item:not(.naadb)").mapNotNull { e ->
-        val link = e.select("a[href]").firstOrNull { a -> val url = a.absUrl("href"); siteUrl(url) && (URI(url).path.startsWith("/ver-pelicula/") || URI(url).path.startsWith("/ver-serie/")) } ?: return@mapNotNull null
-        val url = link.absUrl("href"); val title = e.selectFirst(".in_title")?.text()?.trim().orEmpty().ifBlank { e.selectFirst("img")?.attr("alt").orEmpty().trim() }
-        if (title.isEmpty()) return@mapNotNull null
-        Item(title, url, img(e.selectFirst(".poster img")), URI(url).path.startsWith("/ver-pelicula/"))
-    }.distinctBy { it.url }
-    /** The featured widget is separate from the regular article grid. */
-    fun featured(doc: Document): List<Item> = doc.selectFirst("#destacado")?.parent()
-        ?.select("ul.destacados-widget a[href]")?.mapNotNull { link ->
-            val url = link.absUrl("href"); if (!siteUrl(url)) return@mapNotNull null
-            val path = URI(url).path.orEmpty(); val movie = path.startsWith("/ver-pelicula/")
-            if (!movie && !path.startsWith("/ver-serie/")) return@mapNotNull null
-            val title = link.attr("title").trim().ifBlank { link.selectFirst("img")?.attr("alt").orEmpty().trim() }
-            if (title.isBlank()) return@mapNotNull null
-            val poster = img(link.selectFirst("img"))?.replace("image.tmdb.org/t/p/w185/", "image.tmdb.org/t/p/w342/")
-            Item(title, url, poster, movie)
-        }?.distinctBy { it.url }.orEmpty()
-    fun yearQueryPath(query: String, page: Int): String? {
-        val value = query.trim()
-        if (!value.matches(Regex("[0-9]{4}")) || value.toInt() !in 1888..2100 || page < 1) return null
-        return "/release/$value/" + if (page > 1) "page/$page/" else ""
+
+    private val SEASON_EP_NUM_REGEX = Regex("""S(\d+)\s*[-xX]\s*E(\d+)""", RegexOption.IGNORE_CASE)
+    private val SLUG_SE_REGEX = Regex("""-(\d+)x(\d+)/?$""", RegexOption.IGNORE_CASE)
+    private val SLUG_TMDB_SE_REGEX = Regex("""-s(\d+)-e(\d+)/?$""", RegexOption.IGNORE_CASE)
+    private val YEAR_REGEX = Regex("""\b((?:19|20)\d{2})\b""")
+    private val DETAIL_YEAR_REGEX = Regex("""(?:Fecha|Estreno|Año)\s*:?\s*((?:19|20)\d{2})""", RegexOption.IGNORE_CASE)
+    private val PAGE_NUM_REGEX = Regex("""/page/(\d+)/?""")
+    private val DOUBLE_PATH_SLASH = Regex("""(?<!:)/{2,}""")
+    private val TRAILER_SCRIPT_SRC_REGEX = Regex("""#trailerazo["']?\s*\)\.src\s*=\s*["'](https?://[^"']+)["']""")
+
+    fun decodeBase64Utf8(input: String): String {
+        val cleaned = input.trim().replace("\r", "").replace("\n", "").trimEnd('=')
+        if (cleaned.isEmpty()) return ""
+        val out = ByteArray((cleaned.length * 3) / 4)
+        var outIdx = 0
+        var acc = 0
+        var bits = 0
+        for (ch in cleaned) {
+            val code = ch.code
+            val v = if (code in B64_TABLE.indices) B64_TABLE[code] else -1
+            if (v < 0) continue
+            acc = (acc shl 6) or v
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                if (outIdx < out.size) out[outIdx++] = ((acc ushr bits) and 0xFF).toByte()
+            }
+        }
+        return String(out, 0, outIdx, Charsets.UTF_8)
     }
-    fun isYearArchive(doc: Document, year: String): Boolean = runCatching {
-        val u = URI(doc.location())
-        siteUrl(doc.location()) && u.path.orEmpty().matches(Regex("/release/$year/(?:page/[0-9]+/)?"))
-    }.getOrDefault(false)
-    fun hasNext(doc: Document, page: Int): Boolean {
-        val uri = URI(doc.location()); val path = uri.path.orEmpty().replace(Regex("/page/[0-9]+/?$"), "").trimEnd('/') + "/page/${page+1}"
-        return doc.select("a[href]").any { a -> val u=a.absUrl("href"); siteUrl(u) && URI(u).path.trimEnd('/') == path && (uri.rawQuery == null || URI(u).rawQuery == uri.rawQuery) }
+
+    fun resolveUrl(baseUrl: String, href: String?): String? {
+        val raw = href?.trim().orEmpty()
+        if (raw.isEmpty() || raw.startsWith("#") || raw.startsWith("javascript:", ignoreCase = true)) {
+            return null
+        }
+        if (raw.startsWith("magnet:", ignoreCase = true)) return raw
+        return runCatching {
+            val base = URI(baseUrl.trimEnd('/') + "/")
+            val resolved = if (raw.startsWith("//")) URI("https:$raw") else base.resolve(raw)
+            val s = resolved.toString()
+            if (s.startsWith("http://") || s.startsWith("https://")) s else null
+        }.getOrNull()
     }
-    fun episodes(doc: Document): List<EpisodeItem> = doc.select("a[href*=/ver-el-episodio/]").mapNotNull { a ->
-        val url = a.absUrl("href"); if (!siteUrl(url)) return@mapNotNull null
-        val path = URI(url).path.orEmpty()
-        if (!path.startsWith("/ver-el-episodio/")) return@mapNotNull null
-        // Both slug-1x2 and tmdb-123-s1-e2 are used in the site's episode URLs.
-        val m = Regex("-(?:s([0-9]+)-e([0-9]+)|([0-9]+)x([0-9]+))/?$", RegexOption.IGNORE_CASE).find(path) ?: return@mapNotNull null
-        val season = m.groupValues[1].ifEmpty { m.groupValues[3] }.toIntOrNull() ?: return@mapNotNull null
-        val number = m.groupValues[2].ifEmpty { m.groupValues[4] }.toIntOrNull() ?: return@mapNotNull null
-        if (number < 1) return@mapNotNull null
-        val container = a.closest("li") ?: a.parent()
-        EpisodeItem(a.text().trim().ifBlank { "Episodio $number" }, url, season, number, img(container?.selectFirst("img")))
-    }.distinctBy { it.url }.sortedWith(compareBy({ it.season }, { it.number }))
-    fun players(doc: Document): List<Player> = doc.select("#panel_online li.dooplay_player_option[data-option]:not(.dooplay_player_option_trailer)").mapNotNull { e ->
-        val url = e.attr("data-option"); if (!safeHost(url,"vimeos.net") && !safeHost(url,"videoapp.zip")) return@mapNotNull null
-        val text = doc.selectFirst("#panel_online .pane_descripcion")?.text().orEmpty().lowercase()
-        val language = if ("latino" in text) "Latino" else if ("castellano" in text) "Castellano" else if ("subtitul" in text) "Subtitulado" else "Idioma no indicado"
-        Player(url,language)
-    }.distinctBy { it.url }
-    fun vimeosFromWrapper(doc: Document): String? = doc.select("iframe[src]").asSequence().map { it.absUrl("src") }.firstOrNull { safeHost(it,"vimeos.net") }
-    fun title(doc: Document): String? = doc.selectFirst(".single_left h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
-    fun poster(doc: Document): String? = img(doc.selectFirst(".single_left table img"))
-    fun plot(doc: Document): String? = doc.select(".single_left table td:nth-child(2) p").firstOrNull { it.text().trim().isNotBlank() }?.text()?.trim()
+
+    fun extractImageUrl(img: Element?, baseUrl: String = DEFAULT_MAIN_URL): String? {
+        if (img == null) return null
+        val candidates = listOf(
+            img.attr("data-src"),
+            img.attr("data-lazy-src"),
+            img.attr("src"),
+        )
+        for (c in candidates) {
+            val trimmed = c.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("data:", ignoreCase = true)) continue
+            val resolved = resolveUrl(baseUrl, trimmed) ?: continue
+            return resolved.replace(DOUBLE_PATH_SLASH, "/")
+        }
+        return null
+    }
+
+    fun buildArchivePageUrl(sectionUrl: String, page: Int, mainUrl: String = DEFAULT_MAIN_URL): String {
+        val cleanBase = resolveUrl(mainUrl, sectionUrl) ?: mainUrl
+        if (page <= 1) return cleanBase
+        return "${cleanBase.trimEnd('/')}/page/$page/"
+    }
+
+    fun buildSearchUrl(query: String, page: Int = 1, mainUrl: String = DEFAULT_MAIN_URL): String {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val root = mainUrl.trimEnd('/')
+        return if (page <= 1) "$root/?s=$encoded" else "$root/page/$page/?s=$encoded"
+    }
+
+    fun normalizeLanguage(raw: String?): String? {
+        val v = raw?.trim()?.lowercase().orEmpty()
+        if (v.isEmpty()) return null
+        return when {
+            v.contains("latino") -> "Latino"
+            v.contains("castellano") -> "Castellano"
+            v.contains("subtitul") || v.contains("vose") -> "Subtitulado"
+            v.contains("ingl") -> "Inglés"
+            v.contains("dual") -> "Dual"
+            else -> null
+        }
+    }
+
+    fun parseFeaturedCards(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<CinecalidadAMCard> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<CinecalidadAMCard>()
+        for (li in doc.select("aside#dtw_content_featured-3 ul.destacados-widget li, ul.destacados-widget li")) {
+            val anchor = li.selectFirst("a[href]") ?: continue
+            val href = resolveUrl(mainUrl, anchor.attr("href")) ?: continue
+            if (!href.contains("/ver-pelicula/") && !href.contains("/ver-serie/")) continue
+            if (!seen.add(href)) continue
+            val img = li.selectFirst("img")
+            val title = anchor.attr("title").trim().takeIf { it.isNotEmpty() }
+                ?: img?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() }
+                ?: li.text().trim().takeIf { it.isNotEmpty() }
+                ?: continue
+            val poster = extractImageUrl(img, mainUrl)?.replace("/w185/", "/w500/")
+            out += CinecalidadAMCard(
+                title = title,
+                url = href,
+                posterUrl = poster,
+                isSeries = href.contains("/ver-serie/"),
+            )
+        }
+        return out
+    }
+
+    fun parseCards(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<CinecalidadAMCard> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<CinecalidadAMCard>()
+        val items = doc.select("#archive-content > article.item:not(.naadb), article.item.movies:not(.naadb)")
+        for (article in items) {
+            val anchor = article.selectFirst("h3.hover_caption_caption a[href], a[href]") ?: continue
+            val href = resolveUrl(mainUrl, anchor.attr("href")) ?: continue
+            if (!href.contains("/ver-pelicula/") && !href.contains("/ver-serie/")) continue
+            if (!seen.add(href)) continue
+
+            val img = article.selectFirst("img")
+            val title = article.selectFirst(".in_title")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: img?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() && !it.equals("promo", ignoreCase = true) }
+                ?: anchor.attr("title").trim().takeIf { it.isNotEmpty() }
+                ?: continue
+
+            val selt = article.selectFirst(".selt")?.text()?.trim().orEmpty()
+            val isSeries = href.contains("/ver-serie/") ||
+                selt.contains("Serie", ignoreCase = true) ||
+                article.selectFirst(".last-ep, .last-s") != null
+
+            val poster = extractImageUrl(img, mainUrl)
+            val rating = article.selectFirst(".rating")?.text()?.trim()?.replace(',', '.')?.toDoubleOrNull()
+            val year = YEAR_REGEX.find(article.select(".hover_caption_caption p").text())
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            out += CinecalidadAMCard(
+                title = title,
+                url = href,
+                posterUrl = poster,
+                isSeries = isSeries,
+                rating10 = rating,
+                year = year,
+            )
+        }
+        return out
+    }
+
+    fun parseHasNext(doc: Document, currentPage: Int): Boolean {
+        if (doc.selectFirst("link[rel=next], .pagination a.next, a.next.page-numbers") != null) {
+            return true
+        }
+        val nextPage = currentPage + 1
+        return doc.select(".pagination a[href], .nav-links a[href], a[href*=/page/]").any { el ->
+            val n = PAGE_NUM_REGEX.find(el.attr("href"))?.groupValues?.getOrNull(1)?.toIntOrNull()
+            n != null && n >= nextPage
+        }
+    }
+
+    fun unwrapEmbedOption(rawOption: String): String? {
+        val trimmed = rawOption.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.contains("zopass=", ignoreCase = true)) {
+            val query = trimmed.substringAfter('?', "")
+            for (pair in query.split('&')) {
+                val eq = pair.indexOf('=')
+                if (eq > 0 && pair.substring(0, eq).equals("zopass", ignoreCase = true)) {
+                    val encoded = URLDecoder.decode(pair.substring(eq + 1), "UTF-8")
+                    val decoded = decodeBase64Utf8(encoded).trim()
+                    if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+                        return decoded
+                    }
+                }
+            }
+        }
+        return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else null
+    }
+
+    fun parsePlayerOptions(doc: Document): Pair<List<CinecalidadAMPlayerOption>, String?> {
+        val options = mutableListOf<CinecalidadAMPlayerOption>()
+        var trailerUrl: String? = null
+        val seen = linkedSetOf<String>()
+
+        val paneLang = normalizeLanguage(doc.selectFirst("#panel_online .pane_descripcion")?.text())
+        val quality = doc.selectFirst(".single-calidad span")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+
+        for (li in doc.select("#playeroptionsul li.dooplay_player_option[data-option], li.dooplay_player_option[data-option]")) {
+            val rawOpt = li.attr("data-option").trim()
+            if (rawOpt.isEmpty()) continue
+            val isTrailer = li.hasClass("dooplay_player_option_trailer") ||
+                li.id().contains("trailer", ignoreCase = true) ||
+                li.text().contains("Trailer", ignoreCase = true)
+            val unwrapped = unwrapEmbedOption(rawOpt) ?: continue
+            if (isTrailer) {
+                if (trailerUrl == null) trailerUrl = unwrapped
+                continue
+            }
+            if (!seen.add(unwrapped)) continue
+            val label = li.ownText().trim().ifEmpty { li.text().trim() }.ifEmpty { "Servidor" }
+            val optionLang = normalizeLanguage(li.attr("data-lang"))
+                ?: normalizeLanguage(label)
+                ?: paneLang
+                ?: "Latino"
+            options += CinecalidadAMPlayerOption(
+                name = label,
+                url = unwrapped,
+                language = optionLang,
+                quality = quality,
+            )
+        }
+
+        if (trailerUrl == null) {
+            for (script in doc.select("script")) {
+                val scriptText = script.data()
+                val m = TRAILER_SCRIPT_SRC_REGEX.find(scriptText)
+                if (m != null) {
+                    trailerUrl = m.groupValues[1]
+                    break
+                }
+            }
+        }
+
+        return options to trailerUrl
+    }
+
+    fun parseDownloadOptions(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<CinecalidadAMDownloadOption> {
+        val out = mutableListOf<CinecalidadAMDownloadOption>()
+        val seen = linkedSetOf<String>()
+        for (a in doc.select("#panel_descarga a[href]")) {
+            val href = resolveUrl(mainUrl, a.attr("href")) ?: continue
+            if (!seen.add(href)) continue
+            val label = a.selectFirst("li")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: a.text().trim().ifEmpty { if (href.startsWith("magnet:")) "Magnet" else "Descarga" }
+            out += CinecalidadAMDownloadOption(
+                label = label,
+                url = href,
+                isMagnet = href.startsWith("magnet:", ignoreCase = true),
+            )
+        }
+        return out
+    }
+
+    fun parseSeriesEpisodes(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<CinecalidadAMEpisode> {
+        val out = mutableListOf<CinecalidadAMEpisode>()
+        val seen = linkedSetOf<String>()
+        val seasonContainers = doc.select("#seasons div#jstab[data-tab], #seasons div.se-c[data-tab]")
+        for ((tabIdx, seasonEl) in seasonContainers.withIndex()) {
+            val tabSeason = seasonEl.attr("data-tab").toIntOrNull()
+            val headerSeason = Regex("""Temporada\s+(\d+)""", RegexOption.IGNORE_CASE)
+                .find(seasonEl.selectFirst("h2")?.text().orEmpty())
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val defaultSeason = headerSeason ?: tabSeason ?: (tabIdx + 1)
+
+            val epItems = seasonEl.select("ul.episodios li")
+            for ((epIdx, li) in epItems.withIndex()) {
+                val anchor = li.selectFirst(".episodiotitle a[href], a[href]") ?: continue
+                val epUrl = resolveUrl(mainUrl, anchor.attr("href")) ?: continue
+                if (!seen.add(epUrl)) continue
+
+                val epTitle = anchor.text().trim().ifEmpty { "Episodio ${epIdx + 1}" }
+                val numText = li.selectFirst(".numerando")?.text()?.trim().orEmpty()
+                val mNum = SEASON_EP_NUM_REGEX.find(numText)
+                    ?: SLUG_SE_REGEX.find(epUrl)
+                    ?: SLUG_TMDB_SE_REGEX.find(epUrl)
+                val seasonNum = mNum?.groupValues?.getOrNull(1)?.toIntOrNull() ?: defaultSeason
+                val epNum = mNum?.groupValues?.getOrNull(2)?.toIntOrNull() ?: (epIdx + 1)
+                val epPoster = extractImageUrl(li.selectFirst(".imagen img"), mainUrl)
+
+                out += CinecalidadAMEpisode(
+                    title = epTitle,
+                    url = epUrl,
+                    season = seasonNum,
+                    episode = epNum,
+                    posterUrl = epPoster,
+                )
+            }
+        }
+        return out
+    }
+
+    fun parseDetail(doc: Document, url: String, mainUrl: String = DEFAULT_MAIN_URL): CinecalidadAMDetail? {
+        val root = doc.selectFirst("div.single_left") ?: return null
+        val title = root.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val resolvedUrl = resolveUrl(mainUrl, url) ?: url
+        val isSeries = resolvedUrl.contains("/ver-serie/") || doc.selectFirst("#episodes #serie_contenido, #seasons") != null
+
+        val poster = extractImageUrl(root.selectFirst("table img, img.attachment-post-thumbnail"), mainUrl)
+            ?: resolveUrl(mainUrl, doc.selectFirst("meta[property=og:image]")?.attr("content"))
+        val backdrop = extractImageUrl(
+            doc.selectFirst("img[src*='/w1280/'], img[data-src*='/w1280/'], img[src*='/original/'], img[data-src*='/original/']"),
+            mainUrl,
+        )
+
+        val infoTd = root.selectFirst("table tr td:eq(1)") ?: root.selectFirst("table td:nth-of-type(2)")
+        val plot = infoTd?.select("> p")
+            ?.map { it.text().replace("\u00A0", " ").trim() }
+            ?.firstOrNull { p ->
+                p.length > 20 &&
+                    !p.startsWith("Títulos:", ignoreCase = true) &&
+                    !p.startsWith("Género:", ignoreCase = true)
+            }
+            ?: doc.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
+
+        val year = DETAIL_YEAR_REGEX.find(root.text())?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: YEAR_REGEX.find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+        val rating10 = root.selectFirst("#star-rating-box")?.parent()?.selectFirst("b")?.text()
+            ?.replace(',', '.')?.toDoubleOrNull()
+
+        val genres = root.select("a[href*=/genero-de-la-pelicula/], a[href*=/genero/]")
+            .map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+
+        val actors = root.select("a[href*=/reparto/], a[href*=/reparto-de-serie/], a[href*=/director/]")
+            .map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+
+        val (_, trailerUrl) = parsePlayerOptions(doc)
+        val episodes = if (isSeries) parseSeriesEpisodes(doc, mainUrl) else emptyList()
+
+        val recs = mutableListOf<CinecalidadAMCard>()
+        val seenRec = linkedSetOf<String>()
+        for (a in doc.select("div.yarpp-related a[href], ul.related-posts a[href]")) {
+            val recUrl = resolveUrl(mainUrl, a.attr("href")) ?: continue
+            if (!recUrl.contains("/ver-pelicula/") && !recUrl.contains("/ver-serie/")) continue
+            if (!seenRec.add(recUrl)) continue
+            val recTitle = a.text().replace(Regex("""\s+online\s*$""", RegexOption.IGNORE_CASE), "").trim()
+                .ifEmpty { a.attr("title").trim() }
+            if (recTitle.isEmpty()) continue
+            val li = a.parent()
+            val recImg = extractImageUrl(li?.selectFirst("img") ?: a.selectFirst("img"), mainUrl)
+            recs += CinecalidadAMCard(
+                title = recTitle,
+                url = recUrl,
+                posterUrl = recImg,
+                isSeries = recUrl.contains("/ver-serie/"),
+            )
+        }
+
+        return CinecalidadAMDetail(
+            title = title,
+            url = resolvedUrl,
+            isSeries = isSeries,
+            posterUrl = poster,
+            backgroundUrl = backdrop,
+            plot = plot,
+            year = year,
+            rating10 = rating10,
+            genres = genres,
+            actors = actors,
+            trailerUrl = trailerUrl,
+            episodes = episodes,
+            recommendations = recs,
+        )
+    }
 }

@@ -1,9 +1,6 @@
 name: Pruebas Android de Cinecalidad.my
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths: ['CinecalidadMY/**', 'scripts/run_cinecalidad_my_android.sh', '.github/workflows/cinecalidad-my-android-test.yml']
 permissions:
   contents: read
 jobs:

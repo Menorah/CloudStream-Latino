@@ -1,9 +1,6 @@
 name: Pruebas Android de RePelisHD
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths: ['RePelisHD/**', '.github/workflows/repelishd-android-test.yml']
 permissions:
   contents: read
 jobs:
