@@ -7,82 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_cinecalidadmy_r3:
+  probe_cz_r4:
     runs-on: ubuntu-latest
     steps:
       - run: |
+          python3 -m pip install -q playwright
+          playwright install chromium
           python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          def fetch(u, hdrs=None):
-              h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "es-ES,es;q=0.9"}
-              if hdrs: h.update(hdrs)
-              req = urllib.request.Request(u, headers=h)
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, u, str(e)
-
-          out = {}
-          c, fu, js = fetch("https://www.cinecalidad.my/wp-content/themes/gridthemeresponsive/scripts.min.js?v=2")
-          out["scripts_min_js"] = {"code": c, "len": len(js), "content": js}
-
-          # Check peliculas-por-ano, pagination, and several movies from home to collect all service= names
-          c, fu, anos = fetch("https://www.cinecalidad.my/peliculas-por-ano/")
-          out["anos_code"] = c
-          out["anos_links"] = re.findall(r'href=["\']?([^"\'\s>]+)', anos)[:60]
-
-          c, fu, home = fetch("https://www.cinecalidad.my/")
-          movie_urls = list(dict.fromkeys(re.findall(r'https://www\.cinecalidad\.my/pelicula/[^"\'\s>]+', home)))[:8]
-          services = {}
-          movie_samples = []
-          for mu in movie_urls:
-              mc, mfu, mh = fetch(mu)
-              svcs = re.findall(r'class=["\']?[^"\']*link[^"\']*["\']?[^>]*service=([^\s>]+)\s+data=([^\s>]+)', mh)
-              # Also broader capture of <a ... service=...>
-              anchors = re.findall(r'<a\b[^>]*service=[^>]*>.*?</a>', mh, re.S | re.I)
-              for a in anchors:
-                  sm = re.search(r'service=([^\s>]+)', a)
-                  if sm: services[sm.group(1)] = a[:200]
-              movie_samples.append({"url": mu, "code": mc, "anchors_count": len(anchors), "anchors": anchors[:12]})
-          out["services_found"] = services
-          out["movie_samples"] = movie_samples
-
-          # Check paginacion p2 cards
-          c, fu, p2 = fetch("https://www.cinecalidad.my/page/2/")
-          out["p2_movies"] = re.findall(r'https://www\.cinecalidad\.my/pelicula/[^"\'\s>]+', p2)[:10]
-
-          # Check if any /serie/ exists
-          for test_u in ["https://www.cinecalidad.my/serie/", "https://www.cinecalidad.my/ver-serie/", "https://www.cinecalidad.my/?s=batman"]:
-              sc, sfu, sh = fetch(test_u)
-              out[f"test_{test_u}"] = {"code": sc, "len": len(sh), "movies": re.findall(r'https://www\.cinecalidad\.my/[^"\'\s>]*pelicula[^"\'\s>]+|https://www\.cinecalidad\.my/[^"\'\s>]*serie[^"\'\s>]+', sh)[:10]}
-
-          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-          b64 = base64.b64encode(raw).decode("ascii")
-          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks):
-              print(f"::notice title=MY3_{idx+1}_{len(chunks)}::{ch}")
-          PY
-
-  probe_cinecalidadam_r3:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          def fetch(u, hdrs=None):
-              h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "es-ES,es;q=0.9"}
-              if hdrs: h.update(hdrs)
-              req = urllib.request.Request(u, headers=h)
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, u, {}, str(e)
+          import base64, json, re, zlib
+          from playwright.sync_api import sync_playwright
 
           def body_clean(html):
               m = re.search(r'<body\b[^>]*>(.*)', html, re.S | re.I)
@@ -92,71 +25,185 @@ jobs:
               return b
 
           out = {}
-          # 1. Episode page + multi-season series page + another movie
-          for key, u in [
-              ("ep", "https://www.cinecalidad.am/ver-el-episodio/tmdb-2098-s1-e1/"),
-              ("serie_multi", "https://www.cinecalidad.am/ver-serie/the-batman/"),
-              ("home", "https://www.cinecalidad.am/"),
-          ]:
-              c, fu, hdrs, h = fetch(u)
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+              ctx = b.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", locale="es-ES")
+              page = ctx.new_page()
+              page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+              def goto_wait(u):
+                  resp = page.goto(u, wait_until="domcontentloaded", timeout=30000)
+                  if "moment" in page.title().lower() or len(page.content()) < 5000:
+                      page.wait_for_timeout(7000)
+                  return (resp.status if resp else -1), page.content()
+
+              # 1. Home & Peliculas & Search
+              st, h = goto_wait("https://repelis24.cz/")
               bc = body_clean(h)
-              out[key + "_meta"] = {"code": c, "final": fu, "len": len(h)}
-              if key == "ep":
-                  out["ep_opts"] = re.findall(r'<li[^>]*class="[^"]*dooplay_player_option[^"]*"[^>]*>.*?</li>', h, re.S)
-                  out["ep_single"] = bc[bc.find('single_left'):][:9000] if 'single_left' in bc else bc[-9000:]
-              elif key == "serie_multi":
-                  idx = bc.find('id="episodes"')
-                  if idx < 0: idx = bc.find('Temporadas')
-                  out["serie_multi_episodes"] = bc[max(0,idx-200):idx+12000] if idx>=0 else bc[-10000:]
-              elif key == "home":
-                  movies = list(dict.fromkeys(re.findall(r'https://www\.cinecalidad\.am/ver-pelicula/[^"\'\s>]+', h)))[:6]
-                  m_opts = {}
-                  for mu in movies:
-                      mc, mfu, mhdr, mh = fetch(mu)
-                      m_opts[mu] = re.findall(r'<li[^>]*class="[^"]*dooplay_player_option[^"]*"[^>]*>.*?</li>', mh, re.S)
-                  out["more_movie_opts"] = m_opts
+              out["home_meta"] = {"st": st, "len": len(h)}
+              # Capture sections/articles
+              idx = bc.find("<header")
+              out["home_nav_cards"] = bc[max(0,idx):][:6000]
+              idx2 = bc.find("<article")
+              out["home_articles"] = bc[max(0,idx2-300):idx2+6000] if idx2 >= 0 else bc[6000:12000]
 
-          # 2. Unpack vimeos.net JS packer & test m3u8
-          c, fu, hdrs, vh = fetch("https://vimeos.net/embed-d0ybu5jpxcem.html", {"Referer": "https://www.cinecalidad.am/"})
-          out["vimeos_len"] = len(vh)
-          m_pack = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", vh, re.S)
-          if m_pack:
-              p, a, c_cnt, k_str = m_pack.groups()
-              a, c_cnt = int(a), int(c_cnt)
-              k = k_str.split('|')
-              def baseN(num, b):
-                  alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                  if num == 0: return "0"
-                  res = []
-                  while num > 0:
-                      res.append(alphabet[num % b])
-                      num //= b
-                  return "".join(reversed(res))
-              d_map = {}
-              for i in range(c_cnt - 1, -1, -1):
-                  key_s = baseN(i, a)
-                  d_map[key_s] = k[i] if i < len(k) and k[i] else key_s
-              unpacked = re.sub(r'\b\w+\b', lambda m: d_map.get(m.group(0), m.group(0)), p)
-              out["vimeos_unpacked"] = unpacked[:6000]
-              m_m3u8 = re.search(r'https?://[^\s"\'\)]+\.m3u8[^\s"\'\)]*', unpacked)
-              if m_m3u8:
-                  mu = m_m3u8.group(0)
-                  mc, mfu, mhdr, mbody = fetch(mu, {"Referer": "https://vimeos.net/"})
-                  mc2, _, _, _ = fetch(mu, {})
-                  out["vimeos_m3u8_test"] = {"url": mu, "with_ref": mc, "no_ref": mc2, "body_head": mbody[:1200]}
+              st, h = goto_wait("https://repelis24.cz/peliculas/")
+              bc = body_clean(h)
+              idx2 = bc.find("<article")
+              out["peliculas_articles"] = bc[max(0,idx2-300):idx2+5000] if idx2 >= 0 else bc[:5000]
+              m_pag = re.search(r'<div class=["\']pagination.*?(?:</div>\s*</div>|</nav>)', bc, re.S)
+              out["peliculas_pag"] = m_pag.group(0)[:1500] if m_pag else bc[-3000:]
 
-          # 3. Also test videoapp.zip full HTML
-          c, fu, hdrs, vah = fetch("https://videoapp.zip/e/movie/36669", {"Referer": "https://www.cinecalidad.am/"})
-          out["videoapp_full"] = body_clean(vah)[:6000]
+              st, h = goto_wait("https://repelis24.cz/?s=spider")
+              bc = body_clean(h)
+              idx2 = bc.find("result-item")
+              if idx2 < 0: idx2 = bc.find("<article")
+              out["search_body"] = bc[max(0,idx2-300):idx2+5000] if idx2 >= 0 else bc[:5000]
+
+              # 2. Movie page + click player options & inspect network requests!
+              ajax_hits = []
+              page.on("response", lambda r: ajax_hits.append({"url": r.url, "status": r.status, "body": (r.text()[:1200] if ("ajax" in r.url or "embed" in r.url or "player" in r.url or "doo" in r.url) else "")}) if any(k in r.url for k in ("ajax", "wp-json", "embed", "player", "stream", "directyp")) else None)
+              st, h = goto_wait("https://repelis24.cz/peliculas/codigo-venganza-2/")
+              bc = body_clean(h)
+              idx_p = bc.find("dooplay_player")
+              if idx_p < 0: idx_p = bc.find("playeroptions")
+              if idx_p < 0: idx_p = bc.find("playex")
+              out["movie_player"] = bc[max(0,idx_p-400):idx_p+8000] if idx_p >= 0 else bc[2000:10000]
+              out["movie_links_dl"] = re.findall(r'<tr[^>]*id=["\']link-.*?</tr>', bc, re.S)[:8]
+              # Click first two player options if present
+              try:
+                  opts = page.locator(".dooplay_player_option")
+                  cnt = opts.count()
+                  out["movie_opts_count"] = cnt
+                  for i in range(min(cnt, 4)):
+                      opts.nth(i).click(force=True)
+                      page.wait_for_timeout(1500)
+                  out["movie_iframe_after_click"] = page.evaluate("() => Array.from(document.querySelectorAll('#dooplay_player_response iframe, .pframe iframe, iframe')).map(x => x.outerHTML)")
+              except Exception as e:
+                  out["click_err"] = str(e)
+              out["ajax_hits"] = ajax_hits
+
+              # 3. Series + Episode page
+              st, h = goto_wait("https://repelis24.cz/series/tu-amigo-y-vecino-spider-man/")
+              bc = body_clean(h)
+              idx_s = bc.find("seasons")
+              if idx_s < 0: idx_s = bc.find("episodios")
+              out["serie_seasons"] = bc[max(0,idx_s-300):idx_s+5000] if idx_s >= 0 else bc[2000:7000]
+              m_ep = re.search(r'href=["\'](https://repelis24\.cz/episodio[^"\']+|https://repelis24\.cz/episodios/[^"\']+)["\']', bc)
+              if m_ep:
+                  st, eh = goto_wait(m_ep.group(1))
+                  ebc = body_clean(eh)
+                  idx_ep = ebc.find("dooplay_player")
+                  if idx_ep < 0: idx_ep = ebc.find("playeroptions")
+                  out["ep_url"] = m_ep.group(1)
+                  out["ep_player"] = ebc[max(0,idx_ep-300):idx_ep+4000] if idx_ep >= 0 else ebc[:4000]
+
+              b.close()
 
           raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
           b64 = base64.b64encode(raw).decode("ascii")
           chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks):
-              print(f"::notice title=AM3_{idx+1}_{len(chunks)}::{ch}")
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=CZ4_{idx+1}_{len(chunks)}::{ch}")
           PY
 
-  probe_repelishd_r3:
+  probe_sh_r4:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 -m pip install -q playwright
+          playwright install chromium
+          python3 - <<'PY'
+          import base64, json, re, urllib.request, zlib
+          from playwright.sync_api import sync_playwright
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          def fetch(u, hdrs=None):
+              h = {"User-Agent": UA, "Accept": "*/*"}
+              if hdrs: h.update(hdrs)
+              req = urllib.request.Request(u, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=25) as r:
+                      return r.status, r.geturl(), r.read()
+              except Exception as e:
+                  return -1, u, str(e).encode()
+
+          def body_clean(html):
+              m = re.search(r'<body\b[^>]*>(.*)', html, re.S | re.I)
+              b = m.group(1) if m else html
+              b = re.sub(r'<style\b[^>]*>.*?</style>', '', b, flags=re.S | re.I)
+              b = re.sub(r'<svg\b[^>]*>.*?</svg>', '<svg/>', b, flags=re.S | re.I)
+              return b
+
+          out = {}
+          # 1. Full script 5 from nupload.my/watch/... & evaluate stream URL!
+          c, fu, raw_nu = fetch("https://nupload.my/watch/Kvo7MOLmn5x5XFc8g6f7ZuSC2VIOxkZDyvjq78XIQY0", {"Referer": "https://repelis24.shop/"})
+          nu_html = raw_nu.decode("utf-8", "replace")
+          scripts = re.findall(r'<script[^>]*>(.*?)</script>', nu_html, re.S | re.I)
+          out["nupload_scripts_full"] = [s for s in scripts if "vaAo" in s or "jwplayer" in s or "bYZ" in s or "fromCharCode" in s]
+          # Also check all scripts short summary
+          out["nupload_script_lens"] = [len(s) for s in scripts]
+
+          # 2. Test repelis24.shop webp image with and without Referer
+          for name, hdr in [("noref", {}), ("ref", {"Referer": "https://repelis24.shop/"})]:
+              ic, _, ib = fetch("https://repelis24.shop/cdn/p/v2/w1/zTnOGFiCOe0lX7ckuE.webp", hdr)
+              out[f"webp_{name}"] = {"code": ic, "len": len(ib)}
+
+          # 3. Playwright across repelis24.shop pages
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+              ctx = b.new_context(user_agent=UA, locale="es-ES")
+              page = ctx.new_page()
+              page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+              def go(u):
+                  resp = page.goto(u, wait_until="domcontentloaded", timeout=30000)
+                  if "moment" in page.title().lower() or len(page.content()) < 6000:
+                      page.wait_for_timeout(7000)
+                  return (resp.status if resp else -1), page.content()
+
+              for key, u in [
+                  ("peliculas", "https://repelis24.shop/peliculas/"),
+                  ("series", "https://repelis24.shop/series/"),
+                  ("busqueda", "https://repelis24.shop/busqueda/spider"),
+                  ("movie", "https://repelis24.shop/pelicula/the-accountant-2-el-contador-2/"),
+                  ("serie", "https://repelis24.shop/serie/stranger-things/"),
+              ]:
+                  st, h = go(u)
+                  bc = body_clean(h)
+                  marker_pos = -1
+                  for mk in ["<div class=\"col-12 col-sm-12 col-md-8", "<section", "movie-item", "showcase-title", "video-play"]:
+                      idx = bc.find(mk)
+                      if idx >= 0:
+                          marker_pos = idx
+                          break
+                  snip = bc[max(0,marker_pos-100):marker_pos+7500] if marker_pos >= 0 else bc[-7500:]
+                  out[key] = {"st": st, "len": len(h), "snip": snip}
+                  if key == "serie":
+                      m_t = re.search(r'href=["\'](https://repelis24\.shop/temporada/[^"\']+|/temporada/[^"\']+)["\']', h)
+                      if m_t:
+                          tu = m_t.group(1) if m_t.group(1).startswith("http") else ("https://repelis24.shop" + m_t.group(1))
+                          tst, th = go(tu)
+                          tbc = body_clean(th)
+                          idxt = tbc.find("<section")
+                          out["temporada"] = {"url": tu, "st": tst, "snip": tbc[max(0,idxt-100):idxt+6000] if idxt>=0 else tbc[-6000:]}
+                          m_e = re.search(r'href=["\'](https://repelis24\.shop/episodio/[^"\']+|/episodio/[^"\']+)["\']', th)
+                          if m_e:
+                              eu = m_e.group(1) if m_e.group(1).startswith("http") else ("https://repelis24.shop" + m_e.group(1))
+                              est, eh = go(eu)
+                              ebc = body_clean(eh)
+                              idxe = ebc.find("<section")
+                              out["episodio"] = {"url": eu, "st": est, "snip": ebc[max(0,idxe-100):idxe+6000] if idxe>=0 else ebc[-6000:]}
+              b.close()
+
+          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
+          b64 = base64.b64encode(raw).decode("ascii")
+          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=SH4_{idx+1}_{len(chunks)}::{ch}")
+          PY
+
+  probe_hd_am_my_r4:
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -170,192 +217,49 @@ jobs:
               req = urllib.request.Request(u, headers=h, data=data)
               try:
                   with urllib.request.urlopen(req, timeout=25) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
+                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
               except urllib.error.HTTPError as e:
-                  return e.code, u, dict(e.headers or {}), e.read().decode("utf-8", "replace")
+                  return e.code, u, e.read().decode("utf-8", "replace")
               except Exception as e:
-                  return -1, u, {}, str(e)
+                  return -1, u, str(e)
 
           out = {}
-          # 1. Full playlatinsrc movie script (tail) & player.js & /api/resolve test
-          c, fu, hdrs, pm = fetch("https://playlatinsrc.co/movie/tt0371746?lang=latino", {"Referer": "https://repelishd.surf/"})
-          out["pl_movie_len"] = len(pm)
-          out["pl_movie_tail"] = pm[8000:]  # second half!
-
-          c, fu, hdrs, pjs = fetch("https://playlatinsrc.co/assets/player.js?v=20261006b", {"Referer": "https://playlatinsrc.co/"})
-          out["pl_player_js"] = {"code": c, "len": len(pjs), "content": pjs[:12000]}
-
-          # Try resolving serial tt1844624/1/1
-          c, fu, hdrs, ps = fetch("https://playlatinsrc.co/serial/tt1844624/1/1", {"Referer": "https://repelishd.surf/"})
-          tok_m = re.search(r'data-resolve-token="([^"]+)"', ps)
-          ep_m = re.search(r'data-resolve-endpoint="([^"]+)"', ps)
-          if tok_m and ep_m:
-              ep_url = "https://playlatinsrc.co" + ep_m.group(1)
-              rc, rfu, rhdr, rbody = fetch(ep_url, {
-                  "Referer": "https://playlatinsrc.co/serial/tt1844624/1/1",
+          # 1. repelishd: movie /api/embed-links, unlimplay, and serie season 2 + episodio HTML + next_f
+          c, _, pm = fetch("https://playlatinsrc.co/movie/tt0371746?lang=latino", {"Referer": "https://repelishd.surf/"})
+          tok_m = re.search(r'token:\s*"([^"]+)"', pm)
+          if tok_m:
+              rc, _, rbody = fetch("https://playlatinsrc.co/api/embed-links", {
+                  "Referer": "https://playlatinsrc.co/movie/tt0371746?lang=latino",
                   "Origin": "https://playlatinsrc.co",
                   "Content-Type": "application/json",
-                  "X-Requested-With": "XMLHttpRequest",
-              }, data=json.dumps({"token": tok_m.group(1), "type": "tv", "id": "tt1844624", "season": 1, "episode": 1}).encode())
-              out["pl_serial_resolve_post"] = {"code": rc, "body": rbody[:3000]}
-              rc2, _, _, rbody2 = fetch(f"{ep_url}?token={tok_m.group(1)}", {"Referer": "https://playlatinsrc.co/serial/tt1844624/1/1"})
-              out["pl_serial_resolve_get"] = {"code": rc2, "body": rbody2[:3000]}
+              }, data=json.dumps({"type": "movie", "id": "tt0371746", "token": tok_m.group(1)}).encode())
+              out["pl_movie_embed_links"] = {"code": rc, "body": rbody[:4000]}
 
-          # 2. repelishd.surf serie page JS chunk + full __next_f search for season/episode/trailer/iframe
-          c, fu, hdrs, sh = fetch("https://repelishd.surf/ver-serie/1413-american-horror-story-online-espanol")
-          out["serie_scripts"] = re.findall(r'<script[^>]+src="([^"]+)"', sh)
-          # Look for all push([...]) scripts containing temporada or trailer or tt1844624
-          all_pushes = re.findall(r'<script>self\.__next_f\.push\((.*?)\)</script>', sh, re.S)
-          out["serie_pushes_count"] = len(all_pushes)
-          out["serie_pushes_interesting"] = [p[:3000] for p in all_pushes if any(k in p.lower() for k in ("temporada-2", "youtube", "playlatinsrc", "episodio", "season"))][:5]
+          for uu in ["https://unlimplay.com/f/embed/movie/tt0371746", "https://unlimplay.com/f/embed/tv/tt1844624/1/1"]:
+              uc, ufu, uh = fetch(uu, {"Referer": "https://playlatinsrc.co/"})
+              out["unlimplay_" + ("tv" if "/tv/" in uu else "movie")] = {"code": uc, "final": ufu, "len": len(uh), "body": re.sub(r'<style.*?</style>', '', uh, flags=re.S)[:3500]}
 
-          # Also fetch the ver-serie page chunk JS!
-          for sc in out["serie_scripts"]:
-              if "ver-serie" in sc:
-                  jc, _, _, jbody = fetch("https://repelishd.surf" + sc)
-                  out["ver_serie_js"] = {"url": sc, "code": jc, "len": len(jbody), "content": jbody[:12000]}
+          # Episode page on repelishd.surf
+          ec, _, eh = fetch("https://repelishd.surf/ver-serie/1413-american-horror-story-online-espanol/temporada-2/episodio-1")
+          pushes = re.findall(r'<script>self\.__next_f\.push\((.*?)\)</script>', eh, re.S)
+          out["hd_ep2_pushes"] = [p for p in pushes if any(k in p for k in ("stagion", "episod", "playlatin", "tt1844624"))][:4]
+          out["hd_ep2_iframes"] = re.findall(r'<iframe[^>]+>', eh)
 
-          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-          b64 = base64.b64encode(raw).decode("ascii")
-          if len(b64) > 34000:
-              for k in ["ver_serie_js", "pl_player_js", "pl_movie_tail"]:
-                  if k in out and isinstance(out[k], dict) and len(out[k].get("content","")) > 6000:
-                      out[k]["content"] = out[k]["content"][:6000]
-              raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-              b64 = base64.b64encode(raw).decode("ascii")
-          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks):
-              print(f"::notice title=HD3_{idx+1}_{len(chunks)}::{ch}")
-          PY
+          # Check pelis por ano on cinecalidad.my and bysedikamoum.com embed
+          ac, _, ah = fetch("https://www.cinecalidad.my/peliculas-por-ano/")
+          m_c = re.search(r'id=content_inside[^>]*>(.*?)id=footer', ah, re.S)
+          out["my_anos"] = m_c.group(1)[:4000] if m_c else ah[2000:6000]
 
-  probe_repelis24shop_r3:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          python3 - <<'PY'
-          import base64, http.cookiejar, json, re, time, urllib.request, zlib
+          fc, ffu, fh = fetch("https://bysedikamoum.com/e/c2ioduptr3bc", {"Referer": "https://www.cinecalidad.my/"})
+          out["my_bysedikamoum"] = {"code": fc, "final": ffu, "len": len(fh), "head": fh[:2500]}
 
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          cj = http.cookiejar.CookieJar()
-          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-
-          def fetch(u, hdrs=None):
-              h = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "es-ES,es;q=0.9"}
-              if hdrs: h.update(hdrs)
-              req = urllib.request.Request(u, headers=h)
-              try:
-                  with opener.open(req, timeout=25) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read().decode("utf-8", "replace")
-              except urllib.error.HTTPError as e:
-                  return e.code, u, dict(e.headers or {}), e.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, u, {}, str(e)
-
-          def body_clean(html):
-              m = re.search(r'<body\b[^>]*>(.*)', html, re.S | re.I)
-              b = m.group(1) if m else html
-              b = re.sub(r'<style\b[^>]*>.*?</style>', '', b, flags=re.S | re.I)
-              b = re.sub(r'<svg\b[^>]*>.*?</svg>', '<svg/>', b, flags=re.S | re.I)
-              return b
-
-          out = {}
-          # First probe nupload.my (different domain, no repelis24.shop CF!)
-          nupload = []
-          for u in [
-              "https://nupload.my/watch/Kvo7MOLmn5x5XFc8g6f7ZuSC2VIOxkZDyvjq78XIQY0",
-              "https://nupload.my/iframe/?url=https%3A%2F%2Fvoe.sx%2Fe%2Fkkrjdquwcpek",
-          ]:
-              c, fu, hdrs, h = fetch(u, {"Referer": "https://repelis24.shop/"})
-              nupload.append({
-                  "url": u, "code": c, "final": fu, "len": len(h),
-                  "iframes": re.findall(r'<iframe[^>]+>', h, re.I),
-                  "scripts": [s[:1200] for s in re.findall(r'<script[^>]*>.*?</script>', h, re.S | re.I)],
-                  "body": body_clean(h)[:5000],
-              })
-          out["nupload"] = nupload
-
-          # Next, gently spaced fetches on repelis24.shop
-          for key, u in [
-              ("home", "https://repelis24.shop/"),
-              ("busqueda", "https://repelis24.shop/busqueda/spider"),
-              ("movie", "https://repelis24.shop/pelicula/the-accountant-2-el-contador-2/"),
-              ("serie2", "https://repelis24.shop/serie/stranger-things/"),
-              ("temporada", "https://repelis24.shop/temporada/cats-eyes-1/"),
-          ]:
-              c, fu, hdrs, h = fetch(u)
-              bc = body_clean(h)
-              out[key + "_meta"] = {"code": c, "final": fu, "len": len(h), "body_len": len(bc)}
-              if c == 200:
-                  # Extract after showcase-main or main content (skipping sidebar!)
-                  for marker in ["<div class=\"col-12 col-sm-12 col-md-8", "<section", "<article", "movie-item", "showcase-title", "video-play", "temporada"]:
-                      idx = bc.find(marker)
-                      if idx >= 0:
-                          out[key + "_content"] = bc[max(0,idx-100):idx+8000]
-                          break
-                  else:
-                      out[key + "_content"] = bc[-8000:]
-                  if key == "home":
-                      imgs = re.findall(r'https?://repelis24\.shop/cdn/[^"\'\s)]+|//repelis24\.shop/cdn/[^"\'\s)]+', h)
-                      if imgs:
-                          iu = "https:" + imgs[0] if imgs[0].startswith("//") else imgs[0]
-                          for ref in [None, "https://repelis24.shop/"]:
-                              try:
-                                  req = urllib.request.Request(iu, headers={"User-Agent": UA, **({"Referer": ref} if ref else {})})
-                                  with urllib.request.urlopen(req, timeout=15) as r:
-                                      out[f"img_{'ref' if ref else 'noref'}"] = {"url": iu, "code": r.status, "ct": r.headers.get("Content-Type"), "bytes": len(r.read())}
-                              except Exception as e:
-                                  out[f"img_{'ref' if ref else 'noref'}"] = {"url": iu, "err": str(e)}
-              time.sleep(2.5)
-
-          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-          b64 = base64.b64encode(raw).decode("ascii")
-          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks):
-              print(f"::notice title=SH3_{idx+1}_{len(chunks)}::{ch}")
-          PY
-
-  probe_repelis24cz_pw:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Try Playwright headless on repelis24.cz
-        run: |
-          python3 -m pip install -q playwright
-          playwright install chromium
-          python3 - <<'PY'
-          import base64, json, re, time, zlib
-          from playwright.sync_api import sync_playwright
-
-          out = {}
-          with sync_playwright() as p:
-              b = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-              ctx = b.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", locale="es-ES")
-              page = ctx.new_page()
-              page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-              for key, url in [
-                  ("home", "https://repelis24.cz/"),
-                  ("peliculas", "https://repelis24.cz/peliculas/"),
-                  ("movie", "https://repelis24.cz/peliculas/codigo-venganza-2/"),
-                  ("serie", "https://repelis24.cz/series/tu-amigo-y-vecino-spider-man/"),
-              ]:
-                  try:
-                      resp = page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                      title = page.title()
-                      if "moment" in title.lower() or len(page.content()) < 5000:
-                          page.wait_for_timeout(7000)
-                      html = page.content()
-                      out[key] = {
-                          "status": resp.status if resp else -1,
-                          "title": page.title(),
-                          "len": len(html),
-                          "sample": re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.S)[:7000]
-                      }
-                  except Exception as e:
-                      out[key] = {"err": str(e)}
-              b.close()
+          # cinecalidad.am: test ?download= & check a .sns movie if any
+          dc, dfu, dh = fetch("https://www.cinecalidad.am/ver-pelicula/007-otro-dia-para-morir/?download=OU9wNno3VHVmZ0EyeGlpS1VUNmJXUT09")
+          out["am_dl"] = {"code": dc, "final": dfu, "len": len(dh), "head": dh[:1500]}
 
           raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
           b64 = base64.b64encode(raw).decode("ascii")
           chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
           for idx, ch in enumerate(chunks[:9]):
-              print(f"::notice title=CZ3_{idx+1}_{len(chunks)}::{ch}")
+              print(f"::notice title=HAM4_{idx+1}_{len(chunks)}::{ch}")
           PY
