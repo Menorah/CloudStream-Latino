@@ -208,7 +208,11 @@ class RePelis24ShopBisProvider : MainAPI() {
         }
         options.amap { opt ->
             runCatching {
-                loadExtractor(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                if (opt.url.contains("nupload.my", ignoreCase = true)) {
+                    NuploadMyExtractor().getUrl(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                } else {
+                    loadExtractor(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                }
             }
         }
         return emitted.get()

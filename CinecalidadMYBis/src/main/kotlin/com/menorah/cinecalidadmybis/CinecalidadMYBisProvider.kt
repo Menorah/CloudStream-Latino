@@ -127,7 +127,12 @@ class CinecalidadMYBisProvider : MainAPI() {
                     wrappedCallback(link)
                 }
                 val handled = runCatching {
-                    loadExtractor(embedUrl, targetUrl, subtitleCallback, localCallback)
+                    if (embedUrl.contains("bysedikamoum.com", ignoreCase = true)) {
+                        CinecalidadMYBysedikamoumExtractor().getUrl(embedUrl, targetUrl, subtitleCallback, localCallback)
+                        foundHere.get()
+                    } else {
+                        loadExtractor(embedUrl, targetUrl, subtitleCallback, localCallback)
+                    }
                 }.getOrDefault(false)
                 if (handled || foundHere.get()) break
             }

@@ -245,7 +245,18 @@ class RePelisHDBisProvider : MainAPI() {
                 )
             } else {
                 runCatching {
-                    loadExtractor(src.url, playlatinUrl, subtitleCallback, wrappedCallback)
+                    when {
+                        src.url.contains("dr0pstream.com", ignoreCase = true) ->
+                            RePelisHDDr0pstreamExtractor().getUrl(src.url, playlatinUrl, subtitleCallback, wrappedCallback)
+                        src.url.contains("dropload.io", ignoreCase = true) ->
+                            RePelisHDDroploadIoExtractor().getUrl(src.url, playlatinUrl, subtitleCallback, wrappedCallback)
+                        src.url.contains("superplayer.ws", ignoreCase = true) ->
+                            RePelisHDSuperplayerExtractor().getUrl(src.url, playlatinUrl, subtitleCallback, wrappedCallback)
+                        src.url.contains("supervideo.tv", ignoreCase = true) ->
+                            RePelisHDSupervideoExtractor().getUrl(src.url, playlatinUrl, subtitleCallback, wrappedCallback)
+                        else ->
+                            loadExtractor(src.url, playlatinUrl, subtitleCallback, wrappedCallback)
+                    }
                 }
             }
         }

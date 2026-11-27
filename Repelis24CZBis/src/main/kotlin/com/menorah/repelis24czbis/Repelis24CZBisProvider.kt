@@ -186,7 +186,11 @@ class Repelis24CZBisProvider : MainAPI() {
         }
         embedUrls.amap { embed ->
             runCatching {
-                loadExtractor(embed, refererUrl, subtitleCallback, wrappedCallback)
+                if (embed.contains("vimeos.net", ignoreCase = true)) {
+                    Repelis24CZVimeosExtractor().getUrl(embed, refererUrl, subtitleCallback, wrappedCallback)
+                } else {
+                    loadExtractor(embed, refererUrl, subtitleCallback, wrappedCallback)
+                }
             }
         }
         return emitted.get()

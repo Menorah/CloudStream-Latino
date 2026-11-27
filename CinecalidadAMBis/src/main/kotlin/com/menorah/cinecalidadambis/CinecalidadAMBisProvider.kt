@@ -150,7 +150,14 @@ class CinecalidadAMBisProvider : MainAPI() {
         }
         options.amap { opt ->
             runCatching {
-                loadExtractor(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                when {
+                    opt.url.contains("vimeos.net", ignoreCase = true) ->
+                        CinecalidadAMVimeosExtractor().getUrl(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                    opt.url.contains("videoapp.zip", ignoreCase = true) ->
+                        CinecalidadAMVideoappExtractor().getUrl(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                    else ->
+                        loadExtractor(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                }
             }
         }
         return emitted.get()

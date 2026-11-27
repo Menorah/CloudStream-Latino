@@ -150,6 +150,10 @@ class CinecalidadAMVideoappExtractor : ExtractorApi() {
         val res = app.get(url, headers = headers, timeout = 20L)
         if (!res.isSuccessful) return
         val target = iframeRegex.find(res.text)?.groupValues?.getOrNull(1) ?: return
-        loadExtractor(target, url, subtitleCallback, callback)
+        if (target.contains("vimeos.net", ignoreCase = true)) {
+            CinecalidadAMVimeosExtractor().getUrl(target, url, subtitleCallback, callback)
+        } else {
+            loadExtractor(target, url, subtitleCallback, callback)
+        }
     }
 }
