@@ -11,10 +11,19 @@ import org.junit.Test
 class Repelis24CZBisMarkupTest {
 
     @Test
-    fun detectsChallengePagesAndParsesCardsAndPagination() {
+    fun detectsChallengePagesAndParsesCardsAndPaginationWithQuery() {
         assertTrue(Repelis24CZBisMarkup.isChallengePage(200, "<html><title>One moment, please...</title></html>"))
         assertTrue(Repelis24CZBisMarkup.isChallengePage(403, "Forbidden"))
         assertFalse(Repelis24CZBisMarkup.isChallengePage(200, "<html><body><article class=\"dpu-archive-item\"></article></body></html>"))
+
+        assertEquals(
+            "https://repelis24.cz/tendencias/page/2/?get=movies",
+            Repelis24CZBisMarkup.buildArchivePageUrl("https://repelis24.cz/tendencias/?get=movies", 2),
+        )
+        assertEquals(
+            "https://repelis24.cz/ratings/page/3/?get=tv",
+            Repelis24CZBisMarkup.buildArchivePageUrl("https://repelis24.cz/ratings/?get=tv", 3),
+        )
 
         val html = """
             <html><body>
@@ -23,6 +32,10 @@ class Repelis24CZBisMarkupTest {
                   <a href="https://repelis24.cz/peliculas/spider-man-un-nuevo-dia/" class="dpu-archive-card" title="Spider-Man: Un nuevo día">
                     <div class="dpu-archive-thumb">
                       <img src="https://image.tmdb.org/t/p/w500/fBFjaDWfNslvrs6bJjknmG27wOS.jpg" alt="Spider-Man: Un nuevo día" class="dpu-archive-img">
+                      <span class="dpu-card-languages">
+                        <img src="https://repelis24.cz/wp-content/themes/RePelis24h/assets/flags/mx.png" alt="Español México" title="Español México">
+                        <img src="https://repelis24.cz/wp-content/themes/RePelis24h/assets/flags/en.png" alt="Inglés" title="Inglés">
+                      </span>
                     </div>
                     <div class="dpu-archive-meta-box">
                       <h3 class="dpu-archive-c-title">Spider-Man: Un nuevo día</h3>
@@ -38,7 +51,7 @@ class Repelis24CZBisMarkupTest {
                 </article>
               </div>
               <div class="dpu-pagination-ultra"><ul class="page-numbers">
-                <li><a class="next page-numbers" href="https://repelis24.cz/peliculas/page/2/">»</a></li>
+                <li><a class="next page-numbers" href="https://repelis24.cz/tendencias/page/2/?get=movies">»</a></li>
               </ul></div>
             </body></html>
         """.trimIndent()
@@ -46,6 +59,7 @@ class Repelis24CZBisMarkupTest {
         val cards = Repelis24CZBisMarkup.parseCards(doc)
         assertEquals(2, cards.size)
         assertEquals("Spider-Man: Un nuevo día", cards[0].title)
+        assertEquals(listOf("Latino", "Inglés"), cards[0].languages)
         assertFalse(cards[0].isSeries)
         assertEquals(2026, cards[0].year)
         assertEquals(8.0, cards[0].rating10!!, 0.01)
@@ -54,63 +68,104 @@ class Repelis24CZBisMarkupTest {
     }
 
     @Test
-    fun parsesMoviePlayerOptionsSeriesEpisodesAndAjaxResponses() {
+    fun parsesRealMartySupremoHeroAndSuperMarioDropdownDataLang() {
         val movieHtml = """
-            <html><body>
-              <h1>Código: Venganza</h1>
-              <img src="https://image.tmdb.org/t/p/w185/6PwLfI2qpRZIIwN63XnNMYAqj87.jpg">
-              <div>2026 95 Min. IMDb 5,7/10</div>
-              <a href="https://repelis24.cz/genero/accion/" rel="tag">Acción</a>
-              <div class="dpu-hero-synopsis-short">Cole Reed descubre una conspiración.</div>
+            <html>
+            <head>
+              <meta property="og:description" content="Ambientada en el vibrante mundo del tenis de mesa de los años 50, Marty Supreme sigue a Marty Mauser en busca del respeto. […]">
+            </head>
+            <body>
+              <div class="dpu-global-bg" style="background-image:url(https://image.tmdb.org/t/p/original/YEjuoz6.jpg);"></div>
+              <div class="dpu-hero-ultra"><div class="dpu-hero-inner">
+                <div class="dpu-hero-poster-side"><div class="dpu-poster-frame"><img alt="Marty Supremo" itemprop="image" src="https://image.tmdb.org/t/p/w185/guRmwb1r337m2tKBH9KcE3vOpGE.jpg"></div></div>
+                <div class="dpu-hero-content">
+                  <h1 class="dpu-hero-title" itemprop="name">Marty Supremo</h1>
+                  <div class="dpu-hero-meta-grid">
+                    <div class="meta-pill">2025</div>
+                    <div class="meta-pill">150 Min.</div>
+                    <div class="meta-pill rating-pill">TMDb 7,4/10 <span>(1.593 votos)</span></div>
+                  </div>
+                  <div class="dpu-hero-genres"><a href="https://repelis24.cz/genero/drama/" rel="tag">Drama</a><a href="https://repelis24.cz/genero/suspense/" rel="tag">Suspense</a></div>
+                  <div class="dpu-hero-synopsis-short">Ambientada en el vibrante mundo del tenis de mesa de los años 50, Marty Supreme sigue a…</div>
+                </div>
+              </div></div>
               <div id="playeroptions">
-                <div class="dpu-nav-item trailer-item"><div id="player-option-trailer" class="dooplay_player_option" data-post="452707" data-type="movie" data-nume="trailer">Trailer</div></div>
+                <div class="dpu-nav-item trailer-item"><div id="player-option-trailer" class="dooplay_player_option" data-post="419022" data-type="movie" data-nume="trailer">Trailer</div></div>
                 <div class="dpu-nav-item dpu-dropdown" data-lang="mx">
+                  <button class="dpu-dropdown-trigger"><img class="dpu-mini-flag" src="https://repelis24.cz/flags/mx.png"><span class="dpu-trigger-label">1. Vimeos</span></button>
                   <div class="dpu-dropdown-content"><ul class="dpu_ajax_mode">
-                    <li class="dooplay_player_option" data-type="movie" data-post="452707" data-nume="4"><span class="dpu-status-dot"></span><span>4.</span><span>Streamwish</span></li>
-                    <li class="dooplay_player_option" data-type="movie" data-post="452707" data-nume="5"><span class="dpu-status-dot"></span><span>5.</span><span>Voe</span></li>
+                    <li class="dooplay_player_option" data-type="movie" data-post="419022" data-nume="1"><span class="dpu-server-index">1.</span><span>Vimeos</span></li>
+                    <li class="dooplay_player_option" data-type="movie" data-post="419022" data-nume="4"><span class="dpu-server-index">4.</span><span>Streamwish</span></li>
+                  </ul></div>
+                </div>
+                <div class="dpu-nav-item dpu-dropdown" data-lang="es">
+                  <button class="dpu-dropdown-trigger"><img class="dpu-mini-flag" src="https://repelis24.cz/flags/es.png"><span class="dpu-trigger-label">Español</span></button>
+                  <div class="dpu-dropdown-content"><ul class="dpu_ajax_mode">
+                    <li class="dooplay_player_option" data-type="movie" data-post="419022" data-nume="6"><span class="dpu-server-index">6.</span><span>Vidhide</span></li>
+                  </ul></div>
+                </div>
+                <div class="dpu-nav-item dpu-dropdown" data-lang="en">
+                  <button class="dpu-dropdown-trigger"><img class="dpu-mini-flag" src="https://repelis24.cz/flags/en.png"><span class="dpu-trigger-label">Inglés</span></button>
+                  <div class="dpu-dropdown-content"><ul class="dpu_ajax_mode">
+                    <li class="dooplay_player_option" data-type="movie" data-post="419022" data-nume="8"><span class="dpu-server-index">8.</span><span>Filemoon</span></li>
                   </ul></div>
                 </div>
               </div>
-              <div id="fakeplayer"><img class="cover" src="https://image.tmdb.org/t/p/original/bg.jpg"></div>
               <div id="source-player-trailer"><iframe src="https://www.youtube.com/embed/j10XcWybslg"></iframe></div>
-              <div id="cast"><div class="person"><div class="name"><a>Jason Statham</a></div></div></div>
+              <div id="cast"><div class="person"><div class="name"><a>Timothée Chalamet</a></div></div></div>
+              <div id="dpu_related_ultra_grid">
+                <article class="dpu-related-card"><a href="https://repelis24.cz/peliculas/la-fiera/"><div class="dpu-rel-img"><img src="https://image.tmdb.org/t/p/w342/fiera.jpg" alt="La fiera"></div><div class="dpu-rel-details"><h3 class="dpu-rel-title">La fiera</h3><div class="dpu-rel-meta"><span class="dpu-rel-year">2026</span><span class="dpu-rel-rating">★ 6.1</span></div></div></a></article>
+              </div>
             </body></html>
         """.trimIndent()
-        val mDoc = Jsoup.parse(movieHtml, "https://repelis24.cz/peliculas/codigo-venganza-2/")
-        val detail = Repelis24CZBisMarkup.parseDetail(mDoc, "https://repelis24.cz/peliculas/codigo-venganza-2/")!!
-        assertEquals("Código: Venganza", detail.title)
-        assertEquals("https://image.tmdb.org/t/p/w500/6PwLfI2qpRZIIwN63XnNMYAqj87.jpg", detail.posterUrl)
-        assertEquals(95, detail.durationMinutes)
-        assertEquals(5.7, detail.rating10!!, 0.01)
-        assertEquals(listOf("Jason Statham"), detail.actors)
-        assertEquals("https://www.youtube.com/embed/j10XcWybslg", detail.trailerUrl)
+        val mDoc = Jsoup.parse(movieHtml, "https://repelis24.cz/peliculas/marty-supremo/")
+        val detail = Repelis24CZBisMarkup.parseDetail(mDoc, "https://repelis24.cz/peliculas/marty-supremo/")!!
+        assertEquals("Marty Supremo", detail.title)
+        assertEquals("https://image.tmdb.org/t/p/w500/guRmwb1r337m2tKBH9KcE3vOpGE.jpg", detail.posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/original/YEjuoz6.jpg", detail.backgroundUrl)
+        assertEquals(2025, detail.year)
+        assertEquals(150, detail.durationMinutes)
+        assertEquals(7.4, detail.rating10!!, 0.01)
+        assertTrue(detail.plot!!.endsWith("respeto."))
+        assertEquals(listOf("Timothée Chalamet"), detail.actors)
+        assertEquals(listOf("Drama", "Suspense"), detail.genres)
+        assertEquals(1, detail.recommendations.size)
+        assertEquals("La fiera", detail.recommendations[0].title)
+        assertEquals(6.1, detail.recommendations[0].rating10!!, 0.01)
 
         val opts = Repelis24CZBisMarkup.parsePlayerOptions(mDoc)
-        assertEquals(2, opts.size)
-        assertEquals("4", opts[0].nume)
-        assertEquals("Streamwish", opts[0].serverName)
-        assertEquals("mx", opts[0].language)
+        assertEquals(4, opts.size)
+        assertEquals("Latino", opts[0].language)
+        assertEquals("Vimeos", opts[0].serverName)
+        assertEquals("Latino", opts[1].language)
+        assertEquals("Streamwish", opts[1].serverName)
+        assertEquals("Castellano", opts[2].language)
+        assertEquals("Vidhide", opts[2].serverName)
+        assertEquals("Inglés", opts[3].language)
+        assertEquals("Filemoon", opts[3].serverName)
 
         val serieHtml = """
             <html><body>
-              <h1>Tu amigo y vecino Spider-Man</h1>
+              <h1>The Boys</h1>
               <div id="dpu-season-1" class="dpu-season-pane">
-                <div class="dpu-episode-card" data-episode="87269" data-season-number="1" data-episode-number="1">
+                <div class="dpu-episode-card" data-episode="35293" data-season-number="1" data-episode-number="1" aria-label="Reproducir temporada 1, episodio 1: El Nombre del Juego">
                   <div class="dpu-ep-card-image"><img src="https://image.tmdb.org/t/p/w300/ep1.jpg"></div>
-                  <div class="dpu-ep-card-content"><h3 class="dpu-ep-title">Fantasía asombrosa</h3></div>
+                  <div class="dpu-ep-card-content"><h3 class="dpu-ep-title">El Nombre del Juego</h3><span class="dpu-ep-date">Jul. 25, 2019</span></div>
                 </div>
               </div>
             </body></html>
         """.trimIndent()
         val sDetail = Repelis24CZBisMarkup.parseDetail(
-            Jsoup.parse(serieHtml, "https://repelis24.cz/series/tu-amigo-y-vecino-spider-man/"),
-            "https://repelis24.cz/series/tu-amigo-y-vecino-spider-man/",
+            Jsoup.parse(serieHtml, "https://repelis24.cz/series/the-boys/"),
+            "https://repelis24.cz/series/the-boys/",
         )!!
         assertTrue(sDetail.isSeries)
         assertEquals(1, sDetail.episodes.size)
-        assertEquals("87269", sDetail.episodes[0].episodeId)
-        val encodedEp = Repelis24CZBisMarkup.encodeEpisodeData("87269", sDetail.url)
-        assertEquals("87269" to sDetail.url, Repelis24CZBisMarkup.decodeEpisodeData(encodedEp))
+        assertEquals("35293", sDetail.episodes[0].episodeId)
+        assertEquals("El Nombre del Juego", sDetail.episodes[0].title)
+        assertEquals("Jul. 25, 2019", sDetail.episodes[0].airDate)
+        val encodedEp = Repelis24CZBisMarkup.encodeEpisodeData("35293", sDetail.url)
+        assertEquals("35293" to sDetail.url, Repelis24CZBisMarkup.decodeEpisodeData(encodedEp))
 
         assertEquals(
             "https://streamwish.to/e/55812cgpja3d",

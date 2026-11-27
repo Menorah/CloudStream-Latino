@@ -56,7 +56,12 @@ internal object PlayLatinSrcParser {
     )
     private val RESOLVE_TOKEN_REGEX = Regex("""data-resolve-token=["']([^"']+)["']""")
     private val RESOLVE_ENDPOINT_REGEX = Regex("""data-resolve-endpoint=["']([^"']+)["']""")
+    private val ALT_URL_REGEX = Regex("""(?:data-alt-url=|const\s+ALT_URL\s*=\s*)["'](https?://[^"']+)["']""")
     private val SERIAL_PATH_REGEX = Regex("""/serial/(tt\d+)/(\d+)/(\d+)""")
+    private val MOVIE_PATH_REGEX = Regex("""/movie/(tt\d+)""")
+    private val SERIAL_QUERY_REGEX = Regex("""/serial/(tt\d+)""")
+    private val QUERY_SEASON_REGEX = Regex("""[?&]season=(\d+)""")
+    private val QUERY_EPISODE_REGEX = Regex("""[?&]episode=(\d+)""")
 
     data class ResolveRequestSpec(
         val endpoint: String,
@@ -75,32 +80,78 @@ internal object PlayLatinSrcParser {
         val captions: List<Pair<String, String>>,
     )
 
-    fun extractMovieRequest(html: String): ResolveRequestSpec? {
-        val m = MOVIE_FETCH_REGEX.find(html) ?: return null
+    fun extractAltUrl(html: String): String? =
+        ALT_URL_REGEX.find(html)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }
+
+    fun extractMovieRequest(html: String, movieUrl: String = ""): ResolveRequestSpec? {
+        MOVIE_FETCH_REGEX.find(html)?.let { m ->
+            val payload = mapper.writeValueAsString(
+                mapOf(
+                    "type" to "movie",
+                    "id" to m.groupValues[2],
+                    "token" to m.groupValues[3],
+                ),
+            )
+            return ResolveRequestSpec(endpoint = m.groupValues[1], payloadJson = payload)
+        }
+        val token = RESOLVE_TOKEN_REGEX.find(html)?.groupValues?.getOrNull(1) ?: return null
+        val endpoint = RESOLVE_ENDPOINT_REGEX.find(html)?.groupValues?.getOrNull(1) ?: "/api/resolve"
+        val movieId = MOVIE_PATH_REGEX.find(movieUrl)?.groupValues?.getOrNull(1)
+            ?: Regex("""\b(tt\d{5,10})\b""").find(html)?.groupValues?.getOrNull(1)
+            ?: return null
         val payload = mapper.writeValueAsString(
             mapOf(
+                "token" to token,
                 "type" to "movie",
-                "id" to m.groupValues[2],
-                "token" to m.groupValues[3],
+                "id" to movieId,
             ),
         )
-        return ResolveRequestSpec(endpoint = m.groupValues[1], payloadJson = payload)
+        return ResolveRequestSpec(endpoint = endpoint, payloadJson = payload)
     }
 
     fun extractSerialRequest(html: String, serialUrl: String): ResolveRequestSpec? {
         val token = RESOLVE_TOKEN_REGEX.find(html)?.groupValues?.getOrNull(1) ?: return null
         val endpoint = RESOLVE_ENDPOINT_REGEX.find(html)?.groupValues?.getOrNull(1) ?: "/api/resolve"
-        val pm = SERIAL_PATH_REGEX.find(serialUrl) ?: return null
+        val pm = SERIAL_PATH_REGEX.find(serialUrl)
+        val (imdbId, seasonNum, epNum) = if (pm != null) {
+            Triple(pm.groupValues[1], pm.groupValues[2].toInt(), pm.groupValues[3].toInt())
+        } else {
+            val sm = SERIAL_QUERY_REGEX.find(serialUrl) ?: return null
+            val s = QUERY_SEASON_REGEX.find(serialUrl)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+            val e = QUERY_EPISODE_REGEX.find(serialUrl)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+            Triple(sm.groupValues[1], s, e)
+        }
         val payload = mapper.writeValueAsString(
             mapOf(
                 "token" to token,
                 "type" to "tv",
-                "id" to pm.groupValues[1],
-                "season" to pm.groupValues[2].toInt(),
-                "episode" to pm.groupValues[3].toInt(),
+                "id" to imdbId,
+                "season" to seasonNum,
+                "episode" to epNum,
             ),
         )
         return ResolveRequestSpec(endpoint = endpoint, payloadJson = payload)
+    }
+
+    fun extractResolveSpecs(html: String, playerUrl: String): List<ResolveRequestSpec> {
+        val specs = mutableListOf<ResolveRequestSpec>()
+        val isSerial = playerUrl.contains("/serial/")
+        if (isSerial) {
+            extractSerialRequest(html, playerUrl)?.let { specs += it }
+        } else {
+            extractMovieRequest(html, playerUrl)?.let { specs += it }
+            // Also include legacy /api/embed-links if both appear
+            MOVIE_FETCH_REGEX.find(html)?.let { m ->
+                val legacyPayload = mapper.writeValueAsString(
+                    mapOf("type" to "movie", "id" to m.groupValues[2], "token" to m.groupValues[3]),
+                )
+                val legacySpec = ResolveRequestSpec(m.groupValues[1], legacyPayload)
+                if (specs.none { it.endpoint == legacySpec.endpoint && it.payloadJson == legacySpec.payloadJson }) {
+                    specs += legacySpec
+                }
+            }
+        }
+        return specs
     }
 
     fun parseApiResponse(jsonBody: String): ResolvedMedia {
@@ -135,6 +186,19 @@ internal object PlayLatinSrcParser {
         }
         return ResolvedMedia(sources, captions)
     }
+
+    fun normalizeVersionLabel(version: String?, fallbackUrl: String = ""): String {
+        val v = version?.trim()?.lowercase().orEmpty()
+        return when {
+            v.contains("latino") || v == "lat" -> "Latino"
+            v.contains("castellano") || v == "cas" || v == "esp" || v == "español" -> "Castellano"
+            v.contains("subtitul") || v == "sub" || v.contains("vose") -> "Subtitulado"
+            v.contains("ingl") || v == "eng" -> "Inglés"
+            fallbackUrl.contains("lang=castellano", ignoreCase = true) -> "Castellano"
+            fallbackUrl.contains("lang=subtitulado", ignoreCase = true) -> "Subtitulado"
+            else -> "Latino"
+        }
+    }
 }
 
 internal object PackedHlsParser {
@@ -158,10 +222,14 @@ internal object PackedHlsParser {
         for (m in TRACK_OBJ_REGEX.findAll(unpacked)) {
             val block = m.groupValues[1]
             val f = FILE_REGEX.find(block)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-            if (f.isEmpty() || f.contains("empty.srt", ignoreCase = true)) continue
+            if (f.isEmpty() ||
+                f.contains("empty.srt", ignoreCase = true) ||
+                f.contains("_search.vtt", ignoreCase = true)
+            ) continue
+            val lbl = LABEL_REGEX.find(block)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            if (lbl.contains("search subtitle", ignoreCase = true)) continue
             val abs = runCatching { URI(baseUrl).resolve(f).toString() }.getOrElse { f }
-            val lbl = LABEL_REGEX.find(block)?.groupValues?.getOrNull(1)?.trim().orEmpty().ifEmpty { "Español" }
-            subs += lbl to abs
+            subs += lbl.ifEmpty { "Español" } to abs
         }
         return Result(m3u8s, mp4s, subs)
     }

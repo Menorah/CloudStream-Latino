@@ -39,6 +39,7 @@ data class RePelis24ShopDetail(
     val year: Int?,
     val durationMinutes: Int?,
     val genres: List<String>,
+    val actors: List<String>,
     val trailerUrl: String?,
     val seasonLinks: List<RePelis24ShopSeasonLink>,
     val episodeLinks: List<RePelis24ShopEpisodeLink>,
@@ -48,6 +49,8 @@ data class RePelis24ShopDetail(
 data class RePelis24ShopServerOption(
     val label: String,
     val url: String,
+    val language: String = "Latino",
+    val qualityLabel: String? = null,
 )
 
 object RePelis24ShopBisMarkup {
@@ -68,6 +71,7 @@ object RePelis24ShopBisMarkup {
     private val EP_SE_REGEX = Regex("""-(\d+)x(\d+)/?$""", RegexOption.IGNORE_CASE)
     private val EP_TEXT_SE_REGEX = Regex("""(\d+)x(\d+)""")
     private val EP_NUM_TEXT_REGEX = Regex("""Episodio\s+(\d+)""", RegexOption.IGNORE_CASE)
+    private val CSS_BG_URL_REGEX = Regex("""url\(\s*['"]?([^'")\s]+)['"]?\s*\)""", RegexOption.IGNORE_CASE)
 
     fun decodeBase64Utf8(input: String): String {
         val cleaned = input.trim().replace("\r", "").replace("\n", "").trimEnd('=')
@@ -113,6 +117,17 @@ object RePelis24ShopBisMarkup {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
         val root = mainUrl.trimEnd('/')
         return if (page <= 1) "$root/busqueda/$encoded" else "$root/busqueda/$encoded/page/$page"
+    }
+
+    fun normalizeLanguage(raw: String?): String {
+        val lowered = raw?.lowercase()?.trim().orEmpty()
+        return when {
+            lowered.contains("latino") || lowered.endsWith("/lat.png") -> "Latino"
+            lowered.contains("castellano") || lowered.endsWith("/cas.png") || lowered == "español" || lowered == "espanol" -> "Castellano"
+            lowered.contains("subtitul") || lowered.endsWith("/sub.png") || lowered.contains("vose") -> "Subtitulado"
+            lowered.contains("ingl") || lowered.endsWith("/en.png") -> "Inglés"
+            else -> "Latino"
+        }
     }
 
     fun parseCards(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<RePelis24ShopCard> {
@@ -162,8 +177,9 @@ object RePelis24ShopBisMarkup {
 
     private fun cleanPageTitle(raw: String): String {
         var t = raw.trim()
-        t = t.replace(Regex("""\s*-\s*Ver\s+Completa.*$""", RegexOption.IGNORE_CASE), "")
+        t = t.replace(Regex("""\s*-\s*Ver\s+(?:Completa|Episodio|Cap[ií]tulo).*$""", RegexOption.IGNORE_CASE), "")
         t = t.replace(Regex("""\s*\|\s*RePelis24.*$""", RegexOption.IGNORE_CASE), "")
+        t = t.replace(Regex("""^(?:Ver\s+)?(?:Pel[ií]cula|Serie)\s+""", RegexOption.IGNORE_CASE), "")
         t = t.replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
         t = t.replace(Regex("""\s+es\s+una\s+(?:pel[ií]cula|serie).*$""", RegexOption.IGNORE_CASE), "")
         return t.trim()
@@ -177,10 +193,27 @@ object RePelis24ShopBisMarkup {
             if (b64.isEmpty()) continue
             val decoded = decodeBase64Utf8(b64).trim()
             if (!decoded.startsWith("http://") && !decoded.startsWith("https://")) continue
-            if (!seen.add(decoded)) continue
+
             val label = li.select("span").firstOrNull()?.text()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: li.text().trim().ifEmpty { "Servidor" }
-            out += RePelis24ShopServerOption(label = label, url = decoded)
+
+            val tabItem: Element? = li.parents().firstOrNull { it.hasClass("tab-video-item") }
+            val tabName = tabItem?.selectFirst(".tab-item-name")?.ownText()?.trim()
+            val tabImg = tabItem?.selectFirst("img.tab-item-image")
+            val langCandidate = tabName?.takeIf { it.isNotEmpty() }
+                ?: tabImg?.attr("alt")?.takeIf { it.isNotEmpty() }
+                ?: tabImg?.attr("src")?.takeIf { it.isNotEmpty() }
+                ?: label
+            val language = normalizeLanguage(langCandidate)
+            val quality = tabItem?.selectFirst(".tab-item-name div")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+
+            if (!seen.add("$language|$decoded")) continue
+            out += RePelis24ShopServerOption(
+                label = label,
+                url = decoded,
+                language = language,
+                qualityLabel = quality,
+            )
         }
         return out
     }
@@ -215,9 +248,10 @@ object RePelis24ShopBisMarkup {
                 ?: (idx + 1)
 
             val epPoster = resolveUrl(mainUrl, a.selectFirst("img")?.attr("src"))
-            val epName = "Episodio $eNum"
+            val epTitle = a.selectFirst("span[itemprop=name]")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: "Episodio $eNum"
             out += RePelis24ShopEpisodeLink(
-                title = epName,
+                title = epTitle,
                 url = href,
                 season = sNum,
                 episode = eNum,
@@ -232,7 +266,7 @@ object RePelis24ShopBisMarkup {
         val isSeries = resolvedUrl.contains("/serie/") || resolvedUrl.contains("/temporada/")
 
         val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content")?.let(::cleanPageTitle)
-        val h1Text = doc.selectFirst("h1")?.text()?.let(::cleanPageTitle)
+        val h1Text = doc.selectFirst("h1.title span[itemprop=name], h1.title, h1")?.text()?.let(::cleanPageTitle)
         val headingDesc = doc.select("h2").firstOrNull {
             it.text().contains("es una pelicula", ignoreCase = true) ||
                 it.text().contains("es una película", ignoreCase = true) ||
@@ -244,40 +278,55 @@ object RePelis24ShopBisMarkup {
             ?: headingTitle?.takeIf { it.isNotEmpty() }
             ?: return null
 
-        val posterEl = doc.select("img[src*='/cdn/p/']").firstOrNull()
+        val posterEl = doc.selectFirst("article.backdrop-info figure.poster img")
+            ?: doc.select("img[src*='/cdn/p/']").firstOrNull()
             ?: doc.selectFirst("img.poster")
         val posterUrl = resolveUrl(mainUrl, posterEl?.attr("src"))
+
+        val bgStyleUrl = (doc.selectFirst("div.backdrop-image[style], div.video-play[style]")?.attr("style").orEmpty()).let { st ->
+            CSS_BG_URL_REGEX.findAll(st).mapNotNull { it.groupValues.getOrNull(1) }.lastOrNull()
+        }
         val bgUrl = resolveUrl(
             mainUrl,
             doc.selectFirst("[data-backdrop]")?.attr("data-backdrop")
-                ?: doc.selectFirst("img[src*='/cdn/b/']")?.attr("src"),
+                ?: doc.selectFirst("img[src*='/cdn/b/']")?.attr("src")
+                ?: bgStyleUrl,
         )
 
         val nextSibling: Element? = headingDesc?.parent()?.children()?.let { kids ->
             val idx = kids.indexOf(headingDesc)
             if (idx >= 0 && idx + 1 < kids.size) kids[idx + 1] else null
         }
-        val plot = nextSibling?.takeIf { it.tagName() == "p" }?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        val plot = doc.selectFirst("div.description[itemprop=description] p, div.description p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: nextSibling?.takeIf { it.tagName() == "p" }?.text()?.trim()?.takeIf { it.isNotEmpty() }
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
 
+        val metaDurationText = doc.selectFirst("article.backdrop-info span[itemprop=duration]")?.text().orEmpty()
+        val metaYearText = doc.selectFirst("article.backdrop-info span[itemprop=datePublished]")?.text().orEmpty()
         val headingParent: Element? = headingDesc?.parent()
-        val topBlockText = headingParent?.text().orEmpty() + " " + doc.select(".movie-info, .info, .details").text()
-        val year = YEAR_REGEX.find(topBlockText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val duration = DURATION_HM_REGEX.find(topBlockText)?.let { m ->
+        val topBlockText = metaDurationText + " " + metaYearText + " " + headingParent?.text().orEmpty() + " " + doc.select(".movie-info, .info, .details").text()
+        val year = YEAR_REGEX.find(metaYearText.ifEmpty { topBlockText })?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val duration = DURATION_HM_REGEX.find(metaDurationText.ifEmpty { topBlockText })?.let { m ->
             val h = m.groupValues[1].toIntOrNull() ?: 0
             val min = m.groupValues.getOrNull(2)?.toIntOrNull() ?: 0
             h * 60 + min
-        } ?: DURATION_M_REGEX.find(topBlockText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        } ?: DURATION_M_REGEX.find(metaDurationText.ifEmpty { topBlockText })?.groupValues?.getOrNull(1)?.toIntOrNull()
 
         val excludedContainers = setOf("nav", "header", "aside")
         val genres = doc.select("a[href*=/genero/]").filter { a ->
             a.parents().none { p -> p.tagName() in excludedContainers || p.hasClass("showcase-sidebar") }
-        }.map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
+        }.map { it.text().trim().trimEnd(',').trim() }
+            .filter { it.isNotEmpty() && !it.equals("Series", ignoreCase = true) }
+            .distinct()
+
+        val actors = doc.select("ul.info-list a[href*=/buscar/]")
+            .map { it.text().trim().trimEnd(',').trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
 
         val seasonLinks = if (isSeries) parseSeasonLinks(doc, mainUrl) else emptyList()
         val episodeLinks = if (isSeries) parseEpisodeLinks(doc, mainUrl) else emptyList()
 
-        // Recommendations sit inside .movie-item cards or a[href*=/pelicula/] under "Sugerencias"
         val recs = parseCards(doc, mainUrl).filter { it.url != resolvedUrl }.ifEmpty {
             val sugHeading = doc.select("h2").firstOrNull { it.text().contains("Sugerencias", ignoreCase = true) }
             val container: Element? = sugHeading?.parent()
@@ -311,6 +360,7 @@ object RePelis24ShopBisMarkup {
             year = year,
             durationMinutes = duration,
             genres = genres,
+            actors = actors,
             trailerUrl = null,
             seasonLinks = seasonLinks,
             episodeLinks = episodeLinks,

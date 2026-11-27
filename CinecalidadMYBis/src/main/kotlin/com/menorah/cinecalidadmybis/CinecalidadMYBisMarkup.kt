@@ -30,6 +30,7 @@ data class CinecalidadMYOnlineOption(
     val label: String,
     val data: String,
     val embedUrls: List<String>,
+    val language: String = "Latino",
 )
 
 object CinecalidadMYBisMarkup {
@@ -72,6 +73,17 @@ object CinecalidadMYBisMarkup {
         return abs
     }
 
+    fun normalizeLanguage(raw: String?): String {
+        val v = raw?.trim()?.lowercase().orEmpty()
+        return when {
+            v.contains("castellano") -> "Castellano"
+            v.contains("subtitul") || v.contains("vose") -> "Subtitulado"
+            v.contains("ingl") -> "Inglés"
+            v.contains("latino") -> "Latino"
+            else -> "Latino"
+        }
+    }
+
     fun buildArchivePageUrl(sectionUrl: String, page: Int, mainUrl: String = DEFAULT_MAIN_URL): String {
         val cleanBase = resolveUrl(mainUrl, sectionUrl) ?: mainUrl
         if (page <= 1) return cleanBase
@@ -101,7 +113,8 @@ object CinecalidadMYBisMarkup {
             val (title, year) = splitTitleAndYear(rawTitle)
             if (title.isBlank()) continue
             val rawSrc = img?.attr("data-src")?.takeIf { it.isNotBlank() }
-                ?: img?.attr("src")
+                ?: img?.attr("src")?.takeIf { it.isNotBlank() }
+                ?: img?.attr("srcset")?.split(',')?.firstOrNull()?.trim()?.substringBefore(' ')
             val poster = normalizePosterUrl(mainUrl, rawSrc)
             val is4k = url.contains("-4k-", ignoreCase = true) ||
                 (rawSrc?.contains("-4k-", ignoreCase = true) == true)
@@ -117,11 +130,11 @@ object CinecalidadMYBisMarkup {
     }
 
     fun parseHasNext(doc: Document, currentPage: Int): Boolean {
-        if (doc.selectFirst("link[rel=next], a.nextpostslink, a.next.page-numbers") != null) {
+        if (doc.selectFirst("link[rel=next], .wp-pagenavi a.nextpostslink, a.nextpostslink, a.next.page-numbers") != null) {
             return true
         }
         val nextPage = currentPage + 1
-        return doc.select("a[href*=/page/]").any { el ->
+        return doc.select(".wp-pagenavi a[href*=/page/], a[href*=/page/]").any { el ->
             val num = PAGE_NUM_REGEX.find(el.attr("href"))?.groupValues?.getOrNull(1)?.toIntOrNull()
             num != null && num >= nextPage
         }
@@ -228,14 +241,22 @@ object CinecalidadMYBisMarkup {
         }
     }
 
-    fun parseOnlineOptions(doc: Document): List<CinecalidadMYOnlineOption> {
+    fun parseOnlineOptions(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<CinecalidadMYOnlineOption> {
         val out = mutableListOf<CinecalidadMYOnlineOption>()
-        val links = doc.select("#panel_online a.link.onlinelink[service][data], a.link.onlinelink[service][data]")
+        val language = normalizeLanguage(doc.selectFirst("#panel_online .pane_descripcion")?.text())
+        val links = doc.select("#panel_online a.link.onlinelink[service], a.link.onlinelink[service]")
         for (a in links) {
             val service = a.attr("service").trim()
             val data = a.attr("data").trim()
-            if (service.equals("Trailer", ignoreCase = true) || data.isEmpty()) continue
-            val embeds = mapServiceToEmbedUrls(service, data)
+            if (service.equals("Trailer", ignoreCase = true)) continue
+            val realHref = resolveUrl(mainUrl, a.attr("href"))
+            val fallbackUrls = if (data.isNotEmpty()) mapServiceToEmbedUrls(service, data) else emptyList()
+            val embeds = buildList {
+                if (realHref != null) add(realHref)
+                for (f in fallbackUrls) {
+                    if (f !in this) add(f)
+                }
+            }
             if (embeds.isEmpty()) continue
             val label = a.selectFirst("li")?.text()?.trim()?.takeIf { it.isNotEmpty() } ?: service
             out += CinecalidadMYOnlineOption(
@@ -243,6 +264,7 @@ object CinecalidadMYBisMarkup {
                 label = label,
                 data = data,
                 embedUrls = embeds,
+                language = language,
             )
         }
         return out

@@ -2,6 +2,7 @@ package com.menorah.repelis24shopbis
 
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
@@ -19,9 +20,13 @@ import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newSearchResponseList
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newDrmExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RePelis24ShopBisProvider : MainAPI() {
@@ -44,8 +49,8 @@ class RePelis24ShopBisProvider : MainAPI() {
         "$mainUrl/genero/ciencia-ficcion" to "Ciencia Ficción",
         "$mainUrl/genero/comedia" to "Comedia",
         "$mainUrl/genero/crimen" to "Crimen",
-        "$mainUrl/genero/dc" to "DC",
-        "$mainUrl/genero/disney" to "Disney",
+        "$mainUrl/genero/dc" to "DC Comics",
+        "$mainUrl/genero/disney" to "Disney+",
         "$mainUrl/genero/documental" to "Documental",
         "$mainUrl/genero/drama" to "Drama",
         "$mainUrl/genero/familia" to "Familia",
@@ -152,6 +157,7 @@ class RePelis24ShopBisProvider : MainAPI() {
             if (allEpisodes.isEmpty()) {
                 allEpisodes += detail.episodeLinks
             }
+            // Episode thumbnails on /cdn/e/ require Referer and Episode has no posterHeaders; omit broken thumbnails.
             val episodes = allEpisodes
                 .distinctBy { it.season to it.episode }
                 .sortedWith(compareBy({ it.season }, { it.episode }))
@@ -160,7 +166,6 @@ class RePelis24ShopBisProvider : MainAPI() {
                         this.name = ep.title
                         this.season = ep.season
                         this.episode = ep.episode
-                        this.posterUrl = ep.posterUrl
                     }
                 }
 
@@ -171,6 +176,7 @@ class RePelis24ShopBisProvider : MainAPI() {
                 this.plot = detail.plot
                 this.year = detail.year
                 if (detail.genres.isNotEmpty()) this.tags = detail.genres
+                if (detail.actors.isNotEmpty()) addActors(detail.actors)
                 if (detail.recommendations.isNotEmpty()) {
                     this.recommendations = detail.recommendations.map { it.toSearchResponse(pHeaders) }
                 }
@@ -182,7 +188,9 @@ class RePelis24ShopBisProvider : MainAPI() {
                 this.posterHeaders = pHeaders
                 this.plot = detail.plot
                 this.year = detail.year
+                detail.durationMinutes?.let { this.duration = it }
                 if (detail.genres.isNotEmpty()) this.tags = detail.genres
+                if (detail.actors.isNotEmpty()) addActors(detail.actors)
                 if (detail.recommendations.isNotEmpty()) {
                     this.recommendations = detail.recommendations.map { it.toSearchResponse(pHeaders) }
                 }
@@ -202,19 +210,53 @@ class RePelis24ShopBisProvider : MainAPI() {
         val doc = Jsoup.parse(res.text, res.url)
         val options = RePelis24ShopBisMarkup.parseServerOptions(doc)
         val emitted = AtomicBoolean(false)
-        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
-            emitted.set(true)
-            callback(link)
-        }
+        val seen = Collections.synchronizedSet(mutableSetOf<String>())
+        val lock = Any()
+
         options.amap { opt ->
+            val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
             runCatching {
                 if (opt.url.contains("nupload.my", ignoreCase = true)) {
-                    NuploadMyExtractor().getUrl(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                    NuploadMyExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
                 } else {
-                    loadExtractor(opt.url, targetUrl, subtitleCallback, wrappedCallback)
+                    loadExtractor(opt.url, targetUrl, subtitleCallback) { found.add(it) }
+                }
+            }
+            for (link in synchronized(found) { found.toList() }) {
+                val labeled = labelLink(link, opt.language, opt.label)
+                if (!seen.add("${labeled.url}|${labeled.name}")) continue
+                synchronized(lock) {
+                    emitted.set(true)
+                    callback(labeled)
                 }
             }
         }
         return emitted.get()
+    }
+
+    private suspend fun labelLink(link: ExtractorLink, language: String, optionLabel: String): ExtractorLink {
+        val hostPart = link.name.trim().ifEmpty { optionLabel }
+        val finalName = "[$language] $hostPart"
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, finalName, link.url, link.type, link.uuid) {
+                referer = link.referer
+                quality = link.quality
+                headers = link.headers
+                extractorData = link.extractorData
+                audioTracks = link.audioTracks
+                kid = link.kid
+                key = link.key
+                kty = link.kty
+                keyRequestParameters = link.keyRequestParameters
+                licenseUrl = link.licenseUrl
+            }
+        }
+        return newExtractorLink(link.source, finalName, link.url, link.type) {
+            referer = link.referer
+            quality = link.quality
+            headers = link.headers
+            extractorData = link.extractorData
+            audioTracks = link.audioTracks
+        }
     }
 }

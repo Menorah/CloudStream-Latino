@@ -40,6 +40,13 @@ data class RePelisHDIniziale(
     val episodes: List<RePelisHDEpisode>,
 )
 
+data class RePelisHDDownloadLink(
+    val host: String,
+    val language: String?,
+    val quality: String?,
+    val url: String,
+)
+
 data class RePelisHDDetail(
     val title: String,
     val url: String,
@@ -53,14 +60,16 @@ data class RePelisHDDetail(
     val imdbId: String?,
     val genres: List<String>,
     val actors: List<String>,
+    val languages: List<String>,
     val trailerUrl: String?,
     val playerUrl: String?,
     val iniziale: RePelisHDIniziale?,
+    val downloadLinks: List<RePelisHDDownloadLink>,
     val recommendations: List<RePelisHDCard>,
 )
 
 object RePelisHDBisMarkup {
-    const val DEFAULT_MAIN_URL = "https://repelishd.surf"
+    const val DEFAULT_MAIN_URL = "https://repelishd.hair"
     const val PLAYLATIN_BASE = "https://playlatinsrc.co"
 
     private val mapper = ObjectMapper()
@@ -71,6 +80,7 @@ object RePelisHDBisMarkup {
     private val PAGE_PARAM_REGEX = Regex("""[?&]page=(\d+)""")
     private val NEXT_F_PUSH_REGEX = Regex("""self\.__next_f\.push\(\[\s*\d+\s*,\s*"((?:[^"\\]|\\.)*)"\s*]\)""", RegexOption.DOT_MATCHES_ALL)
     private val YOUTUBE_URL_REGEX = Regex("""https?://(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/)|youtu\.be/)[A-Za-z0-9_-]{6,}""")
+    private val CSS_BG_URL_REGEX = Regex("""url\(\s*['"]?([^'")\s]+)['"]?\s*\)""", RegexOption.IGNORE_CASE)
 
     fun resolveUrl(baseUrl: String, href: String?): String? {
         val raw = href?.trim().orEmpty()
@@ -98,19 +108,34 @@ object RePelisHDBisMarkup {
         return if (page <= 1) "$root/buscar?q=$encoded" else "$root/buscar?q=$encoded&page=$page"
     }
 
+    fun normalizeLanguageBadge(raw: String?): String? {
+        val v = raw?.trim()?.uppercase().orEmpty()
+        if (v.isEmpty()) return null
+        return when {
+            v == "LAT" || v.contains("LATINO") -> "Latino"
+            v == "CAS" || v == "ESP" || v.contains("CASTELLANO") -> "Castellano"
+            v == "SUB" || v.contains("SUBTITUL") || v.contains("VOSE") -> "Subtitulado"
+            v == "ENG" || v.contains("INGL") -> "Inglés"
+            else -> raw?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    }
+
     fun parseCards(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<RePelisHDCard> {
+        val mainGridCards = doc.select("div.griglia a.cv[href], section.chn a.cv[href]")
+        val candidates = if (mainGridCards.isNotEmpty()) mainGridCards else doc.select("a.cv[href]")
         val seen = linkedSetOf<String>()
         val out = mutableListOf<RePelisHDCard>()
-        for (a in doc.select("a.cv[href]")) {
+        for (a in candidates) {
             val href = resolveUrl(mainUrl, a.attr("href")) ?: continue
             if (!href.contains("/ver-pelicula/") && !href.contains("/ver-serie/")) continue
             if (!seen.add(href)) continue
 
             val title = a.selectFirst(".cv-t")?.text()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: a.attr("title").trim().takeIf { it.isNotEmpty() }
+                ?: a.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() }
                 ?: continue
 
-            val poster = resolveUrl(mainUrl, a.selectFirst(".cv-art img")?.attr("src"))
+            val poster = resolveUrl(mainUrl, a.selectFirst(".cv-art img, img")?.attr("src"))
             val meta = a.selectFirst(".cv-m")?.text()?.trim().orEmpty()
             val isSeries = href.contains("/ver-serie/") || meta.contains("Serie", ignoreCase = true)
             val year = YEAR_REGEX.find(meta)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -136,14 +161,12 @@ object RePelisHDBisMarkup {
 
     fun parseHasNext(doc: Document, currentPage: Int, itemCount: Int): Boolean {
         if (itemCount == 0) return false
-        if (doc.selectFirst("link[rel=next]") != null) return true
+        if (doc.selectFirst("link[rel=next], div.carica a.next, a.next[href]") != null) return true
         val nextPage = currentPage + 1
-        val hasExplicitNext = doc.select("a[href]").any { el ->
+        return doc.select("div.carica a[href], a[href*='page=']").any { el ->
             val p = PAGE_PARAM_REGEX.find(el.attr("href"))?.groupValues?.getOrNull(1)?.toIntOrNull()
-            p != null && p >= nextPage
+            (p != null && p >= nextPage) || el.text().contains("Siguiente", ignoreCase = true)
         }
-        if (hasExplicitNext) return true
-        return itemCount >= 40
     }
 
     fun decodeJsonStringLiteral(escaped: String): String {
@@ -307,13 +330,17 @@ object RePelisHDBisMarkup {
             ?: iniziale?.title
             ?: return null
 
+        val posterEl = doc.selectFirst(".chh-loc img, .chh-poster img, article.ch2 img[src*='tmdb'], article.ch2 img[src*='/timg/']")
         val poster = resolveUrl(
             mainUrl,
-            doc.selectFirst(".chh-poster img, article.ch2 img[src*='tmdb']")?.attr("src")
-                ?: doc.selectFirst("meta[property=og:image]")?.attr("content"),
+            posterEl?.attr("src") ?: doc.selectFirst("meta[property=og:image]")?.attr("content"),
         )
         val flightText = extractNextFlightText(doc)
-        val bgMatch: String? = Regex(""""sfondo"\s*:\s*"(https?://[^"]+)"""").find(flightText)?.groupValues?.getOrNull(1)
+        val cssBackdrop = doc.selectFirst(".chh-sfondo[style]")?.attr("style")?.let { st ->
+            CSS_BG_URL_REGEX.find(st)?.groupValues?.getOrNull(1)
+        }?.let { resolveUrl(mainUrl, it) }
+        val flightBackdrop: String? = Regex(""""sfondo"\s*:\s*"(https?://[^"]+)"""").find(flightText)?.groupValues?.getOrNull(1)
+        val bgMatch = cssBackdrop ?: flightBackdrop
 
         val plot = doc.selectFirst("p.sin-t")?.text()?.trim()?.takeIf { it.isNotEmpty() }
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
@@ -340,14 +367,34 @@ object RePelisHDBisMarkup {
         val imdbId = iniziale?.imdbId
             ?: IMDB_REGEX.find(playerIframeSrc.orEmpty())?.groupValues?.getOrNull(1)
             ?: IMDB_REGEX.find(flightText)?.groupValues?.getOrNull(1)
+            ?: IMDB_REGEX.find(doc.outerHtml())?.groupValues?.getOrNull(1)
 
         val genres = doc.select("a.chh-gpill").map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
         val actors = doc.select(".chh-lista a[href*=/actores/], .chh-lista a[href*=/director/]")
             .map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
+        val languages = doc.select(".chh-idi").mapNotNull { normalizeLanguageBadge(it.text()) }.distinct()
 
         val trailerUrl = YOUTUBE_URL_REGEX.find(flightText)?.value
+        val defaultLangParam = when (languages.firstOrNull()) {
+            "Castellano" -> "castellano"
+            "Subtitulado" -> "subtitulado"
+            else -> "latino"
+        }
         val resolvedPlayerUrl = playerIframeSrc ?: imdbId?.takeIf { !isSeries }?.let {
-            "$PLAYLATIN_BASE/movie/$it?lang=latino"
+            "$PLAYLATIN_BASE/movie/$it?lang=$defaultLangParam"
+        }
+
+        val downloadLinks = doc.select(".dl-box a.dl-btn[href]").mapNotNull { a ->
+            val dlUrl = resolveUrl(mainUrl, a.attr("href")) ?: return@mapNotNull null
+            val dlHost = a.selectFirst(".dl-host")?.text()?.trim()?.ifEmpty { null } ?: "Descarga"
+            val dlLang = normalizeLanguageBadge(a.selectFirst(".dl-lang")?.text())
+            val dlQual = a.selectFirst(".dl-qual")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            RePelisHDDownloadLink(
+                host = dlHost,
+                language = dlLang,
+                quality = dlQual,
+                url = dlUrl,
+            )
         }
 
         val recs = parseCardsFromContainer(doc, "section.chn a.cv[href]", mainUrl)
@@ -365,9 +412,11 @@ object RePelisHDBisMarkup {
             imdbId = imdbId,
             genres = genres,
             actors = actors,
+            languages = languages,
             trailerUrl = trailerUrl,
             playerUrl = resolvedPlayerUrl,
             iniziale = iniziale,
+            downloadLinks = downloadLinks,
             recommendations = recs,
         )
     }
@@ -381,7 +430,7 @@ object RePelisHDBisMarkup {
             val title = a.selectFirst(".cv-t")?.text()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: a.attr("title").trim().takeIf { it.isNotEmpty() }
                 ?: continue
-            val poster = resolveUrl(mainUrl, a.selectFirst(".cv-art img")?.attr("src"))
+            val poster = resolveUrl(mainUrl, a.selectFirst(".cv-art img, img")?.attr("src"))
             val meta = a.selectFirst(".cv-m")?.text()?.trim().orEmpty()
             val isSeries = href.contains("/ver-serie/") || meta.contains("Serie", ignoreCase = true)
             out += RePelisHDCard(title = title, url = href, posterUrl = poster, isSeries = isSeries)

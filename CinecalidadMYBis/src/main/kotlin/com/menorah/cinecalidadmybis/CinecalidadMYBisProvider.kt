@@ -18,9 +18,13 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newSearchResponseList
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newDrmExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CinecalidadMYBisProvider : MainAPI() {
@@ -32,16 +36,19 @@ class CinecalidadMYBisProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Últimas Películas",
+        "$mainUrl/genero-peliculas/destacada/" to "Destacadas",
         "$mainUrl/peliculas/4k-ultra-hd/" to "4K UHD",
         "$mainUrl/genero-peliculas/accion/" to "Acción",
         "$mainUrl/genero-peliculas/animacion/" to "Animación",
         "$mainUrl/genero-peliculas/aventura/" to "Aventura",
+        "$mainUrl/genero-peliculas/biografia/" to "Biografía",
         "$mainUrl/genero-peliculas/ciencia-ficcion/" to "Ciencia Ficción",
         "$mainUrl/genero-peliculas/comedia/" to "Comedia",
         "$mainUrl/genero-peliculas/crimen/" to "Crimen",
         "$mainUrl/genero-peliculas/drama/" to "Drama",
         "$mainUrl/genero-peliculas/familiar/" to "Familiar",
         "$mainUrl/genero-peliculas/fantasia/" to "Fantasía",
+        "$mainUrl/genero-peliculas/historia/" to "Historia",
         "$mainUrl/genero-peliculas/misterio/" to "Misterio",
         "$mainUrl/genero-peliculas/romance/" to "Romance",
         "$mainUrl/genero-peliculas/suspenso/" to "Suspenso",
@@ -113,30 +120,61 @@ class CinecalidadMYBisProvider : MainAPI() {
         val res = app.get(targetUrl, referer = "$mainUrl/", headers = defaultHeaders, timeout = 20L)
         if (!res.isSuccessful) return false
         val doc = Jsoup.parse(res.text, res.url)
-        val options = CinecalidadMYBisMarkup.parseOnlineOptions(doc)
+        val options = CinecalidadMYBisMarkup.parseOnlineOptions(doc, mainUrl)
         val emitted = AtomicBoolean(false)
-        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
-            emitted.set(true)
-            callback(link)
-        }
+        val seen = Collections.synchronizedSet(mutableSetOf<String>())
+        val lock = Any()
+
         options.amap { option ->
             for (embedUrl in option.embedUrls) {
-                val foundHere = AtomicBoolean(false)
-                val localCallback: (ExtractorLink) -> Unit = { link ->
-                    foundHere.set(true)
-                    wrappedCallback(link)
-                }
-                val handled = runCatching {
+                val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                runCatching {
                     if (embedUrl.contains("bysedikamoum.com", ignoreCase = true)) {
-                        CinecalidadMYBysedikamoumExtractor().getUrl(embedUrl, targetUrl, subtitleCallback, localCallback)
-                        foundHere.get()
+                        CinecalidadMYBysedikamoumExtractor().getUrl(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
                     } else {
-                        loadExtractor(embedUrl, targetUrl, subtitleCallback, localCallback)
+                        loadExtractor(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
                     }
-                }.getOrDefault(false)
-                if (handled || foundHere.get()) break
+                }
+                val links = synchronized(found) { found.toList() }
+                if (links.isNotEmpty()) {
+                    for (link in links) {
+                        val labeled = labelLink(link, option.language, option.label)
+                        if (!seen.add("${labeled.url}|${labeled.name}")) continue
+                        synchronized(lock) {
+                            emitted.set(true)
+                            callback(labeled)
+                        }
+                    }
+                    break
+                }
             }
         }
         return emitted.get()
+    }
+
+    private suspend fun labelLink(link: ExtractorLink, language: String, hostFallback: String): ExtractorLink {
+        val hostPart = link.name.trim().ifEmpty { hostFallback }
+        val finalName = "[$language] $hostPart"
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, finalName, link.url, link.type, link.uuid) {
+                referer = link.referer
+                quality = link.quality
+                headers = link.headers
+                extractorData = link.extractorData
+                audioTracks = link.audioTracks
+                kid = link.kid
+                key = link.key
+                kty = link.kty
+                keyRequestParameters = link.keyRequestParameters
+                licenseUrl = link.licenseUrl
+            }
+        }
+        return newExtractorLink(link.source, finalName, link.url, link.type) {
+            referer = link.referer
+            quality = link.quality
+            headers = link.headers
+            extractorData = link.extractorData
+            audioTracks = link.audioTracks
+        }
     }
 }

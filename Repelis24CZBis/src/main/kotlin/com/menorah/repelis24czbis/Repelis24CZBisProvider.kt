@@ -20,9 +20,13 @@ import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newSearchResponseList
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newDrmExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 class Repelis24CZBisProvider : MainAPI() {
@@ -36,11 +40,19 @@ class Repelis24CZBisProvider : MainAPI() {
         "$mainUrl/" to "Destacadas",
         "$mainUrl/peliculas/" to "Películas",
         "$mainUrl/series/" to "Series",
+        "$mainUrl/tendencias/" to "Tendencias",
+        "$mainUrl/tendencias/?get=movies" to "Tendencias Películas",
+        "$mainUrl/tendencias/?get=tv" to "Tendencias Series",
+        "$mainUrl/ratings/" to "Más Valoradas",
+        "$mainUrl/ratings/?get=movies" to "Películas Mejor Valoradas",
+        "$mainUrl/ratings/?get=tv" to "Series Mejor Valoradas",
         "$mainUrl/genero/accion/" to "Acción",
+        "$mainUrl/genero/action-adventure/" to "Acción y Aventura",
         "$mainUrl/genero/animacion/" to "Animación",
         "$mainUrl/genero/aventura/" to "Aventura",
         "$mainUrl/genero/belica/" to "Bélica",
         "$mainUrl/genero/ciencia-ficcion/" to "Ciencia Ficción",
+        "$mainUrl/genero/sci-fi-fantasy/" to "Ciencia Ficción y Fantasía",
         "$mainUrl/genero/comedia/" to "Comedia",
         "$mainUrl/genero/crimen/" to "Crimen",
         "$mainUrl/genero/documental/" to "Documental",
@@ -48,10 +60,14 @@ class Repelis24CZBisProvider : MainAPI() {
         "$mainUrl/genero/familia/" to "Familia",
         "$mainUrl/genero/fantasia/" to "Fantasía",
         "$mainUrl/genero/historia/" to "Historia",
+        "$mainUrl/genero/kids/" to "Infantil",
         "$mainUrl/genero/misterio/" to "Misterio",
+        "$mainUrl/genero/musica/" to "Música",
+        "$mainUrl/genero/pelicula-de-tv/" to "Película de TV",
         "$mainUrl/genero/romance/" to "Romance",
         "$mainUrl/genero/suspense/" to "Suspense",
         "$mainUrl/genero/terror/" to "Terror",
+        "$mainUrl/genero/western/" to "Western",
     )
 
     private fun Repelis24CZCard.toSearchResponse(): SearchResponse =
@@ -165,7 +181,7 @@ class Repelis24CZBisProvider : MainAPI() {
 
         if (options.isEmpty()) return false
 
-        val embedUrls = options.amap { opt ->
+        val resolvedPairs = options.amap { opt ->
             val ajaxBody = Repelis24CZSession.postAjax(
                 ajaxUrl = ajaxUrl,
                 referer = refererUrl,
@@ -176,23 +192,59 @@ class Repelis24CZBisProvider : MainAPI() {
                     "type" to opt.type,
                 ),
             ) ?: return@amap null
-            Repelis24CZBisMarkup.parseDooPlayerAjaxResponse(ajaxBody, mainUrl)
-        }.filterNotNull().distinct()
+            val embed = Repelis24CZBisMarkup.parseDooPlayerAjaxResponse(ajaxBody, mainUrl) ?: return@amap null
+            opt to embed
+        }.filterNotNull().distinctBy { (opt, embed) -> "${opt.language.orEmpty()}|$embed" }
 
         val emitted = AtomicBoolean(false)
-        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
-            emitted.set(true)
-            callback(link)
-        }
-        embedUrls.amap { embed ->
+        val seenOut = Collections.synchronizedSet(mutableSetOf<String>())
+        val lock = Any()
+
+        resolvedPairs.amap { (opt, embed) ->
+            val langTag = opt.language ?: "Idioma no indicado"
+            val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
             runCatching {
                 if (embed.contains("vimeos.net", ignoreCase = true)) {
-                    Repelis24CZVimeosExtractor().getUrl(embed, refererUrl, subtitleCallback, wrappedCallback)
+                    Repelis24CZVimeosExtractor().getUrl(embed, refererUrl, subtitleCallback) { found.add(it) }
                 } else {
-                    loadExtractor(embed, refererUrl, subtitleCallback, wrappedCallback)
+                    loadExtractor(embed, refererUrl, subtitleCallback) { found.add(it) }
+                }
+            }
+            for (link in synchronized(found) { found.toList() }) {
+                val labeled = labelLink(link, langTag, opt.serverName)
+                if (!seenOut.add("${labeled.url}|${labeled.name}")) continue
+                synchronized(lock) {
+                    emitted.set(true)
+                    callback(labeled)
                 }
             }
         }
         return emitted.get()
+    }
+
+    private suspend fun labelLink(link: ExtractorLink, language: String, serverName: String): ExtractorLink {
+        val hostPart = link.name.trim().ifEmpty { serverName }
+        val finalName = "[$language] $hostPart"
+        if (link is DrmExtractorLink) {
+            return newDrmExtractorLink(link.source, finalName, link.url, link.type, link.uuid) {
+                referer = link.referer
+                quality = link.quality
+                headers = link.headers
+                extractorData = link.extractorData
+                audioTracks = link.audioTracks
+                kid = link.kid
+                key = link.key
+                kty = link.kty
+                keyRequestParameters = link.keyRequestParameters
+                licenseUrl = link.licenseUrl
+            }
+        }
+        return newExtractorLink(link.source, finalName, link.url, link.type) {
+            referer = link.referer
+            quality = link.quality
+            headers = link.headers
+            extractorData = link.extractorData
+            audioTracks = link.audioTracks
+        }
     }
 }

@@ -13,6 +13,7 @@ data class Repelis24CZCard(
     val isSeries: Boolean,
     val year: Int? = null,
     val rating10: Double? = null,
+    val languages: List<String> = emptyList(),
 )
 
 data class Repelis24CZEpisode(
@@ -57,9 +58,12 @@ object Repelis24CZBisMarkup {
     private val YEAR_REGEX = Regex("""\b((?:19|20)\d{2})\b""")
     private val DURATION_MIN_REGEX = Regex("""(\d+)\s*Min\b""", RegexOption.IGNORE_CASE)
     private val RATING_REGEX = Regex("""(\d+(?:[.,]\d+)?)""")
+    private val HERO_RATING_REGEX = Regex("""(?:IMDb|TMDb)\s+(\d+(?:[.,]\d+)?)""", RegexOption.IGNORE_CASE)
     private val PAGE_NUM_REGEX = Regex("""/page/(\d+)/?""")
     private val SEASON_PANE_NUM_REGEX = Regex("""dpu-season-(\d+)""")
     private val IFRAME_SRC_REGEX = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+    private val CSS_BG_URL_REGEX = Regex("""background-image\s*:\s*[^;]*url\(\s*['"]?([^'")\s]+)['"]?\s*\)""", RegexOption.IGNORE_CASE)
+    private val ARIA_EP_TITLE_REGEX = Regex("""episodio\s+\d+\s*:\s*(.+)$""", RegexOption.IGNORE_CASE)
 
     fun isChallengePage(statusCode: Int, html: String): Boolean {
         if (statusCode == 403 || statusCode == 503) return true
@@ -85,9 +89,12 @@ object Repelis24CZBisMarkup {
     }
 
     fun buildArchivePageUrl(sectionUrl: String, page: Int, mainUrl: String = DEFAULT_MAIN_URL): String {
-        val base = resolveUrl(mainUrl, sectionUrl) ?: mainUrl
-        if (page <= 1) return base
-        return "${base.trimEnd('/')}/page/$page/"
+        val resolved = resolveUrl(mainUrl, sectionUrl) ?: mainUrl
+        if (page <= 1) return resolved
+        val qIdx = resolved.indexOf('?')
+        val pathPart = (if (qIdx >= 0) resolved.substring(0, qIdx) else resolved).trimEnd('/')
+        val queryPart = if (qIdx >= 0) resolved.substring(qIdx) else ""
+        return "$pathPart/page/$page/$queryPart"
     }
 
     fun buildSearchUrl(query: String, page: Int = 1, mainUrl: String = DEFAULT_MAIN_URL): String {
@@ -107,6 +114,18 @@ object Repelis24CZBisMarkup {
         val epId = rest.substring(0, sep).trim()
         val seriesUrl = rest.substring(sep + 1).trim()
         return if (epId.isNotEmpty() && seriesUrl.isNotEmpty()) epId to seriesUrl else null
+    }
+
+    fun normalizeLanguageLabel(raw: String?): String? {
+        val v = raw?.trim()?.lowercase().orEmpty()
+        if (v.isEmpty()) return null
+        return when {
+            v == "mx" || v == "lat" || v == "latino" || v.contains("latino") || v.contains("méxico") || v.contains("mexico") || v.endsWith("/mx.png") -> "Latino"
+            v == "es" || v == "esp" || v == "cast" || v == "castellano" || v.contains("castellano") || v.endsWith("/es.png") || v == "español" || v == "espanol" -> "Castellano"
+            v == "en" || v == "eng" || v.contains("inglés") || v.contains("ingles") || v == "english" || v.endsWith("/en.png") -> "Inglés"
+            v == "sub" || v == "vose" || v.contains("subtitul") -> "Subtitulado"
+            else -> null
+        }
     }
 
     fun parseCards(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): List<Repelis24CZCard> {
@@ -134,6 +153,10 @@ object Repelis24CZBisMarkup {
             val ratingText = article.selectFirst(".dpu-card-rating-premium")?.text().orEmpty()
             val rating = RATING_REGEX.find(ratingText)?.groupValues?.getOrNull(1)?.replace(',', '.')?.toDoubleOrNull()
 
+            val cardLangs = article.select("span.dpu-card-languages img").mapNotNull { flag ->
+                normalizeLanguageLabel(flag.attr("title").ifEmpty { flag.attr("alt") }.ifEmpty { flag.attr("src") })
+            }.distinct()
+
             out += Repelis24CZCard(
                 title = title,
                 url = href,
@@ -141,6 +164,7 @@ object Repelis24CZBisMarkup {
                 isSeries = href.contains("/series/"),
                 year = year,
                 rating10 = rating,
+                languages = cardLangs,
             )
         }
         return out
@@ -169,11 +193,19 @@ object Repelis24CZBisMarkup {
             val key = Triple(type, postId, nume)
             if (!seen.add(key)) continue
 
+            // dpu-dropdown always preserves data-lang ("mx", "es", "en") and flag img even after JS overwrites .dpu-trigger-label.
             val dropdown: Element? = li.parents().firstOrNull { it.hasClass("dpu-dropdown") }
-            val lang = dropdown?.attr("data-lang")?.trim()?.takeIf { it.isNotEmpty() }
+            val flagImg = dropdown?.selectFirst("img.dpu-mini-flag")
+            val triggerLabel = dropdown?.selectFirst(".dpu-trigger-label")?.text()?.trim()
+            val lang = normalizeLanguageLabel(dropdown?.attr("data-lang"))
+                ?: normalizeLanguageLabel(flagImg?.attr("src"))
+                ?: normalizeLanguageLabel(flagImg?.attr("alt"))
+                ?: normalizeLanguageLabel(triggerLabel)
+
             val spans = li.select("> span")
-            val serverName = spans.lastOrNull()?.text()?.trim()?.takeIf { it.isNotEmpty() }
+            val rawServer = spans.lastOrNull()?.text()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: li.text().trim().ifEmpty { "Servidor $nume" }
+            val serverName = rawServer.replace(Regex("""^\d+\.\s*"""), "").trim().ifEmpty { rawServer }
 
             out += Repelis24CZAjaxOption(
                 serverName = serverName,
@@ -202,7 +234,9 @@ object Repelis24CZBisMarkup {
                 ?: Regex("""\d+""").find(card.selectFirst(".dpu-ep-number")?.text().orEmpty())?.value?.toIntOrNull()
                 ?: (out.size + 1)
 
+            val ariaTitle = ARIA_EP_TITLE_REGEX.find(card.attr("aria-label"))?.groupValues?.getOrNull(1)?.trim()
             val epTitle = card.selectFirst(".dpu-ep-title")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: ariaTitle?.takeIf { it.isNotEmpty() }
                 ?: "Episodio $eNum"
             val epImg = card.selectFirst(".dpu-ep-card-image img, img")
             val epPoster = resolveUrl(
@@ -227,7 +261,7 @@ object Repelis24CZBisMarkup {
         val resolvedUrl = resolveUrl(mainUrl, url) ?: url
         val isSeries = resolvedUrl.contains("/series/") || doc.selectFirst(".dpu-episode-card, #seasons") != null
 
-        val h1El: Element? = doc.selectFirst("h1")
+        val h1El: Element? = doc.selectFirst("h1.dpu-hero-title, h1")
         val h1 = h1El?.text()?.trim()?.takeIf { it.isNotEmpty() }
         val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content")
             ?.replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
@@ -236,29 +270,43 @@ object Repelis24CZBisMarkup {
         val title = h1 ?: ogTitle?.takeIf { it.isNotEmpty() } ?: return null
 
         val hero: Element? = h1El?.parents()?.firstOrNull {
-            it.hasClass("dpu-hero-section") || it.hasClass("dpu-hero-content") || it.tagName() == "div"
+            it.hasClass("dpu-hero-section") || it.hasClass("dpu-hero-ultra") || it.hasClass("dpu-hero-content") || it.tagName() == "div"
         } ?: doc.body()
-        val posterImg = doc.selectFirst(".dpu-hero-poster img, img[src*='image.tmdb.org/t/p/w185'], img[src*='image.tmdb.org/t/p/w342'], img[src*='image.tmdb.org/t/p/w500']")
+        val posterImg = doc.selectFirst(
+            ".dpu-poster-frame img, .dpu-hero-poster img, img[src*='image.tmdb.org/t/p/w185'], img[src*='image.tmdb.org/t/p/w342'], img[src*='image.tmdb.org/t/p/w500']",
+        )
         val posterUrl = resolveUrl(
             mainUrl,
             posterImg?.attr("data-src")?.ifEmpty { posterImg.attr("src") } ?: posterImg?.attr("src"),
         )?.replace("/w185/", "/w500/")
 
+        val globalBgRaw = doc.selectFirst(".dpu-global-bg[style]")?.attr("style")?.let { styleAttr ->
+            CSS_BG_URL_REGEX.find(styleAttr)?.groupValues?.getOrNull(1)
+        }
         val bgUrl = resolveUrl(
             mainUrl,
-            doc.selectFirst("#fakeplayer img.cover")?.attr("src")
-                ?: doc.selectFirst("img[src*='image.tmdb.org/t/p/original']")?.attr("src"),
+            doc.selectFirst("#fakeplayer img.cover, .playbox img.cover")?.attr("src")
+                ?: doc.selectFirst("img[src*='image.tmdb.org/t/p/original']")?.attr("src")
+                ?: globalBgRaw,
         )
 
-        val plot = doc.selectFirst(".dpu-hero-synopsis-short")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-            ?: doc.selectFirst("#info .dpu-entry-content p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-            ?: doc.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
+        val shortSyn = doc.selectFirst(".dpu-hero-synopsis-short")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        val ogSyn = doc.selectFirst("meta[property=og:description]")?.attr("content")
+            ?.replace(Regex("""\s*\[\s*…\s*]\s*$"""), "")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val entrySyn = doc.selectFirst("#info .dpu-entry-content p, .dpu-entry-content p")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        val plot = when {
+            shortSyn != null && !shortSyn.endsWith("…") && !shortSyn.endsWith("...") -> shortSyn
+            ogSyn != null && (shortSyn == null || ogSyn.length >= shortSyn.length) -> ogSyn
+            shortSyn != null -> shortSyn
+            else -> entrySyn
+        }
 
         val heroText = hero?.text().orEmpty()
         val year = YEAR_REGEX.find(heroText)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val duration = DURATION_MIN_REGEX.find(heroText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val rating = Regex("""IMDb\s+(\d+(?:[.,]\d+)?)""", RegexOption.IGNORE_CASE)
-            .find(heroText)
+        val rating = HERO_RATING_REGEX.find(heroText)
             ?.groupValues?.getOrNull(1)
             ?.replace(',', '.')
             ?.toDoubleOrNull()
@@ -282,22 +330,44 @@ object Repelis24CZBisMarkup {
 
         val recs = mutableListOf<Repelis24CZCard>()
         val seenRec = linkedSetOf<String>()
-        for (a in doc.select("a[href*=/peliculas/], a[href*=/series/]")) {
-            if (a.parents().any { it.tagName() in navTags || it.hasClass("dpu-hero-actions") }) continue
-            if (a.hasClass("dpu-archive-card")) continue
+        for (card in doc.select("article.dpu-related-card, #dpu_related_ultra_grid article")) {
+            val a = card.selectFirst("a[href]") ?: continue
             val rUrl = resolveUrl(mainUrl, a.attr("href")) ?: continue
             if (rUrl == resolvedUrl || !seenRec.add(rUrl)) continue
-            val rImg = a.selectFirst("img") ?: continue
-            val rPoster = resolveUrl(mainUrl, rImg.attr("src")) ?: continue
-            val rTitle = a.selectFirst("strong, h3, .title")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-                ?: rImg.attr("alt").trim().takeIf { it.isNotEmpty() }
+            val rImg = card.selectFirst("img")
+            val rPoster = resolveUrl(mainUrl, rImg?.attr("data-src")?.ifEmpty { rImg.attr("src") } ?: rImg?.attr("src"))
+            val rTitle = card.selectFirst(".dpu-rel-title, h3, strong")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: rImg?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() }
                 ?: continue
+            val rYear = YEAR_REGEX.find(card.selectFirst(".dpu-rel-year")?.text().orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val rRating = RATING_REGEX.find(card.selectFirst(".dpu-rel-rating")?.text().orEmpty())?.groupValues?.getOrNull(1)?.replace(',', '.')?.toDoubleOrNull()
             recs += Repelis24CZCard(
                 title = rTitle,
                 url = rUrl,
                 posterUrl = rPoster,
                 isSeries = rUrl.contains("/series/"),
+                year = rYear,
+                rating10 = rRating,
             )
+        }
+        if (recs.isEmpty()) {
+            for (a in doc.select("a[href*=/peliculas/], a[href*=/series/]")) {
+                if (a.parents().any { it.tagName() in navTags || it.hasClass("dpu-hero-actions") }) continue
+                if (a.hasClass("dpu-archive-card")) continue
+                val rUrl = resolveUrl(mainUrl, a.attr("href")) ?: continue
+                if (rUrl == resolvedUrl || !seenRec.add(rUrl)) continue
+                val rImg = a.selectFirst("img") ?: continue
+                val rPoster = resolveUrl(mainUrl, rImg.attr("src")) ?: continue
+                val rTitle = a.selectFirst("strong, h3, .title")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: rImg.attr("alt").trim().takeIf { it.isNotEmpty() }
+                    ?: continue
+                recs += Repelis24CZCard(
+                    title = rTitle,
+                    url = rUrl,
+                    posterUrl = rPoster,
+                    isSeries = rUrl.contains("/series/"),
+                )
+            }
         }
 
         return Repelis24CZDetail(

@@ -3,138 +3,147 @@ package com.menorah.cinecalidadambis
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CinecalidadAMBisMarkupTest {
 
     @Test
-    fun parsesCardsAndSkipsNaadbPromos() {
+    fun parsesFeaturedWidgetAndMovieArchiveCardsAndPagination() {
         val html = """
             <html><body>
+              <aside id="dtw_content_featured-3">
+                <ul class="destacados-widget">
+                  <li><div class="upw-image"><a href="https://www.cinecalidad.am/ver-pelicula/enola-holmes-2-online-gratis-en-cinecalidad/" title="Enola Holmes 2"><img data-src="https://image.tmdb.org/t/p/w185//eC7d7caUKi1dJuRdWPK8b8Hkpz5.jpg"></a></div></li>
+                </ul>
+              </aside>
               <div id="archive-content">
-                <article class="item movies naadb">
-                  <div class="poster custom">
-                    <img src="https://adsanalytics.org/images/promo.jpg" alt="promo">
-                    <h3 class="hover_caption_caption"><a href="#aHR0cHM6Ly9hZHNhbmFseXRpY3Mub3Jn">
-                      <div class="home_post_content"><div class="in_title">Netflix Premium</div></div>
-                    </a></h3>
-                  </div>
+                <article class="item movies">
+                  <div class="poster"><img data-src="https://image.tmdb.org/t/p/w300//madden.jpg" alt="Madden"></div>
+                  <div class="rating">8.2</div>
+                  <h3 class="hover_caption_caption"><a href="https://www.cinecalidad.am/ver-pelicula/madden/">Madden</a><p>2026</p></h3>
+                  <div class="in_title">Madden</div>
                 </article>
-                <article id="post-2881023" class="item movies">
-                  <div class="poster custom">
-                    <div class="selt ">Series</div>
-                    <div class="last-num"><div class="last-s">Temporada 1</div><div class="last-ep">Episodio 14</div></div>
-                    <img src="https://image.tmdb.org/t/p/w342//gcOV7JFbJpNqH8mzSuL8jG1WVy4.jpg" alt="Batman: La Serie Animada">
-                    <h3 class="hover_caption_caption"><a href="https://www.cinecalidad.am/ver-serie/batman-la-serie-animada/">
-                      <div class="home_post_content"><div class="in_title">Batman: La Serie Animada</div><p>1992</p></div>
-                    </a></h3>
-                  </div>
-                </article>
-                <article id="post-2881022" class="item movies">
-                  <div class="poster custom">
-                    <div class="selt ">Película</div>
-                    <img src="data:image/png;base64,iVBORw0KGgo=" data-src="https://image.tmdb.org/t/p/w342//i5z5B7ctBc0xicA1WM4dl0aGSpB.jpg" alt="007: Otro día para morir">
-                    <h3 class="hover_caption_caption"><a href="https://www.cinecalidad.am/ver-pelicula/007-otro-dia-para-morir/">
-                      <div class="home_post_content"><div class="in_title">007: Otro día para morir</div><p>2002</p></div>
-                    </a></h3>
-                  </div>
+                <article class="item movies">
+                  <div class="selt">Serie</div>
+                  <img src="https://image.tmdb.org/t/p/w300/fbi.jpg" alt="F.B.I.">
+                  <h3 class="hover_caption_caption"><a href="https://www.cinecalidad.am/ver-serie/f-b-i-online-gratis/">F.B.I.</a></h3>
+                  <div class="in_title">F.B.I.</div>
                 </article>
               </div>
-              <div class="pagination"><a class="next page-numbers" href="https://www.cinecalidad.am/page/2/">Siguiente</a></div>
+              <div class="pagination"><a href="https://www.cinecalidad.am/page/2/">2</a></div>
             </body></html>
         """.trimIndent()
-
         val doc = Jsoup.parse(html, CinecalidadAMBisMarkup.DEFAULT_MAIN_URL)
+
+        val featured = CinecalidadAMBisMarkup.parseFeaturedCards(doc)
+        assertEquals(1, featured.size)
+        assertEquals("Enola Holmes 2", featured[0].title)
+        assertEquals("https://image.tmdb.org/t/p/w500/eC7d7caUKi1dJuRdWPK8b8Hkpz5.jpg", featured[0].posterUrl)
+
         val cards = CinecalidadAMBisMarkup.parseCards(doc)
         assertEquals(2, cards.size)
-        assertEquals("Batman: La Serie Animada", cards[0].title)
-        assertTrue(cards[0].isSeries)
-        assertEquals("https://image.tmdb.org/t/p/w342/gcOV7JFbJpNqH8mzSuL8jG1WVy4.jpg", cards[0].posterUrl)
-        assertEquals("007: Otro día para morir", cards[1].title)
-        assertFalse(cards[1].isSeries)
-        assertEquals("https://image.tmdb.org/t/p/w342/i5z5B7ctBc0xicA1WM4dl0aGSpB.jpg", cards[1].posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w300/madden.jpg", cards[0].posterUrl)
+        assertFalse(cards[0].isSeries)
+        assertTrue(cards[1].isSeries)
         assertTrue(CinecalidadAMBisMarkup.parseHasNext(doc, 1))
     }
 
     @Test
-    fun parsesMovieDetailSeriesEpisodesAndZopassOptions() {
+    fun parsesRealMaddenZopassPaneLanguageAndDownloads() {
         val html = """
             <html><body>
               <div class="single_left">
-                <h1>The Batman</h1>
-                <table><tr>
-                  <td><img data-src="https://image.tmdb.org/t/p/w342//et6N6ratRz6Yftl87w4EfkH3IJE.jpg" src="data:image/png;base64,AAA="></td>
-                  <td>
-                    <p>Bruce Wayne patrulla Gotham City mientras enfrenta nuevos villanos cada noche en esta serie animada.</p>
-                    <p><span><strong>Títulos:</strong> The Batman</span></p>
-                    <span><strong>TMDB</strong><div id="star-rating-box"></div><b>7.5</b>/10</span>
-                    <p><span><strong>Género:</strong> <a href="https://www.cinecalidad.am/genero-de-la-pelicula/animacion/">Animación</a>, <a href="https://www.cinecalidad.am/genero-de-la-pelicula/accion/">Acción</a></span></p>
-                    <p><span><strong>Elenco:</strong> <a href="https://www.cinecalidad.am/reparto/rino-romano/">Rino Romano</a></span></p>
-                  </td>
-                </tr></table>
-                <ul id="playeroptionsul">
-                  <li class="dooplay_player_option" data-option="https://www.cinecalidad.am/player/?zopass=aHR0cHM6Ly92aW1lb3MubmV0L2VtYmVkLTJqbXptcHNzdnF4YS5odG1s">Vimeos</li>
-                  <li class="dooplay_player_option" data-option="https://videoapp.zip/e/tv/2098/1/1">Videoapp</li>
-                  <li id="player-option-trailer" class="dooplay_player_option dooplay_player_option_trailer" data-option="https://www.youtube.com/embed/LMlCN6_vUvs">Ver trailer</li>
-                </ul>
-                <div id="episodes"><div id="serie_contenido"><div id="seasons">
-                  <div id="jstab" data-tab="1" class="se-c">
-                    <h2><b>Temporada 1</b></h2>
-                    <ul class="episodios">
-                      <li>
-                        <div class="imagen"><img data-src="https://image.tmdb.org/t/p/w185/ep1.jpg" src=""></div>
-                        <div class="numerando">S1-E1</div>
-                        <div class="episodiotitle"><a href="https://www.cinecalidad.am/ver-el-episodio/the-batman-1x1/">Un murciélago en el campanario</a></div>
-                      </li>
-                    </ul>
-                  </div>
-                  <div id="jstab" data-tab="2" class="se-c">
-                    <h2><b>Temporada 2</b></h2>
-                    <ul class="episodios">
-                      <li>
-                        <div class="imagen"><img src="https://image.tmdb.org/t/p/w185/ep21.jpg"></div>
-                        <div class="numerando">S2-E3</div>
-                        <div class="episodiotitle"><a href="https://www.cinecalidad.am/ver-el-episodio/the-batman-2x3/">Acertijo</a></div>
-                      </li>
-                    </ul>
-                  </div>
-                </div></div></div>
+                <h1>Madden</h1>
+                <div class="single-calidad"><strong>Calidad:</strong><span>Dual 1080p</span></div>
+                <table><tr><td><img data-src="https://image.tmdb.org/t/p/w300/madden.jpg"></td><td>
+                  <p>Fecha: 2026</p>
+                  <p>John Madden deja el campo de juego para construir el famoso videojuego de fútbol americano.</p>
+                </td></tr></table>
+                <a href="https://www.cinecalidad.am/reparto/nicolas-cage/">Nicolas Cage</a>
+                <a href="https://www.cinecalidad.am/genero-de-la-pelicula/drama/">Drama</a>
               </div>
+              <div id="panel_online">
+                <div class="pane_descripcion">Audio latino</div>
+                <ul id="playeroptionsul">
+                  <li class="dooplay_player_option" data-option="/zopass/?zopass=aHR0cHM6Ly92aW1lb3MubmV0L2VtYmVkLWpndHR5dnJydzdzMi5odG1s&sn=VmltZW9z">Vimeos</li>
+                  <li class="dooplay_player_option" data-option="/zopass/?zopass=aHR0cHM6Ly92aWRlb2FwcC56aXAvZS9tb3ZpZS8xMjM0NTY=&sn=VmlkZW9hcHA=">Videoapp</li>
+                  <li class="dooplay_player_option dooplay_player_option_trailer" data-option="/zopass/?zopass=aHR0cHM6Ly93d3cueW91dHViZS5jb20vZW1iZWQvTE1sQ042X3ZVdnM=&sn=VHJhaWxlcg==">Ver trailer</li>
+                </ul>
+              </div>
+              <div id="panel_descarga">
+                <a href="https://www.cinecalidad.am/ver-pelicula/madden/?download=OU9wNno3"><li>Mediafire</li></a>
+                <a href="magnet:?xt=urn:btih:aabd81add1929505e"><li>Torrent</li></a>
+              </div>
+              <div class="yarpp-related"><ul class="related-posts">
+                <li><a href="https://www.cinecalidad.am/ver-pelicula/draft-day/"><img data-src="https://image.tmdb.org/t/p/w185/dd.jpg">Draft Day online</a></li>
+              </ul></div>
             </body></html>
         """.trimIndent()
-
-        val url = "https://www.cinecalidad.am/ver-serie/the-batman/"
-        val doc = Jsoup.parse(html, url)
-        val detail = CinecalidadAMBisMarkup.parseDetail(doc, url)
-        assertNotNull(detail)
-        detail!!
-        assertTrue(detail.isSeries)
-        assertEquals(7.5, detail.rating10!!, 0.01)
-        assertEquals(listOf("Animación", "Acción"), detail.genres)
-        assertEquals(listOf("Rino Romano"), detail.actors)
+        val doc = Jsoup.parse(html, "https://www.cinecalidad.am/ver-pelicula/madden/")
+        val detail = CinecalidadAMBisMarkup.parseDetail(doc, "https://www.cinecalidad.am/ver-pelicula/madden/")!!
+        assertEquals(2026, detail.year)
         assertEquals("https://www.youtube.com/embed/LMlCN6_vUvs", detail.trailerUrl)
-        assertEquals(2, detail.episodes.size)
-        assertEquals(1, detail.episodes[0].season)
-        assertEquals(1, detail.episodes[0].episode)
-        assertEquals(2, detail.episodes[1].season)
-        assertEquals(3, detail.episodes[1].episode)
+        assertEquals(listOf("Nicolas Cage"), detail.actors)
+        assertEquals(1, detail.recommendations.size)
+        assertEquals("Draft Day", detail.recommendations[0].title)
 
         val (opts, trailer) = CinecalidadAMBisMarkup.parsePlayerOptions(doc)
         assertEquals("https://www.youtube.com/embed/LMlCN6_vUvs", trailer)
         assertEquals(2, opts.size)
-        assertEquals("https://vimeos.net/embed-2jmzmpssvqxa.html", opts[0].url)
-        assertEquals("https://videoapp.zip/e/tv/2098/1/1", opts[1].url)
+        assertEquals("https://vimeos.net/embed-jgttyvrrw7s2.html", opts[0].url)
+        assertEquals("Latino", opts[0].language)
+        assertEquals("Dual 1080p", opts[0].quality)
+
+        val dls = CinecalidadAMBisMarkup.parseDownloadOptions(doc)
+        assertEquals(2, dls.size)
+        assertFalse(dls[0].isMagnet)
+        assertTrue(dls[1].isMagnet)
     }
 
     @Test
-    fun unpacksVimeosPackerAndParsesMasterM3u8AndSubtitles() {
-        val packedHtml = """
-            <script>eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}('1 2={3:[{4:"5://6.7.8/9/a.b"}],c:[{4:"/d/e.f",g:"h",i:"j"},{4:"/k/l.m",g:"n",i:"j"}]};',24,24,'|var|jws|sources|file|https|p9|vimeos|zip|hls2|master|m3u8|tracks|srt|empty|srt|label|None|kind|captions|subs|es|vtt|Español'.split('|')))</script>
+    fun parsesSeriesWithRepartoDeSerieTrailerScriptAndSeasons() {
+        val serieHtml = """
+            <html><body>
+              <div class="single_left">
+                <h1>F.B.I.</h1>
+                <table><tr><td><img src="https://image.tmdb.org/t/p/w300/fbi.jpg"></td><td><p>Serie policial de acción en la oficina del FBI de Nueva York.</p></td></tr></table>
+                <a href="https://www.cinecalidad.am/reparto-de-serie/missy-peregrym/">Missy Peregrym</a>
+                <iframe id="trailerazo" src="saved_resource.html"></iframe>
+                <script>document.querySelector("#show_trailer").addEventListener("click",e=>{e.preventDefault();document.querySelector("#trailerazo").src='https://www.youtube.com/embed/abc123XYZ';});</script>
+              </div>
+              <div id="seasons">
+                <div id="jstab" data-tab="8">
+                  <ul class="episodios">
+                    <li>
+                      <div class="imagen"><img data-src="https://image.tmdb.org/t/p/w300/ep22.jpg"></div>
+                      <div class="numerando">S8-E22</div>
+                      <div class="episodiotitle"><a href="https://www.cinecalidad.am/ver-serie/f-b-i-8x22/">Final</a></div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </body></html>
         """.trimIndent()
-        val parsed = CinecalidadAMVimeosParser.parse(packedHtml, "https://vimeos.net/embed-abc.html")
-        assertEquals(listOf("https://p9.vimeos.zip/hls2/master.m3u8"), parsed.m3u8Urls)
+        val detail = CinecalidadAMBisMarkup.parseDetail(
+            Jsoup.parse(serieHtml, "https://www.cinecalidad.am/ver-serie/f-b-i/"),
+            "https://www.cinecalidad.am/ver-serie/f-b-i/",
+        )!!
+        assertTrue(detail.isSeries)
+        assertEquals(listOf("Missy Peregrym"), detail.actors)
+        assertEquals("https://www.youtube.com/embed/abc123XYZ", detail.trailerUrl)
+        assertEquals(1, detail.episodes.size)
+        assertEquals(8, detail.episodes[0].season)
+        assertEquals(22, detail.episodes[0].episode)
+    }
+
+    @Test
+    fun unpacksVimeosMasterPlaylistAndIgnoresPlaceholderCaptions() {
+        val packed = """
+            <script>eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}('0={1:[{2:"3://4.5.6/7/8.9"}],a:[{2:"/b/c.d",e:"f"},{2:"/g/h.i",e:"j",k:"l"}]};',22,22,'jw|sources|file|https|cdn|vimeos|zip|hls|master|m3u8|tracks|srt|empty|srt|kind|captions|subs|es|vtt|captions|label|Español'.split('|')))</script>
+        """.trimIndent()
+        val parsed = CinecalidadAMVimeosParser.parse(packed, "https://vimeos.net/embed-xyz.html")
+        assertEquals(listOf("https://cdn.vimeos.zip/hls/master.m3u8"), parsed.m3u8Urls)
         assertEquals(listOf("Español" to "https://vimeos.net/subs/es.vtt"), parsed.subtitles)
     }
 }

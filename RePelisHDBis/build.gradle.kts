@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -6,10 +6,10 @@ dependencies {
 }
 
 cloudstream {
-    description = "Películas y series en HD con audio latino, castellano y subtitulado de repelishd.surf."
+    description = "Películas y series en HD con audio latino, castellano y subtitulado de repelishd.hair."
     authors = listOf("Menorah")
     status = 1
     tvTypes = listOf("Movie", "TvSeries")
     language = "es"
-    iconUrl = "https://repelishd.surf/brand/repelishd/apple-touch.png"
+    iconUrl = "https://repelishd.hair/brand/repelishd/apple-touch.png"
 }
