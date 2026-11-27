@@ -589,4 +589,169 @@ class PelisJuanitaDataTest {
         assertEquals(1, verDetails.tracks.size)
         assertEquals("Español", verDetails.tracks[0].label)
     }
+
+    @Test
+    fun `vsembed su routing, subtitle unwrapping, config parsing and live wasm chacha20 decryption`() {
+        // 1. Distinguish VidSrc embeds (vsembed.su / vidsrc-embed.ru / etc.) from StreamWish (vsembed.com/e/...)
+        val bigGirlsEmbedUrl =
+            "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
+        assertTrue(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl(bigGirlsEmbedUrl))
+        assertTrue(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://vsembed.su/embed/tv?tmdb=247718&season=1&episode=1&ds_lang=es"))
+        assertTrue(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://vidsrc-embed.ru/embed/movie/1477963"))
+        assertTrue(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://vsrc.su/embed/movie?tmdb=123"))
+        assertFalse(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://vsembed.com/e/cjvk"))
+        assertFalse(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://streamwish.to/e/abc123"))
+
+        // Server name inference for iframe fallback keeps Vidsrc vs Streamwish distinct
+        val iframeFallbacks = PelisJuanitaMarkup.parseStreamSourcesHtml(
+            """<iframe id="if-video" src="$bigGirlsEmbedUrl"></iframe>""",
+        )
+        assertEquals(1, iframeFallbacks.size)
+        assertEquals("Vidsrc", iframeFallbacks[0].serverName)
+        val wishIframeFallbacks = PelisJuanitaMarkup.parseStreamSourcesHtml(
+            """<iframe id="if-video" src="https://vsembed.com/e/cjvk"></iframe>""",
+        )
+        assertEquals("Streamwish", wishIframeFallbacks[0].serverName)
+
+        // Real PelisJuanita .row-download markup unescapes &amp; cleanly
+        val realRowHtml = """
+            <div class="box-download">
+              <div class="row-download" data-idioma="subtitulada" data-tipo="stream" data-url="https://vsembed.su/embed/movie?tmdb=1477963&amp;ds_lang=es&amp;sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&amp;sub_label=Espa%C3%B1ol&amp;sub_lang=es&amp;utm_source=pelisjuanita.com">
+                <span>Vidsrc</span><span>HD</span><span></span><span>Opción 1</span>
+              </div>
+            </div>
+        """.trimIndent()
+        val parsedRows = PelisJuanitaMarkup.parseStreamSourcesHtml(realRowHtml)
+        assertEquals(1, parsedRows.size)
+        assertEquals("Vidsrc", parsedRows[0].serverName)
+        assertEquals("Subtitulado", parsedRows[0].languageLabel)
+        assertEquals(bigGirlsEmbedUrl, parsedRows[0].url)
+
+        // 2. Subtitle extraction + corsproxy unwrapping + brackets/spaces percent normalization
+        val subs = PelisJuanitaVidSrcSuParser.parseSubtitlesFromEmbedUrl(bigGirlsEmbedUrl)
+        assertEquals(1, subs.size)
+        assertEquals("Español", subs[0].label)
+        assertEquals(
+            "https://www.subtitlecat.com/subs/1812/Big.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%5BYTS.GG%20-%20YTS.BZ%5D-es-419.srt",
+            subs[0].directUrl,
+        )
+        assertTrue(subs[0].rawUrl.startsWith("https://pelisjuanita.com/vidsrc/corsproxy.php?url="))
+
+        // 3. Step 1 (data-api / vs_src.php) + Landing CFG.playerUrl parsing
+        val vsembedHtml = """
+            <div data-api="/vs_src.php?type=movie&amp;id=1477963&amp;ds_lang=es"></div>
+            <script>window.CFG = {"tvIndex":false};</script>
+        """.trimIndent()
+        val step1 = PelisJuanitaVidSrcSuParser.parseStep1(vsembedHtml, bigGirlsEmbedUrl)
+        assertNotNull(step1)
+        assertEquals("https://vsembed.su/vs_src.php?type=movie&id=1477963&ds_lang=es", step1!!.apiPath)
+        assertNull(PelisJuanitaVidSrcSuParser.parsePlayerUrlFromLanding(vsembedHtml, bigGirlsEmbedUrl))
+
+        val landingHtml = """
+            <script>window.CFG = {"metaApi":"https://data.vidsrc.sh/api.php?type=movie\u0026tmdb=1477963","playerUrl":"/embed/player/movie/1477963?vs=abc123"};</script>
+        """.trimIndent()
+        assertEquals(
+            "https://stellarconductornexus.com/embed/player/movie/1477963?vs=abc123",
+            PelisJuanitaVidSrcSuParser.parsePlayerUrlFromLanding(landingHtml, "https://stellarconductornexus.com/embed/movie/1477963?vs=xyz"),
+        )
+
+        // 4. Open residential CONFIG (apiToken present, \u0026 escapes) & Gated TV CONFIG (\& escapes)
+        val openMovieConfigHtml = """
+            <script>
+            window.CONFIG = {"mediaType":"movie","idType":"tmdb","mediaId":"1477963","tmdb":"1477963","dsLang":"es","subLabel":"Espa\u00f1ol","subLang":"es","subUrl":"https://pelisjuanita.com/vidsrc/corsproxy.php?url=https%3A%2F%2Fwww.subtitlecat.com%2Fsubs%2F1812%2Ftest.srt","api":"https://data.vidsrc.sh/api.php?type=movie\u0026tmdb=1477963\u0026stream_urls","metaApi":"https://data.vidsrc.sh/api.php?type=movie\u0026tmdb=1477963","season":null,"episode":null,"apiToken":"tok_open_123"};
+            </script>
+        """.trimIndent()
+        val openCfg = PelisJuanitaVidSrcSuParser.parsePlayerConfig(
+            openMovieConfigHtml,
+            "https://stellarconductornexus.com/embed/player/movie/1477963?vs=abc",
+        )
+        assertNotNull(openCfg)
+        assertFalse(openCfg!!.turnstile)
+        assertEquals("tok_open_123", openCfg.apiToken)
+        assertEquals(
+            "https://birchandbay.space/api.php?type=movie&tmdb=1477963&stream_urls&api_token=tok_open_123",
+            PelisJuanitaVidSrcSuParser.buildStreamApiUrl(openCfg, "birchandbay.space"),
+        )
+
+        val tvConfigHtml = """
+            <script>
+            window.CONFIG = {"mediaType":"tv","tv":true,"streamBase":"https://data.vidsrc.sh/api.php?type=tv\&tmdb=247718","metaApi":"https://data.vidsrc.sh/api.php?type=tv\&tmdb=247718\&season=1\&episode=1","season":1,"episode":1,"turnstile":true,"apiToken":""};
+            </script>
+        """.trimIndent()
+        val tvCfg = PelisJuanitaVidSrcSuParser.parsePlayerConfig(
+            tvConfigHtml,
+            "https://stellarconductornexus.com/embed/player/tv/247718/1/1?vs=tv",
+        )
+        assertNotNull(tvCfg)
+        assertTrue(tvCfg!!.turnstile)
+        assertEquals("", tvCfg.apiToken)
+        assertEquals("https://data.vidsrc.sh/api.php?type=tv&tmdb=247718", tvCfg.streamBase)
+        assertEquals(
+            "https://birchandbay.space/api.php?type=tv&tmdb=247718&season=1&episode=1&stream_urls",
+            PelisJuanitaVidSrcSuParser.buildStreamApiUrl(tvCfg, "birchandbay.space"),
+        )
+
+        // 5. Real captured wasm.php (7,334 B) + real captured stream_urls ChaCha20 decryption
+        val wasmZlibB64 =
+            "eNrtWf1XFNcZvvOxM7PcYXc2UdAVw50KqAWCH4hKVBjiEU9JpMaviBhAoNEBxbhoNGAXUz9IFYzGRDhZAzXB6Kk1NEpCbDUQ" +
+                "SSR+FEJOFMEPjKJmpWIQTawH7b2zU7PsyX/Q+WHvzPPuM8/c973PT8+ADMdSCgBA2Zh0ykk502mnE5CFcjI8R/4AtImhAMtJ" +
+                "tJNSihDE60+9JZ9ykB/NcUuzl+atWEMD1pGfkQ8Au3zJspcBxTqys7Pwcxm5uXmZgOWzsjNXrFmeD0x+b43hZlO0U7nV3tkN" +
+                "ZJqOZ+IRpTSDZH8K0Yr4KqIQUB0yjQGTq1R3vVfGqTKtVDKYFfeKistBq2MBwIhSZUoEECIaAQfURIvryx5Rj0XbdVG7j+iZ" +
+                "Le42nog2/CIa8Kuis4ho+99ajrCPRZFHc4CP5ubWjvXaRut+0aR/VXPP05TkVDpv12/mMP1W47pyRmaUj9uKT/Iyq/SeWHeO" +
+                "k00KGEEDpWgwXh0yp7AErfcgXhEIKvYgQREJ2uJBZkUi6E0P8lMGELTDg6AyiKAyDxKVIIJcHuSPgGxREL6XrUoIuUjKCHKx" +
+                "4T2TtpAF0Q5FelW2ID9kUWU/xCE/Bz4umevHEHwZPGEwCI+bQVbEaBpWBJFVlSHiEdQ0+H4MwZfBEwaLBFVmkYRYTUNCIpJU" +
+                "WUQCEjUNoR9D8GXwhGFCZlU2IRsyaRo25I9sKm7ejPw1DXM/huDL4AmDJjulMYPWNUTCEPFORb0Xb4bgy+A93QqkW4s+Dwt+" +
+                "i4W8RdD3IfRjCL4M3tOtmXRr1edhxVO3kqmb9XMx92MIvgze0y1HupX0eUh46hKZOqefC9ePIfgyeN/TN/xh+MPwh+EPwx+G" +
+                "Pwx/GP4w/GH4w/CH4Q/DH4Y/DH8Y/jD8Yfjj/80flAJIFqzlvWoMTfJgVkWMJ/jVC4KKWE8CrBdEFZk8UbBekFTEeWfCenmA" +
+                "injvcFgvD1KR4J0S6+UgFZm942K9jFTk550b6+UQFUHvAFkvj1CR6J0k6+UIFfl7R8p6eZSKzwjoIFpFVi1k1vEEFUla2qzj" +
+                "SSqyabEzwXAcRTmHAZkaBrBACKDjh4E43H4Rm/u8P1CoxyiHrMvUeGCHiIKHKIpzKgiRWWEVJQQBPG8djMBA0AG+FYkN8bBz" +
+                "ZEYBMot/Ji3kNyGGhPysUgckBlvNlIPPkcMoiY3Hq8xBTOU1Ko847XsAMuGTUP93jQQA8zw3DvINgCffAHjtGwBLbll8vHUA" +
+                "O0crMRBWcBAoAKKTc8LPb5r5bRXfeKsqePHx9JpHe5dsPHAjpz56aBOT17Mdt8zDRWNXXTHl72u5VDBobULf3Arz9emnB576" +
+                "01tNfzxTM3PV2FJx+O6z1w4f67nbd97V5ny9+wt3bc3EpN7oae7jaTFN3a6pieEXt1Wh3dF/LbR+ZQuNNCUdfG9H8sYeauHk" +
+                "Nx4erZqy4RsKvycQpv1meOG2LWzjgwUvWuvc7tPVfllXF3y2f1fEuSdTqi+vjL08t9KVv7Z54/6wGUNrQ2FxvFTW8bH/Lpdp" +
+                "esypf1ctuX102YsHtg+Zap85MKA66qMNLeqbzdfS0uZXu2edzaPL7WZiZohW3klqaKn7/snLTA319w+fK2NTx463TJ7ffTaq" +
+                "nn7qmPUlzLLAKbNKLpRsfYD+9foPEY1TXnI/87Ny8IWu+rxpP+3a9n1CwhlzX3XrPSGAurFzwp3X6kuSmgND0zqHx81LTb4b" +
+                "OLWkG2sEw5jwnr7aK80PV38wv5ctjfzyozX2+iLTH+zXDzv/UTNn1Im3I28wobUPE9elrv5ahEOVAufIe5/MKsfPQjg1UCjN" +
+                "ud1VDn4sYua6Rp2nWhe5Zicv2hPTGhw45s/DU4I2yVvGPZEG7JVHYuXF66PSVk0qrCzItC78y4W9C3t3CuVHF1aexkom+HLs" +
+                "dxfnos6k/zzYPqniuCtpXcTno4NA07Pnwh5dPDDGvBvt65hWGJFI5aQ8qPtty82u2e19bdfKt8ZGR12va0BlNcfn/B61nHr6" +
+                "amld87Q4sfPb/XZY0XJzeXBTxqjpqYOo2bmtzxYVpLx2Ab9sCEyxd9x/ovbGUPeRPRN/R3dEvR976RXbqbfv7/jknZG3gko6" +
+                "3J/3TRiohkbG3BzinzLy56u7IgIaTmaXPJSmxF1hYeH49AX3v+iZAeecPnMwd+zk8KCNMzLHLR2cGNb+9RGsL0F50fRnwucd" +
+                "K20c/O5oJW/Aoe/UrJVdMUL24fGuDFt6SG7eYkzzgwnRWZsbVsxLbivoCtmwN6w2cXxke/TWmfHtTyWs3Xmxe1LFvW1dEzft" +
+                "DToUcqI4858BZ5Pf+DH50rCcO/vuxoatDE7lOsTi/wJR3IaL"
+        val wasmBytes = java.util.zip.InflaterInputStream(
+            java.io.ByteArrayInputStream(PelisJuanitaCrypto.decodeBase64Flexible(wasmZlibB64)),
+        ).use { it.readBytes() }
+        assertEquals(7334, wasmBytes.size)
+
+        val liveApiJson = """{"status_code":"200","data":{"stream_urls_api_host":"birchandbay.space","stream_urls":"bO/o5G8DG4B1qgHH1Mti/OBJdLKbhfv1qfMKICKtQYO8buT/enzZug31E3LWYSgkO5PjvD5JnsvdA/+3hgocURu1WqFRh+S3kSxyzcHERAmY9SnARtq/7fY69o4C+FY9u+UIruLQ51//o92v++bulFPfh31qwp3Lya47X7hbiiUxCLmrdwXsXz3yVKIDpuIW3qFG7594pJCWlcSxaTtohY138XrxgKSEF0GDZqWRIhrVS0zKH0sQYwobvKwrV7aN0SHr7NCr+Y7qyvl/7Q6v4KleWPyJxbLNCh7AX80JQ+gfEN1cCV2E4rYPNLnAOrCHaM1SuIfzs9XCOtOZL2WYIhM=","cast_urls":["https://birchandbay.space/plc/3K-0Z15rcjYcD4Up3FdTYNcPIw77H8TVvwl2BRbT5-RO03NdXU0UGrAePpfEevWpaXjRd1Lqg_sFJ_xGHTVLwSZeuUrlew","https://birchandbay.space/plc/KlVwv0svngNc0Eyb06P8Xj94Zze_cqA7Vg-mpcFgtYiSG_8FWbJ_GElVnEuMIN4BPBMb08xHP6-mbes5ksWTinwbBTtA"]},"vs":{"wasm_url":"/wasm.php?w=5985796"}}"""
+        val apiData = PelisJuanitaVidSrcSuParser.parseStreamApiResponse(liveApiJson, "https://data.vidsrc.sh/api.php")
+        assertNotNull(apiData)
+        assertEquals("https://data.vidsrc.sh/wasm.php?w=5985796", apiData!!.wasmUrl)
+        val decrypted = PelisJuanitaWasmChaCha.decryptStreamUrls(apiData.encryptedStreamUrls, wasmBytes)
+        assertEquals(
+            listOf(
+                "https://birchandbay.space/pl/3K-0Z15rcjYcD4Up3FdTYNcPIw77H8TVvwl2BRbT5-RO03NdXU0UGrAePpfEevWpaXjRd1Lqg_sFJ_xGHTVLwSZeuUrlew",
+                "https://birchandbay.space/pl/KlVwv0svngNc0Eyb06P8Xj94Zze_cqA7Vg-mpcFgtYiSG_8FWbJ_GElVnEuMIN4BPBMb08xHP6-mbes5ksWTinwbBTtA",
+            ),
+            decrypted,
+        )
+
+        // 6. Media3 /pl/ -> /pli/ conversion & token parser (JSON and raw text)
+        assertEquals("jwt-tok", PelisJuanitaVidSrcSuParser.parseTokenResponse("""{"token":"jwt-tok"}"""))
+        assertEquals("raw-tok", PelisJuanitaVidSrcSuParser.parseTokenResponse(" raw-tok \n"))
+        assertEquals(
+            "https://birchandbay.space/pli/3K-0Z15rcjYcD4Up3FdTYNcPIw77H8TVvwl2BRbT5-RO03NdXU0UGrAePpfEevWpaXjRd1Lqg_sFJ_xGHTVLwSZeuUrlew?token=jwt-tok",
+            PelisJuanitaVidSrcSuParser.toMedia3PlaylistUrl(decrypted[0], "jwt-tok"),
+        )
+        assertEquals(
+            "https://birchandbay.space/pli/3K-0Z15rcjYcD4Up3FdTYNcPIw77H8TVvwl2BRbT5-RO03NdXU0UGrAePpfEevWpaXjRd1Lqg_sFJ_xGHTVLwSZeuUrlew?token=jwt-tok",
+            PelisJuanitaVidSrcSuParser.toMedia3PlaylistUrl(apiData.castUrls[0], "jwt-tok"),
+        )
+        assertEquals(
+            "https://birchandbay.space/pli/3K-0Z15rcjYcD4Up3FdTYNcPIw77H8TVvwl2BRbT5-RO03NdXU0UGrAePpfEevWpaXjRd1Lqg_sFJ_xGHTVLwSZeuUrlew?token=abc",
+            PelisJuanitaVidSrcSuParser.rewriteInterceptedPlaylistUrl(
+                "https://birchandbay.space/pl/3K-0Z15rcjYcD4Up3FdTYNcPIw77H8TVvwl2BRbT5-RO03NdXU0UGrAePpfEevWpaXjRd1Lqg_sFJ_xGHTVLwSZeuUrlew?token=abc",
+            ),
+        )
+    }
 }

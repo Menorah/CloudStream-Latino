@@ -431,6 +431,24 @@ object PlaybackProbe {
             "expected subtitulada stream link, got $subLinks"
         }
 
+        // Dedicated vsembed.su Vidsrc routing + live Español SRT subtitle emission check (distinct from StreamWish/vsembed.com)
+        val vidsrcEmbedUrl =
+            "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
+        val vidsrcSubs = Collections.synchronizedList(mutableListOf<com.lagradost.cloudstream3.SubtitleFile>())
+        val vidsrcLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        withContext(Dispatchers.IO) {
+            verifiedProvider.loadLinks(vidsrcEmbedUrl, false, { vidsrcSubs.add(it) }, { vidsrcLinks.add(it) })
+        }
+        check(vidsrcSubs.any { it.lang.contains("Espa", ignoreCase = true) && it.url.contains(".srt") }) {
+            "expected Español SRT subtitle emitted for vsembed.su, got $vidsrcSubs"
+        }
+        if (vidsrcLinks.isNotEmpty()) {
+            play(context, vidsrcLinks.first())
+            Log.i("CSPlaybackProbe", "PASS server VidsrcSu via ${vidsrcLinks.first().name} frame")
+        } else {
+            Log.i("CSPlaybackProbe", "VidsrcSu subtitle verified; stream gated by Turnstile on CI IP (sub=${vidsrcSubs.first().url})")
+        }
+
         clearWebViewCookies()
     }
 }

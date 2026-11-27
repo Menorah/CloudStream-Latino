@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class PelisJuanitaPlugin : Plugin() {
     override fun load(context: Context) {
+        PelisJuanitaAppContextHolder.register(context)
         val sessionStore = AndroidPelisJuanitaSessionStore(context)
         val provider = PelisJuanitaProvider(context, sessionStore)
         openSettings = { ctx ->
@@ -41,6 +42,11 @@ class PelisJuanitaPlugin : Plugin() {
         registerExtractorAPI(PelisJuanitaVoeExtractor())
         registerExtractorAPI(PelisJuanitaHglinkExtractor())
         registerExtractorAPI(PelisJuanitaMedixiruExtractor())
+        registerExtractorAPI(PelisJuanitaVidSrcSuExtractor())
+        registerExtractorAPI(PelisJuanitaVidsrcEmbedSuExtractor())
+        registerExtractorAPI(PelisJuanitaVidsrcEmbedRuExtractor())
+        registerExtractorAPI(PelisJuanitaVidsrcMeRuExtractor())
+        registerExtractorAPI(PelisJuanitaVsrcSuExtractor())
         registerExtractorAPI(PelisJuanitaVsembedExtractor())
         registerExtractorAPI(PelisJuanitaFlaswishExtractor())
         registerExtractorAPI(PelisJuanitaHlswishExtractor())
