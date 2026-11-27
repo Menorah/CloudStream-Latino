@@ -1,4 +1,4 @@
-name: Inspeccionar sitios.7z
+name: Inspeccionar sitios.7z (detalle HTML)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Descargar, listar y analizar sitios.7z
+      - name: Descargar, limpiar y extraer HTML clave de sitios.7z
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -28,122 +28,61 @@ jobs:
           if ! curl -fsSL -A "Mozilla/5.0" -o /tmp/sitios_work/sitios.7z "$DL_URL" || [ ! -s /tmp/sitios_work/sitios.7z ]; then
             PAGE_HTML=$(curl -fsSL -A "Mozilla/5.0" "https://tmpfiles.org/wcA5vDSXwTLB/sitios.7z")
             FOUND_URL=$(python3 -c 'import re,sys; h=sys.stdin.read(); m=re.search(r"https://tmpfiles\.org/dl/[^\x22\x27<> ]+sitios\.7z", h); print(m.group(0) if m else "")' <<< "$PAGE_HTML")
-            echo "Fallback URL: $FOUND_URL"
             curl -fsSL -A "Mozilla/5.0" -o /tmp/sitios_work/sitios.7z "$FOUND_URL"
           fi
 
           7z x -y /tmp/sitios_work/sitios.7z -o/tmp/sitios_work/extracted >/dev/null
 
           python3 - <<'PY'
-          import os, json, re, base64, zlib
+          import os, json, re, base64, zlib, subprocess
           from bs4 import BeautifulSoup
 
           root = "/tmp/sitios_work/extracted"
-          files = []
+          html_files = []
           for dirpath, _, filenames in os.walk(root):
               for fn in sorted(filenames):
                   full = os.path.join(dirpath, fn)
                   rel = os.path.relpath(full, root)
-                  files.append((rel, os.path.getsize(full), full))
-          files.sort()
+                  if rel.lower().endswith((".html", ".htm")):
+                      html_files.append((rel, os.path.getsize(full), full))
+          html_files.sort()
 
-          manifest = [{"path": r, "bytes": sz} for r, sz, _ in files]
-          raw_m = json.dumps({"count": len(manifest), "files": manifest}, ensure_ascii=False)
-          comp_m = base64.b64encode(zlib.compress(raw_m.encode("utf-8"), 9)).decode("ascii")
-          print(f"::notice title=MANIFEST::{comp_m}")
-
-          # Also create full per-file inspection JSON saved in /tmp/sitios_work/report.json
-          kw = re.compile(r"(latino|espa[ñn]ol|castellano|subtitulad|ingl[eé]s|\blat\b|\besp\b|\bsub\b|\beng\b|\bvos\b|server|player|reproduc|idioma|lang|embed|iframe|episod|season|temporad|voe|vimeos|stream|dood|vidhide|byse|nupload|dr0p|superplayer|playlatin|zopass|dooplay|tab|opci[oó]n|enlace|calidad|720|1080|4k|uhd|cam|hd)", re.I)
-
-          report = []
-          for rel, sz, full in files:
-              if not rel.lower().endswith((".html", ".htm", ".txt", ".json")):
-                  continue
-              with open(full, "r", encoding="utf-8", errors="replace") as f:
-                  html = f.read()
-              soup = BeautifulSoup(html, "lxml")
-              title = soup.title.get_text(" ", strip=True) if soup.title else ""
-              canon = (soup.find("link", rel="canonical") or {}).get("href", "")
-              og_url = (soup.find("meta", property="og:url") or {}).get("content", "")
-
-              # Group key containers (lists, navs, pagination, player tabs, episode lists, cards)
-              player_nodes = []
-              seen = set()
-              for el in soup.find_all(["li", "a", "button", "iframe", "div", "span", "option", "select", "ul"]):
-                  attrs_str = " ".join(f"{k}={v}" for k, v in el.attrs.items())
-                  txt = el.get_text(" ", strip=True)[:180]
-                  is_interesting = (
-                      el.name == "iframe"
-                      or any(k in el.attrs for k in ("data-server", "data-embed", "data-src", "data-url", "data-lang", "data-idioma", "data-id", "data-post", "data-nume", "data-type", "data-episode", "data-season", "data-tab", "onclick", "service", "data"))
-                      or (kw.search(attrs_str + " " + txt) and len(str(el)) < 1800)
-                  )
-                  if is_interesting:
-                      entry = {
-                          "tag": el.name,
-                          "attrs": {k: (v if isinstance(v, str) else " ".join(v))[:260] for k, v in el.attrs.items()},
-                          "text": txt,
-                          "parent_cls": " ".join(el.parent.get("class", [])) if el.parent else "",
-                          "parent_id": el.parent.get("id", "") if el.parent else "",
-                      }
-                      sig = json.dumps(entry, sort_keys=True)
-                      if sig not in seen and len(player_nodes) < 160:
-                          seen.add(sig)
-                          player_nodes.append(entry)
-
-              # Card samples (first 3 articles / cards)
-              card_samples = []
-              for sel in ("article", ".movie-item", "a.cv", ".post", ".item"):
-                  found = soup.select(sel)
-                  if found:
-                      card_samples.append({
-                          "sel": sel,
-                          "count": len(found),
-                          "sample_html": [str(x)[:700] for x in found[:2]],
-                      })
-
-              # Pagination samples
-              pag_samples = [str(x)[:600] for x in soup.select(".pagination, ul.pagination, .nav-links, .dpu-pagination-ultra, .wp-pagenavi, a[href*='page'], a[href*='?page=']")[:6]]
-
-              # Relevant inline scripts
-              scripts = []
+          def clean_html(raw):
+              soup = BeautifulSoup(raw, "lxml")
+              for tag in soup.find_all(["style", "noscript"]):
+                  tag.decompose()
+              for svg in soup.find_all("svg"):
+                  # keep class/aria-label/width/height summary, strip heavy path markup
+                  svg.clear()
               for sc in soup.find_all("script"):
-                  st = sc.string or ""
-                  if st and (kw.search(st) or "__next_f" in st or "atob" in st or "ajax" in st or "zopass" in st or "sources" in st or "eval(" in st):
-                      scripts.append(st[:3000])
+                  txt = sc.string or ""
+                  if any(bad in txt for bad in ("popundersPerIP", "atOptions", "adblock", "IntersectionObserver", "gtag(", "fbevents", "darkcss")):
+                      sc.decompose()
+              # strip data-darkreader inline attrs to shrink size drastically
+              for el in soup.find_all(True):
+                  for k in list(el.attrs.keys()):
+                      if "darkreader" in k.lower():
+                          del el.attrs[k]
+              return str(soup)
 
-              report.append({
-                  "path": rel,
-                  "bytes": sz,
-                  "title": title,
-                  "canon": canon,
-                  "og_url": og_url,
-                  "h1": [h.get_text(" ", strip=True) for h in soup.find_all("h1")[:3]],
-                  "nodes": player_nodes,
-                  "cards": card_samples,
-                  "pag": pag_samples,
-                  "scripts": scripts[:8],
-              })
+          bundle = {}
+          for rel, sz, full in html_files:
+              with open(full, "r", encoding="utf-8", errors="replace") as f:
+                  raw = f.read()
+              cleaned = clean_html(raw)
+              bundle[rel] = {"orig_bytes": sz, "html": cleaned}
 
-          with open("/tmp/sitios_work/report.json", "w", encoding="utf-8") as out:
-              json.dump(report, out, ensure_ascii=False)
-          print("Total report bytes:", os.path.getsize("/tmp/sitios_work/report.json"))
-          PY
+          payload = json.dumps(bundle, ensure_ascii=False).encode("utf-8")
+          comp = base64.b64encode(zlib.compress(payload, 9)).decode("ascii")
+          print(f"Files: {len(bundle)}, raw cleaned JSON: {len(payload)}, compressed b64: {len(comp)}")
 
-          # Upload report.json compressed chunks into commit comments or notices (split <= 55KB per comment)
-          python3 - <<'PY'
-          import json, zlib, base64, subprocess, os
-
-          with open("/tmp/sitios_work/report.json", "rb") as f:
-              raw = f.read()
-          comp = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
-          print("Compressed report length:", len(comp))
-          # Post as commit comment(s) via gh api (each up to 55000 chars)
           sha = os.environ["GITHUB_SHA"]
           repo = os.environ["GITHUB_REPOSITORY"]
-          chunk = 55000
+          chunk = 58000
           parts = [comp[i:i+chunk] for i in range(0, len(comp), chunk)]
+          print("Comment parts:", len(parts))
           for i, part in enumerate(parts):
-              body = f"<!-- SITIOS_REPORT {i+1}/{len(parts)} -->\n```\n{part}\n```"
+              body = f"<!-- SITIOS_HTML {i+1}/{len(parts)} -->\n```\n{part}\n```"
               subprocess.run(
                   ["gh", "api", f"repos/{repo}/commits/{sha}/comments", "-f", f"body={body}"],
                   check=True,
