@@ -1,4 +1,4 @@
-name: Inspeccionar sitios.7z (detalle HTML)
+name: Probe live endpoints for 5 Bis plugins
 
 on:
   push:
@@ -11,80 +11,79 @@ permissions:
   contents: write
 
 jobs:
-  inspect:
+  probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Descargar, limpiar y extraer HTML clave de sitios.7z
+      - name: Probe live endpoints
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq p7zip-full python3-bs4 python3-lxml
-          mkdir -p /tmp/sitios_work/extracted
-
-          DL_URL="https://tmpfiles.org/dl/1795801727.b262f642402e84fc/wcA5vDSXwTLB/sitios.7z"
-          if ! curl -fsSL -A "Mozilla/5.0" -o /tmp/sitios_work/sitios.7z "$DL_URL" || [ ! -s /tmp/sitios_work/sitios.7z ]; then
-            PAGE_HTML=$(curl -fsSL -A "Mozilla/5.0" "https://tmpfiles.org/wcA5vDSXwTLB/sitios.7z")
-            FOUND_URL=$(python3 -c 'import re,sys; h=sys.stdin.read(); m=re.search(r"https://tmpfiles\.org/dl/[^\x22\x27<> ]+sitios\.7z", h); print(m.group(0) if m else "")' <<< "$PAGE_HTML")
-            curl -fsSL -A "Mozilla/5.0" -o /tmp/sitios_work/sitios.7z "$FOUND_URL"
-          fi
-
-          7z x -y /tmp/sitios_work/sitios.7z -o/tmp/sitios_work/extracted >/dev/null
-
           python3 - <<'PY'
-          import os, json, re, base64, zlib, subprocess
-          from bs4 import BeautifulSoup
+          import urllib.request, urllib.error, json, re, os, subprocess
 
-          root = "/tmp/sitios_work/extracted"
-          html_files = []
-          for dirpath, _, filenames in os.walk(root):
-              for fn in sorted(filenames):
-                  full = os.path.join(dirpath, fn)
-                  rel = os.path.relpath(full, root)
-                  if rel.lower().endswith((".html", ".htm")):
-                      html_files.append((rel, os.path.getsize(full), full))
-          html_files.sort()
+          ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          def get(url, ref=None, data=None, ct=None):
+              hdrs = {"User-Agent": ua}
+              if ref: hdrs["Referer"] = ref
+              if ct: hdrs["Content-Type"] = ct
+              req = urllib.request.Request(url, data=data, headers=hdrs)
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, url, e.read().decode("utf-8", "replace")
+              except Exception as e:
+                  return -1, url, repr(e)
 
-          def clean_html(raw):
-              soup = BeautifulSoup(raw, "lxml")
-              for tag in soup.find_all(["style", "noscript"]):
-                  tag.decompose()
-              for svg in soup.find_all("svg"):
-                  # keep class/aria-label/width/height summary, strip heavy path markup
-                  svg.clear()
-              for sc in soup.find_all("script"):
-                  txt = sc.string or ""
-                  if any(bad in txt for bad in ("popundersPerIP", "atOptions", "adblock", "IntersectionObserver", "gtag(", "fbevents", "darkcss")):
-                      sc.decompose()
-              # strip data-darkreader inline attrs to shrink size drastically
-              for el in soup.find_all(True):
-                  for k in list(el.attrs.keys()):
-                      if "darkreader" in k.lower():
-                          del el.attrs[k]
-              return str(soup)
+          lines = []
+          for u in [
+              "https://repelishd.hair/",
+              "https://repelishd.hair/tendencias",
+              "https://repelishd.surf/",
+              "https://playlatinsrc.co/serial/tt1405406/8/15?lang=latino",
+              "https://playlatinsrc.co/serial/tt1405406?season=8&episode=15&lang=latino",
+              "https://playlatinsrc.co/assets/player.js",
+              "https://playlatinsrc.co/player.js",
+              "https://www.cinecalidad.am/ver-pelicula/madden/?download=ZDRWNUVNVjY3eTFGdHo4TjlWUVp0Zz09",
+              "https://www.cinecalidad.my/",
+              "https://repelis24.shop/",
+              "https://repelis24.cz/",
+          ]:
+              st, fu, body = get(u, ref="https://repelishd.hair/" if "playlatin" in u else None)
+              lines.append(f"GET {u} => {st} ({fu}) len={len(body)}")
+              if "playlatinsrc.co/serial/tt1405406/8/15" in u and st == 200:
+                  js_srcs = re.findall(r'<script[^>]+src="([^"]+)"', body)
+                  lines.append(f"  15_SCRIPTS={js_srcs}")
+                  m_ep = re.search(r'data-resolve-endpoint="([^"]+)"', body)
+                  m_tk = re.search(r'data-resolve-token="([^"]+)"', body)
+                  m_md = re.search(r'data-mode="([^"]+)"', body)
+                  lines.append(f"  15_ATTRS: mode={m_md.group(1) if m_md else None} ep={m_ep.group(1) if m_ep else None} tk={m_tk.group(1) if m_tk else None}")
+                  # Also fetch its player.js!
+                  for s in js_srcs:
+                      if "player" in s or "app" in s:
+                          surl = urllib.parse.urljoin(fu, s)
+                          sst, sfu, sbody = get(surl, ref=fu)
+                          lines.append(f"  JS {surl} => {sst} len={len(sbody)}\n{sbody[:3500]}")
+                  # Try POST /api/resolve with and without source_id!
+                  if m_tk:
+                      ep_url = urllib.parse.urljoin(fu, m_ep.group(1) if m_ep else "/api/resolve")
+                      for pld in [
+                          {"token": m_tk.group(1), "type": "tv", "id": "tt1405406", "season": 8, "episode": 15},
+                          {"token": m_tk.group(1), "source": "dropload-io-15", "type": "tv", "id": "tt1405406", "season": 8, "episode": 15},
+                          {"token": m_tk.group(1), "sourceId": "dropload-io-15"},
+                      ]:
+                          pst, pfu, pbody = get(ep_url, ref=fu, data=json.dumps(pld).encode(), ct="application/json")
+                          lines.append(f"  POST {ep_url} {list(pld.keys())} => {pst} {pbody[:500]}")
+              elif "playlatinsrc.co/serial/tt1405406?" in u and st == 200:
+                  lines.append(f"  QRY_HTML_SNIP: {body[:1200]}")
+              elif "download=" in u:
+                  lines.append(f"  CCAM_DL: {body[:800]}")
 
-          bundle = {}
-          for rel, sz, full in html_files:
-              with open(full, "r", encoding="utf-8", errors="replace") as f:
-                  raw = f.read()
-              cleaned = clean_html(raw)
-              bundle[rel] = {"orig_bytes": sz, "html": cleaned}
-
-          payload = json.dumps(bundle, ensure_ascii=False).encode("utf-8")
-          comp = base64.b64encode(zlib.compress(payload, 9)).decode("ascii")
-          print(f"Files: {len(bundle)}, raw cleaned JSON: {len(payload)}, compressed b64: {len(comp)}")
-
+          out = "\n".join(lines)
+          print(out[:4000])
           sha = os.environ["GITHUB_SHA"]
           repo = os.environ["GITHUB_REPOSITORY"]
-          chunk = 58000
-          parts = [comp[i:i+chunk] for i in range(0, len(comp), chunk)]
-          print("Comment parts:", len(parts))
-          for i, part in enumerate(parts):
-              body = f"<!-- SITIOS_HTML {i+1}/{len(parts)} -->\n```\n{part}\n```"
-              subprocess.run(
-                  ["gh", "api", f"repos/{repo}/commits/{sha}/comments", "-f", f"body={body}"],
-                  check=True,
-              )
+          subprocess.run(["gh", "api", f"repos/{repo}/commits/{sha}/comments", "-f", f"body=```\n{out[:58000]}\n```"], check=True)
           PY
