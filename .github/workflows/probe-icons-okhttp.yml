@@ -15,77 +15,72 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q requests curl_cffi pillow
-      - name: Descargar AnimeOnline icon desde Yandex y Google
+      - name: Descargar AnimeOnline icon original o Yandex/Google
         run: |
           python3 - <<'PY'
-          import base64, io, requests
+          import base64, io, time, requests
           from PIL import Image
           from curl_cffi import requests as cfreq
 
-          # Try ver2 direct first, plus Google and Yandex
-          candidates = [
-              ("AONVER", lambda: cfreq.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", impersonate="chrome131", timeout=12)),
-              ("AONG", lambda: requests.get("https://www.google.com/s2/favicons?domain=animeonline.ninja&sz=256", timeout=12)),
-              ("AONYAN", lambda: requests.get("https://favicon.yandex.net/favicon/animeonline.ninja?size=120", timeout=12)),
-          ]
-          for tag, fn in candidates:
-              try:
-                  r = fn()
-                  ct = r.headers.get("Content-Type", "")
-                  if r.status_code == 200 and (ct.startswith("image/") or r.content.startswith(b"\x89PNG") or r.content.startswith(b"\xff\xd8")):
-                      im = Image.open(io.BytesIO(r.content)).convert("RGBA")
-                      buf = io.BytesIO()
-                      im.save(buf, format="PNG", optimize=True)
-                      raw = buf.getvalue()
-                      b64 = base64.b64encode(raw).decode()
-                      open(f"/tmp/{tag}.b64", "w").write(b64)
-                      print(f"{tag}: {im.size} {len(raw)}B b64={len(b64)}")
-                  else:
-                      print(f"{tag}: HTTP {r.status_code} {ct}")
-              except Exception as e:
-                  print(f"{tag}: ERR {e}")
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
+          raw = None
+          src = None
+          for attempt in range(4):
+              for label, fn in [
+                  ("ver2_cf", lambda: cfreq.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", impersonate="chrome131", timeout=12)),
+                  ("ver2_req", lambda: requests.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", headers={"User-Agent": UA}, timeout=12)),
+              ]:
+                  try:
+                      r = fn()
+                      if r.status_code == 200 and r.content.startswith(b"\x89PNG"):
+                          raw = r.content
+                          src = label
+                          break
+                  except Exception:
+                      pass
+              if raw:
+                  break
+              time.sleep(2)
+          if not raw:
+              r = requests.get("https://favicon.yandex.net/favicon/animeonline.ninja?size=120", timeout=12)
+              if r.status_code == 200 and r.content.startswith(b"\x89PNG"):
+                  raw = r.content
+                  src = "yandex_120"
+          assert raw is not None
+          im = Image.open(io.BytesIO(raw))
+          print(f"::notice::AON_SRC={src} size={im.size} len={len(raw)}")
+          b64 = base64.b64encode(raw).decode()
+          open("/tmp/AON.b64", "w").write(b64)
           PY
-      - name: Emitir AONVER p1
+      - name: Emitir p1
         run: |
           python3 - <<'PY'
-          import os
-          p = "/tmp/AONVER.b64"
-          if os.path.exists(p):
-              b64 = open(p).read()
-              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              for i in range(0, min(8, len(parts))):
-                  print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
+          b64 = open("/tmp/AON.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(0, min(8, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
-      - name: Emitir AONVER p2
+      - name: Emitir p2
         run: |
           python3 - <<'PY'
-          import os
-          p = "/tmp/AONVER.b64"
-          if os.path.exists(p):
-              b64 = open(p).read()
-              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              for i in range(8, min(16, len(parts))):
-                  print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
+          b64 = open("/tmp/AON.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(8, min(16, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
-      - name: Emitir AONVER p3
+      - name: Emitir p3
         run: |
           python3 - <<'PY'
-          import os
-          p = "/tmp/AONVER.b64"
-          if os.path.exists(p):
-              b64 = open(p).read()
-              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              for i in range(16, min(24, len(parts))):
-                  print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
+          b64 = open("/tmp/AON.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(16, min(24, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
-      - name: Emitir AONVER p4
+      - name: Emitir p4
         run: |
           python3 - <<'PY'
-          import os
-          p = "/tmp/AONVER.b64"
-          if os.path.exists(p):
-              b64 = open(p).read()
-              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              for i in range(24, len(parts)):
-                  print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
+          b64 = open("/tmp/AON.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(24, min(32, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
