@@ -8,17 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Instalar deps Python + Playwright
-        run: |
-          python3 -m pip install --quiet requests beautifulsoup4 curl_cffi playwright
-          python3 -m playwright install chromium
-      - name: Sonda 5 - playlatinsrc completo, sv5/voe, vimeos/p9/videoapp, bysedikamoum
+      - name: Instalar deps Python
+        run: python3 -m pip install --quiet requests beautifulsoup4 curl_cffi
+      - name: Sonda 6 - script2 playlatinsrc, unlimplay, vimeos p8 vs p9, voe, cinecalidad.my
         run: |
           python3 - <<'PY'
           import base64, json, re, traceback, urllib.parse, requests
           from curl_cffi import requests as cfreq
           from bs4 import BeautifulSoup
-          from playwright.sync_api import sync_playwright
 
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
           DALVIK = "Dalvik/2.1.0 (Linux; U; Android 13; Pixel 7 Build/TQ3A)"
@@ -31,7 +28,6 @@ jobs:
 
           def unpack_packer(html):
               res = []
-              # Split safely at eval(function(p,a,c,k,e,
               for m in re.finditer(r"eval\(function\(p,a,c,k,e,[dr]\)\{", html):
                   sub = html[m.start():m.start()+120000]
                   mm = re.search(r"\}?\('((?:[^'\\]|\\.)*)',\s*(\d+),\s*(\d+),\s*'((?:[^'\\]|\\.)*)'\.split\('\|'\)", sub, re.S)
@@ -50,153 +46,122 @@ jobs:
                   res.append(re.sub(r"\b\w+\b", lambda x: table.get(x.group(0), x.group(0)), p))
               return res
 
-          # ---- 1. REPELISHD / PLAYLATINSRC / UNLIMPLAY ----
+          # ---- 1. PLAYLATINSRC SCRIPT COMPLETO + /api/embed-links + SERIES + UNLIMPLAY ----
           out1 = []
           try:
-              for test_url in [
+              for purl in [
                   "https://playlatinsrc.co/movie/1300968?lang=latino",
-                  "https://playlatinsrc.co/movie/tt32558705?lang=latino",
                   "https://playlatinsrc.co/movie/tt22084616?lang=latino",
+                  "https://playlatinsrc.co/serial/tt0944947/1/1?lang=latino",
               ]:
-                  rp = requests.get(test_url, headers={"User-Agent": UA, "Referer": "https://repelishd.hair/"}, timeout=20)
-                  out1.append(f"=== {test_url} HTTP={rp.status_code} len={len(rp.text)} ===")
+                  rp = requests.get(purl, headers={"User-Agent": UA, "Referer": "https://repelishd.hair/"}, timeout=20)
                   soup = BeautifulSoup(rp.text, "html.parser")
-                  out1.append("title=" + repr(soup.title.string if soup.title else None))
-                  out1.append("iframes=" + str([i.get("src") for i in soup.select("iframe")]))
-                  out1.append("data_attrs=" + str([el.attrs for el in soup.select("[data-resolve-token],[data-alt-url],[data-id]")]))
-                  for idx, sc in enumerate(soup.select("script")):
-                      txt = (sc.string or "").strip()
-                      src = sc.get("src")
-                      if src:
-                          out1.append(f"  script[{idx}] src={src}")
-                      elif txt:
-                          out1.append(f"  script[{idx}] len={len(txt)} head={txt[:700]!r}")
-                          if len(txt) > 700:
-                              out1.append(f"  script[{idx}] tail={txt[700:2200]!r}")
-                  # Also run Playwright on playlatinsrc to see network requests & DOM after JS!
-                  with sync_playwright() as pw:
-                      b = pw.chromium.launch(headless=True)
-                      p = b.new_page(user_agent=UA)
-                      p.set_extra_http_headers({"Referer": "https://repelishd.hair/"})
-                      reqs = []
-                      p.on("response", lambda r: reqs.append(f"{r.status} {r.request.method} {r.url[:130]}"))
-                      p.goto(test_url, wait_until="networkidle", timeout=25000)
-                      p.wait_for_timeout(2000)
-                      dom_ifs = p.eval_on_selector_all("iframe", "els => els.map(e => e.src)")
-                      body_txt = p.inner_text("body")[:300]
-                      b.close()
-                      out1.append(f"  PW dom_iframes={dom_ifs} body={body_txt!r}")
-                      out1.append("  PW net=" + str([x for x in reqs if any(k in x for k in ("api","resolve","embed","unlim","drop","super","m3u8","mp4","playlatin"))][:15]))
-                      if dom_ifs:
-                          for ifu in dom_ifs[:2]:
-                              ru = requests.get(ifu, headers={"User-Agent": UA, "Referer": test_url}, timeout=20)
-                              out1.append(f"  embed_iframe {ifu}: HTTP={ru.status_code} len={len(ru.text)} head={ru.text[:500]!r}")
-              # Also inspect unlimplay directly:
-              ru2 = requests.get("https://unlimplay.com/f/embed/movie/tt32558705", headers={"User-Agent": UA, "Referer": "https://playlatinsrc.co/"}, timeout=20)
-              out1.append(f"unlimplay tt32558705: HTTP={ru2.status_code} len={len(ru2.text)} body={ru2.text[:600]!r}")
+                  sc = [s.string for s in soup.select("script") if s.string and ("embed-links" in s.string or "ALT_URL" in s.string or "resolve" in s.string)]
+                  out1.append(f"=== {purl} HTTP={rp.status_code} matching_scripts={len(sc)} ===")
+                  if sc and "1300968" in purl:
+                      # Dump the whole script in full!
+                      out1.append(sc[0])
+                  elif sc:
+                      # Dump lines with fetch/api/JSON/ALT_URL/token
+                      for line in sc[0].splitlines():
+                          if any(k in line for k in ("fetch", "api", "token", "ALT_URL", "type", "season", "episode", "JSON")):
+                              out1.append("  " + line.strip())
+              # Also check unlimplay scripts!
+              ru = requests.get("https://unlimplay.com/f/embed/movie/tt32558705", headers={"User-Agent": UA, "Referer": "https://playlatinsrc.co/"}, timeout=20)
+              su = BeautifulSoup(ru.text, "html.parser")
+              out1.append(f"=== UNLIMPLAY tt32558705 HTTP={ru.status_code} scripts={len(su.select('script'))} ===")
+              for idx, s in enumerate(su.select("script")):
+                  t = (s.string or "").strip()
+                  if t:
+                      out1.append(f"  unlim_script[{idx}] len={len(t)}: {t[:1200]}")
+              ru2 = requests.get("https://unlimplay.com/f/embed/movie/tt22084616", headers={"User-Agent": UA, "Referer": "https://playlatinsrc.co/"}, timeout=20)
+              su2 = BeautifulSoup(ru2.text, "html.parser")
+              for idx, s in enumerate(su2.select("script")):
+                  t = (s.string or "").strip()
+                  if t and len(t) > 100:
+                      out1.append(f"  unlim2208_script[{idx}] len={len(t)}: {t[:900]}")
           except Exception:
               out1.append(traceback.format_exc())
-          emit("probe5_repelishd", out1)
+          emit("probe6_playlatin", out1)
 
-          # ---- 2. REPELIS24.SHOP: sv5.ibra.lat con Origin+Referer+Dalvik vs UA, y voe.sx ----
+          # ---- 2. VIMEOS.NET + P8 vs P9 + OTROS TITULOS DE CINECALIDAD.AM Y REPELIS24.CZ ----
           out2 = []
-          try:
-              u1 = "https://repelis24.shop/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha/"
-              r1 = cfreq.get(u1, impersonate="chrome", headers={"Referer": "https://repelis24.shop/"}, timeout=30)
-              for i, li in enumerate(BeautifulSoup(r1.text, "html.parser").select("li[data-server]")):
-                  b64 = li.get("data-server", "")
-                  dec = base64.b64decode(b64 + "=" * (-len(b64) % 4)).decode("utf-8", "ignore")
-                  out2.append(f"[{i}] dec={dec}")
-                  if "nupload.my/watch/" in dec:
-                      rw = requests.get(dec, headers={"User-Agent": UA, "Referer": u1}, timeout=20)
-                      m_off = re.search(r"parseInt\(atob\([^;{}]*?-\s*(\d+)", rw.text)
-                      m_for = re.search(r"\b([A-Za-z_]\w*)\.forEach\(", rw.text)
-                      arr_name = m_for.group(1)
-                      m_arr = next(m for m in re.finditer(r"var\s+([A-Za-z_]\w*)\s*=\s*\[(.*?)\]\s*;", rw.text, re.S) if m.group(1) == arr_name)
-                      off = int(m_off.group(1))
-                      base_u = "".join(chr(int(re.sub(r"\D+", "", base64.b64decode(x).decode())) - off) for x in re.findall(r'["\']([^"\']+)["\']', m_arr.group(2)))
-                      ses = re.search(r'var\s+sesz\s*=\s*["\']([^"\']+)["\']', rw.text).group(1)
-                      full_u = f"{base_u}?s={ses}"
-                      rm = requests.get(full_u, headers={"Referer": "https://nupload.my/", "Origin": "https://nupload.my", "User-Agent": DALVIK}, timeout=20)
-                      seg = next((l.strip() for l in rm.text.splitlines() if l.strip() and not l.startswith("#")), None)
-                      out2.append(f"  m3u8 HTTP={rm.status_code} final={rm.url} seg={seg}")
-                      if seg:
-                          su = urllib.parse.urljoin(rm.url, seg)
-                          for lbl, h in [
-                              ("Orig+Ref+Dalvik", {"Origin": "https://nupload.my", "Referer": "https://nupload.my/", "User-Agent": DALVIK}),
-                              ("Orig+Ref+Chrome", {"Origin": "https://nupload.my", "Referer": "https://nupload.my/", "User-Agent": UA}),
-                              ("ONLY_Orig+Dalvik", {"Origin": "https://nupload.my", "User-Agent": DALVIK}),
-                              ("ONLY_Ref+Dalvik", {"Referer": "https://nupload.my/", "User-Agent": DALVIK}),
-                          ]:
-                              rs = requests.get(su, headers=h, timeout=15)
-                              out2.append(f"    {lbl}: HTTP {rs.status_code} bytes={len(rs.content)}")
-                  elif "url=" in dec:
-                      # Check nupload.my/iframe/?url=... and voe.sx directly!
-                      rif = requests.get(dec, headers={"User-Agent": UA, "Referer": u1}, timeout=20, allow_redirects=False)
-                      out2.append(f"  nupload/iframe HTTP={rif.status_code} loc={rif.headers.get('Location')} head={rif.text[:250]!r}")
-                      qs = urllib.parse.parse_qs(urllib.parse.urlparse(dec).query)
-                      voe_u = qs.get("url", [""])[0]
-                      if voe_u:
-                          rv = requests.get(voe_u, headers={"User-Agent": UA, "Referer": dec}, timeout=20)
-                          out2.append(f"  voe.sx HTTP={rv.status_code} body={rv.text[:350]!r}")
-                          m_redir = re.search(r"window\.location\.href\s*=\s*['\"]([^'\"]+)['\"]", rv.text)
-                          if m_redir:
-                              rv2 = requests.get(m_redir.group(1), headers={"User-Agent": UA, "Referer": voe_u}, timeout=20)
-                              out2.append(f"  voe target {m_redir.group(1)} HTTP={rv2.status_code} len={len(rv2.text)} m3u8={re.findall(r'https?://[^\"\\x27<> ]+m3u8[^\"\\x27<> ]*', rv2.text)[:3]}")
-          except Exception:
-              out2.append(traceback.format_exc())
-          emit("probe5_shop", out2)
-
-          # ---- 3. CINECALIDAD.AM: vimeos.net + p9.vimeos.zip + videoapp.zip + cinecalidad.am headers ----
-          out3 = []
           try:
               am_u = "https://www.cinecalidad.am/ver-pelicula/007-otro-dia-para-morir/"
               rv = requests.get("https://vimeos.net/embed-d0ybu5jpxcem.html", headers={"User-Agent": UA, "Referer": am_u}, timeout=20)
               unps = unpack_packer(rv.text)
-              out3.append(f"vimeos len={len(rv.text)} unps_count={len(unps)}")
-              for idx, u in enumerate(unps):
-                  out3.append(f"unp[{idx}] len={len(u)} head={u[:250]!r}")
-                  m3s = re.findall(r'file\s*:\s*["\'](https?://[^"\']+\.m3u8[^"\']*)["\']', u)
-                  out3.append(f"  m3s={m3s}")
-                  if m3s:
-                      for lbl, h in [
-                          ("Dalvik+Ref=vimeos", {"Referer": "https://vimeos.net/", "User-Agent": DALVIK}),
-                          ("Chrome+Ref+Orig=vimeos", {"Referer": "https://vimeos.net/", "Origin": "https://vimeos.net", "User-Agent": UA}),
-                          ("Dalvik_NOHDR", {"User-Agent": DALVIK}),
-                      ]:
-                          rm = requests.get(m3s[0], headers=h, timeout=15)
-                          out3.append(f"  master [{lbl}]: HTTP {rm.status_code} len={len(rm.text)}")
-                          if idx == 0 and lbl == "Dalvik+Ref=vimeos" and rm.status_code == 200:
-                              for sub_u in re.findall(r"https?://[^\s\"']+", rm.text):
-                                  if "iframes" in sub_u: continue
-                                  rc = requests.get(sub_u, headers=h, timeout=15)
-                                  seg = next((l.strip() for l in rc.text.splitlines() if l.strip() and not l.startswith("#")), None)
-                                  rseg = requests.get(urllib.parse.urljoin(rc.url, seg), headers=h, timeout=15) if seg else None
-                                  # Also check segment WITHOUT referer (in case ExoPlayer drops referer on segments or audio!)
-                                  rseg_no = requests.get(urllib.parse.urljoin(rc.url, seg), headers={"User-Agent": DALVIK}, timeout=15) if seg else None
-                                  out3.append(f"    {sub_u.split('/')[-2]}/{sub_u.split('/')[-1].split('?')[0]}: pl={rc.status_code} seg(ref)={rseg.status_code if rseg else None} seg(nohdr)={rseg_no.status_code if rseg_no else None}")
-                      for sub_vtt in ["https://p9.vimeos.zip/vtt/01/00015/d0ybu5jpxcem_spa.vtt", "https://vimeos.net/srt/empty.srt"]:
-                          rvtt1 = requests.get(sub_vtt, headers={"User-Agent": DALVIK}, timeout=15)
-                          rvtt2 = requests.get(sub_vtt, headers={"Referer": "https://vimeos.net/", "User-Agent": UA}, timeout=15)
-                          out3.append(f"  sub {sub_vtt.split('/')[-1]}: nohdr={rvtt1.status_code} ref+UA={rvtt2.status_code}")
+              if unps:
+                  out2.append("=== vimeos unp[0] FULL ===\n" + unps[0])
+                  m3s = re.findall(r'file\s*:\s*["\'](https?://[^"\']+\.m3u8[^"\']*)["\']', unps[0])
+                  for u in m3s:
+                      out2.append(f"ORIG m3u8={u}")
+                      r0 = requests.get(u, headers={"Referer": "https://vimeos.net/", "Origin": "https://vimeos.net", "User-Agent": UA}, timeout=15)
+                      out2.append(f"  ORIG -> HTTP {r0.status_code} len={len(r0.text)} head={r0.text[:140]!r}")
+                      # Check srv= param substitution (e.g. p8.vimeos.zip -> p9.vimeos.zip)
+                      m_srv = re.search(r"[?&]srv=([a-z0-9]+)", u)
+                      if m_srv:
+                          srv = m_srv.group(1)
+                          u_srv = re.sub(r"https://[^.]+(\.vimeos\.zip/)", f"https://{srv}\\1", u)
+                          rs = requests.get(u_srv, headers={"Referer": "https://vimeos.net/", "Origin": "https://vimeos.net", "User-Agent": UA}, timeout=15)
+                          rs_d = requests.get(u_srv, headers={"Referer": "https://vimeos.net/", "User-Agent": DALVIK}, timeout=15)
+                          out2.append(f"  SRV={srv} URL={u_srv[:90]} -> Chrome+Orig={rs.status_code} len={len(rs.text)} | Dalvik+Ref={rs_d.status_code} len={len(rs_d.text)}")
 
-              # Also check cinecalidad.am with Android / OkHttp / Dalvik UA (does cinecalidad.am or videoapp fail on something?)
-              ram_d = requests.get(am_u, headers={"User-Agent": DALVIK}, timeout=20)
-              out3.append(f"cinecalidad.am(Dalvik): HTTP={ram_d.status_code} len={len(ram_d.text)}")
+              # Test 3 more movies from cinecalidad.am homepage + check videoapp.zip full JS
               rvap = requests.get("https://videoapp.zip/e/movie/36669", headers={"User-Agent": UA, "Referer": am_u}, timeout=20)
-              out3.append(f"videoapp.zip: HTTP={rvap.status_code} head={rvap.text[:400]!r}")
+              out2.append(f"videoapp HTML len={len(rvap.text)} iframes={re.findall(r'src=[\"\x27]([^\"\x27]+)', rvap.text)}")
+              for m_sc in re.findall(r"<script[^>]*>(.*?)</script>", rvap.text, re.S):
+                  if len(m_sc.strip()) > 30:
+                      out2.append("  videoapp_sc: " + m_sc.strip()[:700])
+
+              ram_home = requests.get("https://www.cinecalidad.am/", headers={"User-Agent": UA}, timeout=20)
+              cards = [a.get("href") for a in BeautifulSoup(ram_home.text, "html.parser").select("#archive-content > article.item a[href]") if "/ver-pelicula/" in (a.get("href") or "")]
+              seen_c = []
+              for c in cards:
+                  if c not in seen_c: seen_c.append(c)
+              for cu in seen_c[:4]:
+                  rc = requests.get(cu, headers={"User-Agent": UA}, timeout=20)
+                  sc = BeautifulSoup(rc.text, "html.parser")
+                  opts = [(li.get_text(strip=True), li.get("data-option","")) for li in sc.select("#playeroptionsul li.dooplay_player_option[data-option]")]
+                  dls = [(a.get_text(strip=True), a.get("href","")) for a in sc.select("#panel_descarga a[href]")]
+                  out2.append(f"AM {cu.split('/')[-2]}: opts={[(n, u[:75]) for n,u in opts]} dls={[(n,u[:60]) for n,u in dls[:5]]}")
+                  for n, u in opts:
+                      if "zopass=" in u:
+                          z = urllib.parse.parse_qs(urllib.parse.urlparse(u).query).get("zopass", [""])[0]
+                          u = base64.b64decode(z + "=" * (-len(z) % 4)).decode("utf-8", "ignore")
+                      if "vimeos.net" in u:
+                          rvx = requests.get(u, headers={"User-Agent": UA, "Referer": cu}, timeout=15)
+                          ux = unpack_packer(rvx.text)
+                          m3x = re.findall(r'file\s*:\s*["\'](https?://[^"\']+\.m3u8[^"\']*)["\']', ux[0] if ux else rvx.text)
+                          if m3x:
+                              rmx = requests.get(m3x[0], headers={"Referer": "https://vimeos.net/", "User-Agent": DALVIK}, timeout=15)
+                              out2.append(f"  vimeos {m3x[0].split('/')[2]} -> HTTP {rmx.status_code}")
+          except Exception:
+              out2.append(traceback.format_exc())
+          emit("probe6_am", out2)
+
+          # ---- 3. VOE.SX (caseyseemavoid) + CINECALIDAD.MY (bysedikamoum) ----
+          out3 = []
+          try:
+              rv = requests.get("https://caseyseemavoid.com/e/00sgzqjr7mqt", headers={"User-Agent": UA, "Referer": "https://voe.sx/"}, timeout=20)
+              sv = BeautifulSoup(rv.text, "html.parser")
+              out3.append(f"casey HTTP={rv.status_code} len={len(rv.text)}")
+              for sc in sv.select("script"):
+                  t = (sc.string or "").strip()
+                  if t:
+                      out3.append(f"  sc type={sc.get('type')} len={len(t)} head={t[:300]!r}")
+              rmy = requests.get("https://www.cinecalidad.my/", headers={"User-Agent": UA}, timeout=20)
+              my_cards = [a.get("href") for a in BeautifulSoup(rmy.text, "html.parser").select("div.home_post_cont a[href]") if "/pelicula/" in (a.get("href") or "")]
+              if my_cards:
+                  rmp = requests.get(my_cards[0], headers={"User-Agent": UA}, timeout=20)
+                  smy = BeautifulSoup(rmp.text, "html.parser")
+                  links_my = [(a.get("service"), a.get("data"), a.get("href")) for a in smy.select("#panel_online a.onlinelink[service]")]
+                  out3.append(f"MY {my_cards[0].split('/')[-2]}: {links_my[:6]}")
+                  for svc, dat, href in links_my:
+                      if svc == "OnlineFilemoon" and dat:
+                          rb = requests.get(f"https://bysedikamoum.com/api/videos/{dat}/embed/details", headers={"User-Agent": UA}, timeout=15)
+                          out3.append(f"  byse details HTTP={rb.status_code} body={rb.text[:250]}")
+                          break
           except Exception:
               out3.append(traceback.format_exc())
-          emit("probe5_am", out3)
-
-          # ---- 4. CHECK 5th & 4th SITES: repelis24.cz & cinecalidad.my ----
-          out4 = []
-          try:
-              rcz = requests.get("https://repelis24.cz/", headers={"User-Agent": UA}, timeout=20)
-              out4.append(f"repelis24.cz HTTP={rcz.status_code} len={len(rcz.text)}")
-              rmy = requests.get("https://cinecalidad.my/", headers={"User-Agent": UA}, timeout=20)
-              out4.append(f"cinecalidad.my HTTP={rmy.status_code} len={len(rmy.text)}")
-          except Exception:
-              out4.append(traceback.format_exc())
-          emit("probe5_others", out4)
+          emit("probe6_voe_my", out3)
           PY
