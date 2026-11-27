@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_cz_r5:
+  probe_cz_r6:
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -16,13 +16,6 @@ jobs:
           python3 - <<'PY'
           import base64, json, re, zlib
           from playwright.sync_api import sync_playwright
-
-          def body_clean(html):
-              m = re.search(r'<body\b[^>]*>(.*)', html, re.S | re.I)
-              b = m.group(1) if m else html
-              b = re.sub(r'<style\b[^>]*>.*?</style>', '', b, flags=re.S | re.I)
-              b = re.sub(r'<svg\b[^>]*>.*?</svg>', '<svg/>', b, flags=re.S | re.I)
-              return b
 
           out = {}
           with sync_playwright() as p:
@@ -33,7 +26,7 @@ jobs:
 
               reqs = []
               def on_resp(r):
-                  if "repelis24.cz" in r.url and ("ajax" in r.url or "wp-json" in r.url or "doo" in r.url or "dpu" in r.url or ".js" in r.url):
+                  if "repelis24.cz" in r.url and ("ajax" in r.url or "wp-json" in r.url or "doo" in r.url):
                       try:
                           txt = r.text()
                       except Exception:
@@ -43,7 +36,7 @@ jobs:
                           "method": r.request.method,
                           "post": (r.request.post_data or "")[:500],
                           "status": r.status,
-                          "body": txt[:2500]
+                          "body": txt[:1500]
                       })
               page.on("response", on_resp)
 
@@ -53,44 +46,44 @@ jobs:
                       page.wait_for_timeout(7000)
                   return (resp.status if resp else -1), page.content()
 
-              # 1. Home sections + nav genres + Peliculas pagination
+              # 1. Home sections + genres + Peliculas pagination
               _, h_home = go("https://repelis24.cz/")
-              out["home_secs"] = re.findall(r'<h[23][^>]*class="[^"]*dpu-sec-title[^"]*"[^>]*>.*?</h[23]>', h_home, re.S)
-              out["nav_links"] = re.findall(r'<a[^>]+href="(https://repelis24\.cz/[^"]+)"[^>]*>([^<]{1,40})</a>', h_home)[:80]
+              out["home_secs"] = re.findall(r'<section class="chk-sec".*?<div class="dpu-sec-head">.*?</div>', h_home, re.S)
+              out["nav_links"] = re.findall(r'href="(https://repelis24\.cz/genero/[^"]+|https://repelis24\.cz/peliculas/[^"]*|https://repelis24\.cz/series/[^"]*)"[^>]*>([^<]{1,40})<', h_home)[:50]
 
               _, h_pel = go("https://repelis24.cz/peliculas/")
               m_pag = re.search(r'<div[^>]+class="[^"]*pag[^"]*"[^>]*>.*?</div>', h_pel, re.S)
-              out["pel_pag"] = m_pag.group(0) if m_pag else re.findall(r'page/2/', h_pel)
+              out["pel_pag"] = m_pag.group(0)[:1000] if m_pag else re.findall(r'page/\d+/', h_pel)[:10]
 
-              # 2. Movie: capture player JS & click dropdown + option 1 & 4
+              # 2. Movie: player JS + click option 1 & 4 + links
               reqs.clear()
               _, h_mov = go("https://repelis24.cz/peliculas/codigo-venganza-2/")
-              out["mov_scripts"] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', h_mov, re.S) if any(k in s for k in ("admin-ajax", "dooplay_player_option", "dtAjax", "dpu-dropdown", "doo_player"))]
-              out["mov_dl"] = re.findall(r'https://repelis24\.cz/links/[^"\'\s<]+', h_mov)
+              out["mov_scripts"] = [s[:2000] for s in re.findall(r'<script[^>]*>(.*?)</script>', h_mov, re.S) if any(k in s for k in ("admin-ajax", "dooplay_player_option", "dtAjax", "doo_player"))][:3]
+              out["mov_dl"] = re.findall(r'https://repelis24\.cz/links/[^"\'\s<]+', h_mov)[:5]
               page.evaluate("""() => {
                   const opt = document.querySelector('#player-option-1');
                   if (opt) opt.click();
               }""")
-              page.wait_for_timeout(2500)
+              page.wait_for_timeout(2000)
               page.evaluate("""() => {
                   const opt = document.querySelector('#player-option-4');
                   if (opt) opt.click();
               }""")
-              page.wait_for_timeout(2500)
+              page.wait_for_timeout(2000)
               out["mov_iframe_after"] = page.evaluate("() => Array.from(document.querySelectorAll('#dooplay_player_response iframe, iframe')).map(i => i.src)")
               out["mov_reqs"] = list(reqs)
 
               # 3. Series: click episode card 1 & inspect player JS / AJAX
               reqs.clear()
               _, h_ser = go("https://repelis24.cz/series/tu-amigo-y-vecino-spider-man/")
-              out["ser_scripts"] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', h_ser, re.S) if any(k in s for k in ("dpu-episode-card", "dpu-ajax-playerhub", "admin-ajax", "data-episode", "dtAjax"))]
-              out["ser_dl"] = re.findall(r'https://repelis24\.cz/links/[^"\'\s<]+', h_ser)
+              out["ser_scripts"] = [s[:2000] for s in re.findall(r'<script[^>]*>(.*?)</script>', h_ser, re.S) if any(k in s for k in ("dpu-episode-card", "dpu-ajax-playerhub", "admin-ajax", "data-episode"))][:3]
+              out["ser_dl"] = re.findall(r'https://repelis24\.cz/links/[^"\'\s<]+', h_ser)[:5]
               page.evaluate("""() => {
                   const ep = document.querySelector('.dpu-episode-card');
                   if (ep) ep.click();
               }""")
-              page.wait_for_timeout(3000)
-              out["ser_hub_html"] = page.evaluate("() => { const h = document.querySelector('#dpu-ajax-playerhub'); return h ? h.innerHTML.slice(0, 3000) : ''; }")
+              page.wait_for_timeout(2500)
+              out["ser_hub_html"] = page.evaluate("() => { const h = document.querySelector('#dpu-ajax-playerhub'); return h ? h.innerHTML.slice(0, 2000) : ''; }")
               out["ser_reqs"] = list(reqs)
 
               b.close()
@@ -99,149 +92,5 @@ jobs:
           b64 = base64.b64encode(raw).decode("ascii")
           chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
           for idx, ch in enumerate(chunks[:9]):
-              print(f"::notice title=CZ5_{idx+1}_{len(chunks)}::{ch}")
-          PY
-
-  probe_sh_movie_r5:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          def fetch(u, hdrs=None):
-              h = {"User-Agent": UA, "Accept": "text/html,*/*", "Accept-Language": "es-ES,es;q=0.9"}
-              if hdrs: h.update(hdrs)
-              req = urllib.request.Request(u, headers=h)
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
-              except urllib.error.HTTPError as e:
-                  return e.code, u, e.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, u, str(e)
-
-          def body_clean(html):
-              m = re.search(r'<body\b[^>]*>(.*)', html, re.S | re.I)
-              b = m.group(1) if m else html
-              b = re.sub(r'<style\b[^>]*>.*?</style>', '', b, flags=re.S | re.I)
-              b = re.sub(r'<svg\b[^>]*>.*?</svg>', '<svg/>', b, flags=re.S | re.I)
-              idx = b.find('col-12 col-sm-12 col-md-8')
-              return b[idx:] if idx >= 0 else b
-
-          out = {}
-          # Fresh nupload.my -> ibra.lat HLS check
-          c, _, nh = fetch("https://nupload.my/watch/Kvo7MOLmn5x5XFc8g6f7ZuSC2VIOxkZDyvjq78XIQY0", {"Referer": "https://repelis24.shop/"})
-          m_arr = re.search(r'var\s+\w+\s*=\s*(\[[^\]]+\])', nh)
-          m_off = re.search(r'\)\s*-\s*(\d+)\s*\)', nh)
-          m_ses = re.search(r'var\s+sesz\s*=\s*"([^"]+)"', nh)
-          if m_arr and m_off and m_ses:
-              arr = json.loads(m_arr.group(1))
-              off = int(m_off.group(1))
-              base_u = "".join(chr(int(re.sub(r'\D', '', base64.b64decode(v).decode())) - off) for v in arr)
-              hls_u = base_u + "?s=" + m_ses.group(1)
-              hc_ref, hfu_ref, hb_ref = fetch(hls_u, {"Referer": "https://nupload.my/"})
-              hc_no, _, hb_no = fetch(hls_u, {})
-              out["nupload_hls"] = {"base": base_u, "hls_url": hls_u, "with_ref": hc_ref, "no_ref": hc_no, "body": hb_ref[:1500]}
-
-          # Single request per runner to repelis24.shop/pelicula/
-          mc, mfu, mh = fetch("https://repelis24.shop/pelicula/the-accountant-2-el-contador-2/")
-          out["sh_movie_code"] = mc
-          out["sh_movie_body"] = body_clean(mh)[:14000]
-
-          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-          b64 = base64.b64encode(raw).decode("ascii")
-          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks[:9]):
-              print(f"::notice title=SHM5_{idx+1}_{len(chunks)}::{ch}")
-          PY
-
-  probe_sh_serie_r5:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          def fetch(u):
-              req = urllib.request.Request(u, headers={"User-Agent": UA, "Accept": "text/html,*/*", "Accept-Language": "es-ES,es;q=0.9"})
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
-              except urllib.error.HTTPError as e:
-                  return e.code, u, e.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, u, str(e)
-
-          def body_clean(html):
-              m = re.search(r'<body\b[^>]*>(.*)', html, re.S | re.I)
-              b = m.group(1) if m else html
-              b = re.sub(r'<style\b[^>]*>.*?</style>', '', b, flags=re.S | re.I)
-              b = re.sub(r'<svg\b[^>]*>.*?</svg>', '<svg/>', b, flags=re.S | re.I)
-              idx = b.find('col-12 col-sm-12 col-md-8')
-              return b[idx:] if idx >= 0 else b
-
-          # Single request per runner to repelis24.shop/temporada/
-          tc, tfu, th = fetch("https://repelis24.shop/temporada/stranger-things-zoqv-1/")
-          out = {"sh_temp_code": tc, "sh_temp_body": body_clean(th)[:14000]}
-          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-          b64 = base64.b64encode(raw).decode("ascii")
-          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks[:9]):
-              print(f"::notice title=SHS5_{idx+1}_{len(chunks)}::{ch}")
-          PY
-
-  probe_hd_my_r5:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          def fetch(u, hdrs=None):
-              h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "es-ES,es;q=0.9"}
-              if hdrs: h.update(hdrs)
-              req = urllib.request.Request(u, headers=h)
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
-              except urllib.error.HTTPError as e:
-                  return e.code, u, e.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return -1, u, str(e)
-
-          out = {}
-          # 1. repelishd.surf full __next_f pushes for episodio (skip footer push!)
-          ec, _, eh = fetch("https://repelishd.surf/ver-serie/1413-american-horror-story-online-espanol/temporada-2/episodio-1")
-          pushes = re.findall(r'<script>self\.__next_f\.push\((.*?)\)</script>', eh, re.S)
-          out["hd_ep2_push_summaries"] = [{"i": i, "len": len(p), "head": p[:180]} for i, p in enumerate(pushes)]
-          # Find the main page push(es) containing mediaId / episodi / playlatinsrc / tt1844624
-          for i, p in enumerate(pushes):
-              if "tt1844624" in p or "episodi" in p or "playlatinsrc" in p or "Briarcliff" in p or len(p) > 4000:
-                  out[f"hd_push_{i}"] = p[:14000]
-
-          # 2. unlimplay assets js + inline __ulpRun
-          uc, _, uh = fetch("https://unlimplay.com/f/embed/movie/tt0371746", {"Referer": "https://playlatinsrc.co/"})
-          m_js = re.search(r'<script src="(/assets/ulp/[^"]+)"', uh)
-          m_call = re.search(r'__ulpRun\((.*)', uh, re.S)
-          out["ulp_call"] = m_call.group(1)[:4000] if m_call else ""
-          if m_js:
-              jc, _, jh = fetch("https://unlimplay.com" + m_js.group(1), {"Referer": "https://unlimplay.com/"})
-              out["ulp_js"] = {"url": m_js.group(1), "code": jc, "len": len(jh), "content": jh[:5000]}
-
-          # 3. cinecalidad.my: bysedikamoum API details + peliculas-por-ano body + verify a 4k/genre/year url
-          bc, bfu, bbody = fetch("https://bysedikamoum.com/api/videos/c2ioduptr3bc/embed/details", {"Referer": "https://bysedikamoum.com/e/c2ioduptr3bc"})
-          out["bysedikamoum_details"] = {"code": bc, "body": bbody[:1500]}
-          ac, _, ah = fetch("https://www.cinecalidad.my/peliculas-por-ano/")
-          m_b = re.search(r'<div id=content[^>]*>.*?</div\s*>\s*<div class=clear', ah, re.S)
-          out["my_anos_body"] = m_b.group(0)[:5000] if m_b else ah[ah.find("<h1>"):ah.find("<h1>")+5000] if "<h1>" in ah else ah[-6000:]
-
-          raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
-          b64 = base64.b64encode(raw).decode("ascii")
-          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
-          for idx, ch in enumerate(chunks[:9]):
-              print(f"::notice title=HDMY5_{idx+1}_{len(chunks)}::{ch}")
+              print(f"::notice title=CZ6_{idx+1}_{len(chunks)}::{ch}")
           PY
