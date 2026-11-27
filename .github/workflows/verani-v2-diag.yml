@@ -115,7 +115,7 @@ jobs:
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
-          chunks = [b64[i:i+7500] for i in range(0, len(b64), 7500)]
+          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
           print(f"SITE raw={len(raw)} b64={len(b64)} chunks={len(chunks)}")
           assert len(chunks) <= 45, f"Too many chunks: {len(chunks)}"
           for idx, ch in enumerate(chunks):
@@ -218,7 +218,7 @@ jobs:
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
-          chunks = [b64[i:i+7500] for i in range(0, len(b64), 7500)]
+          chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
           print(f"HOSTS raw={len(raw)} b64={len(b64)} chunks={len(chunks)}")
           assert len(chunks) <= 45, f"Too many chunks: {len(chunks)}"
           for idx, ch in enumerate(chunks):
