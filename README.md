@@ -5,6 +5,7 @@ Repositorio de extensiones no oficiales en **español latino (`es-419`)** para C
 ## Complementos incluidos
 
 - **AnimeOnlineNinja** (anime y películas)
+- **Latanime** (anime, películas y OVAs)
 - **VerAni** (anime y películas)
 - **CinecalidadAM** (películas y series)
 - **CinecalidadMY** (películas)
