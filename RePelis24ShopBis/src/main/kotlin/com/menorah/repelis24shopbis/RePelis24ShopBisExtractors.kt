@@ -13,10 +13,10 @@ internal object NuploadMyDecoder {
     private val ARRAY_VAR_REGEX = Regex("""var\s+([A-Za-z_]\w*)\s*=\s*\[(.*?)\]\s*;""", RegexOption.DOT_MATCHES_ALL)
     private val QUOTED_STR_REGEX = Regex("""["']([^"']+)["']""")
     private val FOREACH_OFFSET_REGEX = Regex(
-        """([A-Za-z_]\w*)\.forEach\([^)]*\)\s*\{[^}]*parseInt\(atob\([^)]+\)\.replace\([^)]+\)\)\s*-\s*(\d+)""",
+        """\b([A-Za-z_]\w*)\.forEach\([^;{}]*\{[^;{}]*parseInt\(atob\([^;{}]*?-\s*(\d+)""",
         RegexOption.DOT_MATCHES_ALL,
     )
-    private val GENERIC_OFFSET_REGEX = Regex("""parseInt\(atob\([^)]+\)[^;)]*\)\s*-\s*(\d+)""")
+    private val GENERIC_OFFSET_REGEX = Regex("""parseInt\(atob\([^;{}]*?-\s*(\d+)""")
     private val SESZ_REGEX = Regex("""var\s+sesz\s*=\s*["']([^"']+)["']""")
     private val NON_DIGIT_REGEX = Regex("""\D+""")
 

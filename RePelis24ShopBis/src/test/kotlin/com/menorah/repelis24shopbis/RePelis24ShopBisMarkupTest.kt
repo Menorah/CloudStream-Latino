@@ -105,21 +105,12 @@ class RePelis24ShopBisMarkupTest {
 
     @Test
     fun decodesRealNuploadObfuscatedBaseUrlAndSessionToken() {
-        // Synthetic payload following the exact real nupload.my pattern: each Base64 token decodes to "<noise><charCode + offset><noise>"
-        val target = "https://sv3.ibra.lat/"
-        val offset = 7543500L
-        val encoder = java.util.Base64.getEncoder()
-        val arrayTokens = target.mapIndexed { idx, ch ->
-            val raw = "ab${ch.code + offset}xy$idx"
-            "\"" + encoder.encodeToString(raw.toByteArray(Charsets.UTF_8)) + "\""
-        }.joinToString(",")
-
         val html = """
             <script>
-              var vaAoJOgRKU = [$arrayTokens];
+              var vaAoJOgRKU = ["dW1XeDc1NDM2MjFETVdBb2E=","RGJLRTc1NDM2MzNHaFFoSkY=","YnFTVTc1NDM2MzNnUkNPckc=","aWJ3TTc1NDM2MjlXQVR4a0o=","eWJ5VTc1NDM2MzJrY3hjcmI=","eGhVWDc1NDM1NzVFRVhKY1M=","RFBqaDc1NDM1NjRQQ25Da0U=","VVB4Vjc1NDM1NjRXdVJNaXg=","a3JuZzc1NDM2MzJSVVdCWWc=","bWNmbzc1NDM2MzVTQUFVSXk=","QmdacDc1NDM1NjhYeUN3WGk=","SmV4dzc1NDM1NjNvbldhREo=","bWN6Yjc1NDM2MjJYWkRxQms=","Q2FlSzc1NDM2MTVBWnNYbk8=","Q0tBUzc1NDM2MzFST2VGRG8=","dkdhVjc1NDM2MTRISE5HTUI=","RnlGZjc1NDM1NjNWdkxibkw=","RVBFbjc1NDM2MjVLdUl6Rmk=","RGxrSDc1NDM2MTRGbnV6d3E=","SmRwdDc1NDM2MzNTV21PeGQ=","cWhNbTc1NDM1NjRzeUpMSEw="];
             </script>
             <script>
-              var vgpKOING = ""; vaAoJOgRKU.forEach(function Oym(value) { vgpKOING += String.fromCharCode(parseInt(atob(value).replace(/\D/g,'')) - $offset); } );
+              var vgpKOING = ""; vaAoJOgRKU.forEach(function Oym(value) { vgpKOING += String.fromCharCode(parseInt(atob(value).replace(/\D/g,'')) - 7543517); } );
               var sesz="WjoEzUbOdYUgSQFKPrQGsHlzla3yjrLg";
             </script>
         """.trimIndent()
