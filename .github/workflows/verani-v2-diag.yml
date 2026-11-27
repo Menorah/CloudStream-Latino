@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_final_details:
+  probe_te_byse_exact:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Probe Turboembed API, Byse lazy chunk, VerAni /animes/ card DOM, and Zilla 403 reason
+      - name: Inspect Turboembed Lr() + C() and Byse embed playback endpoint
         run: |
           python3 - <<'PY'
           import base64, json, re, urllib.request, zlib
@@ -23,71 +23,38 @@ jobs:
           def fetch(url, referer='https://verani.me/', max_bytes=3000000):
               hdrs = {'User-Agent': UA, 'Accept': '*/*', 'Referer': referer}
               req = urllib.request.Request(url, headers=hdrs)
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      return {'code': r.status, 'final_url': r.geturl(), 'text': r.read(max_bytes).decode('utf-8', 'replace')}
-              except urllib.error.HTTPError as e:
-                  return {'code': e.code, 'final_url': e.geturl(), 'text': e.read(50000).decode('utf-8', 'replace')}
-              except Exception as e:
-                  return {'code': -1, 'error': str(e), 'text': ''}
+              with urllib.request.urlopen(req, timeout=25) as r:
+                  return r.read(max_bytes).decode('utf-8', 'replace')
 
           out = {}
 
-          # 1. Turboembed live /api/stream?s=9r03
-          te_api = fetch('https://turboembed.com/api/stream?s=9r03', referer='https://turboembed.com/9r03')
-          out['turboembed_api_9r03'] = {'code': te_api['code'], 'text': te_api['text'][:3500]}
+          # 1. Turboembed Lr() and full C()/jr()
+          te = fetch('https://turboembed.com/assets/index-CIV3m7-G.js', 'https://turboembed.com/9r03')
+          m_lr = re.search(r'function Lr\(\)\{', te)
+          if m_lr:
+              out['te_lr'] = te[m_lr.start():m_lr.start()+7500]
+          m_jr = re.search(r'function jr\(|jr\s*=|const jr\s*=|var jr\s*=', te)
+          if m_jr:
+              out['te_jr'] = te[max(0, m_jr.start()-300):m_jr.start()+2500]
+          # Also find decoder function `function e(t,n)` right near Lr
+          m_e = re.search(r'function (?:e|t)\([^)]*\)\{const [a-z]=Lr\(\)', te)
+          if m_e:
+              out['te_decoder'] = te[max(0, m_e.start()-100):m_e.start()+600]
 
-          # 2. Byse lazy chunks in index-DocunfmE.js
-          by_js = fetch('https://n1mwq.org/assets/index-DocunfmE.js', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
-          chunks = sorted(set(re.findall(r'assets/[A-Za-z0-9_.-]+\.js', by_js)))
-          out['byse_lazy_chunks'] = chunks
-          for ch in chunks:
-              if any(w in ch.lower() for w in ['embed', 'video', 'play', 'watch', 'qre']):
-                  cjs = fetch(f'https://n1mwq.org/{ch}', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
-                  hits = [cjs[max(0, m.start()-200):m.end()+400] for m in re.finditer(r'playback|embed|x-embed-parent|AES-GCM|decrypt', cjs, re.I)]
-                  if hits:
-                      out[f'byse_chunk_{ch}'] = hits[:12]
-          # Fallback: if none matched name filter, check all chunks up to 25
-          if not any(k.startswith('byse_chunk_') for k in out):
-              for ch in chunks[:30]:
-                  cjs = fetch(f'https://n1mwq.org/{ch}', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
-                  if 'playback' in cjs or 'x-embed-parent' in cjs:
-                      out[f'byse_chunk_{ch}'] = [cjs[max(0, m.start()-250):m.end()+450] for m in re.finditer(r'playback|x-embed-parent|embed/details|AES-GCM', cjs)][:12]
-
-          # 3. VerAni /animes/?idioma=Espa%C3%B1ol%20Latino card structure around Fruits Basket
-          lat = fetch('https://verani.me/animes/?idioma=Espa%C3%B1ol%20Latino')['text']
-          idx = lat.find('Fruits Basket')
-          out['latino_card_context'] = re.sub(r'\s+', ' ', lat[max(0, idx-500):idx+600]) if idx != -1 else 'NOT FOUND'
-          # Pagination around nav or page/2
-          pidx = lat.find('/page/2')
-          out['latino_page2_context'] = re.sub(r'\s+', ' ', lat[max(0, pidx-300):pidx+400]) if pidx != -1 else 'NO PAGE2'
-
-          # 4. Zilla 403 title/body inspection + check /m3u8/ vs /embed/
-          z403 = fetch('https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html', referer='https://verani.me/')
-          out['zilla_403_full'] = z403['text']
-          z_emb = fetch('https://player.zilla-networks.com/embed/63911a42e1f576444e2bd19d146a4455', referer='https://verani.me/')
-          out['zilla_embed'] = {'code': z_emb['code'], 'len': len(z_emb['text']), 'head': z_emb['text'][:800]}
-
-          # 5. Also verify VOE full JSON decrypt on live caseyseemavoid
-          voe_html = fetch('https://caseyseemavoid.com/e/rjq75thphcvd', referer='https://voe.sx/')['text']
-          m_voe = re.search(r'<script type="application/json">\s*\["(.*?)"\]\s*</script>', voe_html, re.S)
-          if m_voe:
-              s = m_voe.group(1)
-              import codecs
-              v1 = codecs.encode(s, 'rot_13')
-              for pat in ['@$', '^^', '~@', '%?', '*~', '!!', '#&']:
-                  v1 = v1.replace(pat, '_')
-              v3 = v1.replace('_', '')
-              v4 = base64.b64decode(v3 + '=' * ((4 - len(v3) % 4) % 4)).decode('latin1')
-              v5 = ''.join(chr((ord(c) - 3) % 256) for c in v4)[::-1]
-              v6 = base64.b64decode(v5 + '=' * ((4 - len(v5) % 4) % 4)).decode('utf-8', 'replace')
-              out['voe_decrypted'] = v6[:1000]
+          # 2. Byse: search ALL chunks for embed/details, embed/playback, key_parts, pow, x-embed-parent, n1mwq
+          for ch in ['assets/videoPagesBundle-Bgi0QmPo.js', 'assets/frontPagesBundle-C5WdTgs_.js', 'assets/pow-DEJGtdh2.js']:
+              cjs = fetch(f'https://n1mwq.org/{ch}', 'https://n1mwq.org/qre/1t8mpxujis4x')
+              hits = []
+              for pat in [r'embed/details', r'embed/playback', r'key_parts', r'x-embed-parent', r'embed_frame_url', r'decrypt', r'/api/videos']:
+                  for m in re.finditer(pat, cjs):
+                      hits.append((pat, cjs[max(0, m.start()-180):m.end()+280]))
+              out[f'byse_{ch}'] = hits[:20]
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
           chunks_out = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
-          print(f"FIN raw={len(raw)} b64={len(b64)} chunks={len(chunks_out)}")
+          print(f"TB raw={len(raw)} b64={len(b64)} chunks={len(chunks_out)}")
           assert len(chunks_out) <= 10, f"Too many chunks: {len(chunks_out)}"
           for idx, ch in enumerate(chunks_out):
-              print(f"::notice title=FIN_{idx}_{len(chunks_out)}::{ch}")
+              print(f"::notice title=TB_{idx}_{len(chunks_out)}::{ch}")
           PY
