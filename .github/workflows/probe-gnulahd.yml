@@ -1,4 +1,4 @@
-name: Probe GnulaHD Deep Hosts and Legacy
+name: Probe GnulaHD Final Verification
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  probe_hosts_and_edge_cases:
+  final_live_audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -15,114 +15,107 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q beautifulsoup4 requests
-      - name: Inspeccionar script VD_RESOLVE/TT_ON, posts antiguos, proximos-estrenos, search y embed hosts
+      - name: Auditar extractores en vivo, paginacion de busqueda, anime movie, posts sin srvs y logo/poster headers
         run: |
           python3 - <<'PY'
           import base64, json, re, requests
           from bs4 import BeautifulSoup
-          from urllib.parse import urlparse
 
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
           S = requests.Session()
           S.headers.update({"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"})
 
-          def unpack(s):
-              raw = base64.b64decode(s)
-              k = [103, 78, 55, 100]
-              return json.loads(bytes(b ^ k[i & 3] for i, b in enumerate(raw)).decode("utf-8"))
+          # 1. Check amor-sin-medida (why srvs=[]) + anime movie + header brand logo!
+          r_home = S.get("https://ww3.gnulahd.nu/", timeout=20)
+          sp_h = BeautifulSoup(r_home.text, "html.parser")
+          logo_dom = str(sp_h.select_one("header .gnrd-logo, header a[href='https://ww3.gnulahd.nu/'], .gnrd-brand"))[:500]
+          print("::notice::HEADER_LOGO=" + re.sub(r"\s+", " ", logo_dom).replace("%", "%25"))
 
-          # 1. Inspect the 44KB player resolver script (first 6000 chars) on live page
-          r = S.get("https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/", timeout=20)
-          soup = BeautifulSoup(r.text, "html.parser")
-          for s in soup.select("script:not([src])"):
-              t = s.get_text()
-              if "VD_RESOLVE" in t or "TT_ON" in t:
-                  clean = re.sub(r"\s+", " ", t.strip())
-                  print("::notice::VD_TT_HEAD=" + clean[:3500].replace("%", "%25"))
-                  print("::notice::VD_TT_MID=" + clean[3500:7000].replace("%", "%25"))
-                  break
-
-          # 2. Check legacy/older movies & series (page 200 and 450 of peliculas, page 18 of series)
-          legacy_res = []
-          all_hosts = {}
-          for list_u in [
-              "https://ww3.gnulahd.nu/ver/peliculas/?page=300",
-              "https://ww3.gnulahd.nu/ver/peliculas/?page=460",
-              "https://ww3.gnulahd.nu/ver/series/?page=18",
+          for lbl, u in [
+              ("NO_SRV", "https://ww3.gnulahd.nu/ver/amor-sin-medida/"),
+              ("ANIME_MOV", "https://ww3.gnulahd.nu/ver/dragon-ball-z-los-dos-guerreros-del-futuro-gohan-y-trunks/"),
+              ("VIDSONIC_OLD", "https://ww3.gnulahd.nu/ver/scary-movie-3/"),
+              ("EP_CROWN", "https://ww3.gnulahd.nu/the-crown-1x01/"),
           ]:
-              rl = S.get(list_u, timeout=20)
-              sl = BeautifulSoup(rl.text, "html.parser")
-              cards = [a["href"] for a in sl.select("a.gnrd-card[href]")]
-              for cu in cards[:4]:
-                  rc = S.get(cu, timeout=20)
-                  sc = BeautifulSoup(rc.text, "html.parser")
-                  mpid = re.search(r'_gnrdPid\s*=\s*(\d+)', rc.text)
-                  mtok = re.search(r'_gnrdTok\s*=\s*"([^"]+)"', rc.text)
-                  ep = sc.select_one("a.gnrd-epc[data-id][data-t]")
-                  if mpid and mtok:
-                      pid, tok = mpid.group(1), mtok.group(1)
-                  elif ep:
-                      pid, tok = ep["data-id"], ep["data-t"]
-                  else:
-                      # Legacy? check iframes or tabs!
-                      ifr = [f.get("src") or f.get("data-src") for f in sc.select("iframe")]
-                      legacy_res.append(f"NO_API:{cu} title={sc.title.string if sc.title else ''} ifr={ifr}")
-                      continue
-                  rp = S.get(f"https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id={pid}&t={tok}", headers={"User-Agent": UA, "Referer": cu}, timeout=20)
+              r = S.get(u, timeout=20)
+              sp = BeautifulSoup(r.text, "html.parser")
+              ey = (sp.select_one(".gnrd-eyebrow") or sp.select_one(".gnrd-fi-eyebrow"))
+              pid = re.search(r'_gnrdPid\s*=\s*(\d+)', r.text)
+              tok = re.search(r'_gnrdTok\s*=\s*"([^"]+)"', r.text)
+              ep_cnt = len(sp.select("a.gnrd-epc"))
+              # Check player JSON if pid/tok
+              srvs = []
+              if pid and tok:
+                  rp = S.get(f"https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id={pid.group(1)}&t={tok.group(1)}", headers={"User-Agent": UA, "Referer": u}, timeout=20)
                   if rp.status_code == 200:
-                      d = unpack(rp.json().get("p", ""))
-                      srvs = [sv.get("src", "") for l in d.get("langs", []) for sv in l.get("servers", [])]
-                      for sv in srvs:
-                          h = urlparse(sv).netloc
-                          all_hosts[h] = all_hosts.get(h, 0) + 1
-                      legacy_res.append(f"OK:{cu.split('/ver/')[-1]} srvs={srvs[:3]}")
-                  else:
-                      legacy_res.append(f"API_{rp.status_code}:{cu}")
-          print("::notice::LEGACY_HOSTS=" + json.dumps(all_hosts) + " || " + " | ".join(legacy_res).replace("%", "%25")[:2800])
+                      raw = base64.b64decode(rp.json().get("p", ""))
+                      d = json.loads(bytes(b ^ [103,78,55,100][i & 3] for i, b in enumerate(raw)).decode("utf-8"))
+                      srvs = [(l.get("label"), [sv.get("src") for sv in l.get("servers", [])]) for l in d.get("langs", [])]
+              print(f"::notice::CHK_{lbl}=ey={ey.get_text(' ',strip=True) if ey else None!r} pid={pid.group(1) if pid else None} ep_cnt={ep_cnt} srvs={srvs}".replace("%", "%25")[:3200])
 
-          # 3. Check search behaviour (/?s=home vs /wp-json/gnrd/v1/search?q=home vs ?s=the&page=2) & /recien-agregado/ & /proximos-estrenos/violent-night-2/
-          extra = []
+          # 2. Check search pagination & category URLs & 683x1024 poster headers
+          pag_res = []
           for u in [
-              "https://ww3.gnulahd.nu/?s=home",
-              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=home",
-              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=matrix",
-              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=la",
-              "https://ww3.gnulahd.nu/recien-agregado/",
-              "https://ww3.gnulahd.nu/proximos-estrenos/violent-night-2/",
+              "https://ww3.gnulahd.nu/?s=love",
+              "https://ww3.gnulahd.nu/page/2/?s=love",
+              "https://ww3.gnulahd.nu/?s=love&page=2",
+              "https://ww3.gnulahd.nu/ver/peliculas/?orderby=views&page=2",
+              "https://ww3.gnulahd.nu/ver/series/latino/",
+              "https://ww3.gnulahd.nu/ver/anime/latino/",
+              "https://ww3.gnulahd.nu/ver/anime/?orderby=views",
           ]:
               ru = S.get(u, timeout=20)
-              if "json" in ru.headers.get("Content-Type", ""):
-                  j = ru.json()
-                  extra.append(f"{u}=>cnt={len(j.get('results',[]))} types={set(x.get('type') for x in j.get('results',[]))}")
-              else:
-                  su = BeautifulSoup(ru.text, "html.parser")
-                  cards = len(su.select("a.gnrd-card"))
-                  pags = [(a.get_text(strip=True), a.get("href")) for a in su.select(".gnrd-pag a, .pagination a")]
-                  ey = su.select_one(".gnrd-eyebrow")
-                  pid = re.search(r'_gnrdPid\s*=\s*(\d+)', ru.text)
-                  extra.append(f"{u}=>{ru.status_code} cards={cards} pags={pags[:4]} ey={ey.get_text(strip=True) if ey else ''} pid={pid.group(1) if pid else None}")
-          print("::notice::SEARCH_AND_PROX=" + " || ".join(extra).replace("%", "%25")[:3500])
+              su = BeautifulSoup(ru.text, "html.parser")
+              c = len(su.select("a.gnrd-card"))
+              first = (su.select_one("a.gnrd-card") or {}).get("href", "")
+              pags = [(a.get_text(strip=True), a.get("href")) for a in su.select(".gnrd-pag a, .pagination a")]
+              pag_res.append(f"{u}=>{ru.status_code} cards={c} first={first.split('/ver/')[-1]} pags={pags[:4]}")
+          print("::notice::PAG_TESTS=" + " || ".join(pag_res).replace("%", "%25")[:3500])
 
-          # 4. Probe actual live responses of embed hosts (savefiles, bysevepoin, byse.sx, vidara.to, vidaraa.cc, voe.sx) + gnrd dl sample!
-          rp0 = S.get("https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id=525453&t=7f836484fab7aa0bc441ec75fe0b1af9", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/"}, timeout=20)
-          d0 = unpack(rp0.json()["p"])
-          print("::notice::DL_AND_LANGS_EXACT=" + json.dumps({"langs": d0.get("langs", []), "dl_sample": d0.get("dl", [])[:2]})[:3500].replace("%", "%25"))
+          # 3. Live test extractors: Savefiles, Vidara (strip #gnraw!), ByseVepoin, Voe, OkRu!
+          ext_res = []
+          # Savefiles POST /dl
+          try:
+              rsf = requests.post("https://savefiles.com/dl", data={"op":"embed","file_code":"4k581w054dxn","auto":"1","referer":"https://ww3.gnulahd.nu/"}, headers={"User-Agent": UA, "Referer": "https://savefiles.com/e/4k581w054dxn", "Origin": "https://savefiles.com"}, timeout=15)
+              m_sf = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', rsf.text)
+              ext_res.append(f"Savefiles=>{rsf.status_code} streams={m_sf[:3]}")
+          except Exception as e:
+              ext_res.append(f"Savefiles=>ERR:{e}")
 
-          host_tests = []
-          sample_embeds = [
-              "https://savefiles.com/e/obnc66iwt6px",
-              "https://bysevepoin.com/e/2n71086n81zc",
-              "https://byse.sx/e/d51shlcaib2c",
-              "https://vidara.to/e/p0Rvu1FStzi1J#gnraw",
-              "https://vidaraa.cc/e/QGKzkFZxmQ9jM#gnraw",
-              "https://voe.sx/e/89eqs4ngzliz",
-          ]
-          for eu in sample_embeds:
+          # Vidara POST /api/stream (without #gnraw)
+          for vd_u, code in [("https://vidara.to", "rll3Cm6mqgnLJ"), ("https://vidaraa.cc", "QGKzkFZxmQ9jM")]:
               try:
-                  re_ = requests.get(eu.split("#")[0], headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15, allow_redirects=True)
-                  has_m3u8 = bool(re.search(r'\.m3u8|\.mp4|jwplayer|file:|sources:|hls|packed|eval\(function|b1=|"file"|\'file\'|vidara', re_.text, re.I))
-                  host_tests.append(f"{eu}=>{re_.status_code} final={re_.url} len={len(re_.text)} hints={has_m3u8} head={re.sub(r'\s+',' ',re_.text[:220])}")
+                  rvd = requests.post(f"{vd_u}/api/stream", json={"filecode": code, "device": "web"}, headers={"User-Agent": UA, "Referer": f"{vd_u}/e/{code}"}, timeout=15)
+                  ext_res.append(f"{vd_u}=>{rvd.status_code} body={rvd.text[:250]}")
               except Exception as e:
-                  host_tests.append(f"{eu}=>ERR:{e}")
-          print("::notice::EMBED_PROBES=" + " || ".join(host_tests).replace("%", "%25")[:3500])
+                  ext_res.append(f"{vd_u}=>ERR:{e}")
+
+          # ByseVepoin details -> playback
+          try:
+              rdet = requests.get("https://bysevepoin.com/api/videos/2n71086n81zc/embed/details", headers={"User-Agent": UA}, timeout=15)
+              ext_res.append(f"ByseVepoin_det=>{rdet.status_code} body={rdet.text[:250]}")
+          except Exception as e:
+              ext_res.append(f"ByseVepoin=>ERR:{e}")
+
+          # Voe live check on xlpslkgo8zlg
+          try:
+              rvoe = requests.get("https://voe.sx/e/xlpslkgo8zlg", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15, allow_redirects=True)
+              ext_res.append(f"Voe=>{rvoe.status_code} final={rvoe.url} len={len(rvoe.text)} has_json={'application/json' in rvoe.text}")
+          except Exception as e:
+              ext_res.append(f"Voe=>ERR:{e}")
+
+          # OkRu live check
+          try:
+              rok = requests.get("https://ok.ru/videoembed/13967573977684", headers={"User-Agent": UA}, timeout=15)
+              ext_res.append(f"OkRu=>{rok.status_code} len={len(rok.text)} has_flash={'data-options' in rok.text or 'ondemandHls' in rok.text}")
+          except Exception as e:
+              ext_res.append(f"OkRu=>ERR:{e}")
+
+          # 683x1024 poster bare okhttp vs cs_ua
+          p_u = "https://ww3.gnulahd.nu/wp-content/uploads/2026/11/nzIXSQNgYZwFOMrmv0d0I3ulvkM-683x1024.webp"
+          rb = requests.get(p_u, headers={"User-Agent": "okhttp/4.12.0"}, timeout=15)
+          rc = requests.get(p_u, headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
+          ext_res.append(f"Poster683=>bare={rb.status_code} cs={rc.status_code}")
+
+          print("::notice::EXTRACTOR_AND_IMG_PROBES=" + " || ".join(ext_res).replace("%", "%25")[:3500])
           PY
