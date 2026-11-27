@@ -1,4 +1,4 @@
-name: Probe GnulaHD Pagination and Episodes
+name: Probe GnulaHD Final Details
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  check_pagination_episodes_icons:
+  grab_ep_html_and_icon:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -15,10 +15,10 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q beautifulsoup4 requests pillow
-      - name: Verificar selector paginacion, total episodios Bleach/OnePiece, OkRu/Vidsonic, y logo/favicon PNG
+      - name: Extraer HTML completo de gnrd-epc, search HTML pag, y favicon/logo PNG
         run: |
           python3 - <<'PY'
-          import io, re, requests
+          import base64, io, re, requests
           from bs4 import BeautifulSoup
           from PIL import Image
 
@@ -26,65 +26,42 @@ jobs:
           S = requests.Session()
           S.headers.update({"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"})
 
-          # 1. Exact HTML of pagination element on peliculas, genres, search, and last page
-          pag_htmls = []
-          for u in [
-              "https://ww3.gnulahd.nu/ver/peliculas/",
-              "https://ww3.gnulahd.nu/ver/peliculas/?page=464",
-              "https://ww3.gnulahd.nu/genres/terror/",
-              "https://ww3.gnulahd.nu/?s=love",
-              "https://ww3.gnulahd.nu/page/5/?s=love",
-              "https://ww3.gnulahd.nu/recien-agregado/",
-          ]:
-              r = S.get(u, timeout=20)
-              sp = BeautifulSoup(r.text, "html.parser")
-              # Find any element containing "Cargar más" or "›" or "?page=2" or "/page/2/"
-              hits = []
-              for el in sp.select("a[href*='page='], a[href*='/page/']"):
-                  p_cls = ".".join(el.parent.get("class", [])) if el.parent else ""
-                  pp_cls = ".".join(el.parent.parent.get("class", [])) if el.parent and el.parent.parent else ""
-                  hits.append(f"{pp_cls}>{p_cls}>a({el.get_text(strip=True)})={el.get('href')}")
-              pag_htmls.append(f"{u} => {hits[:6]}")
-          print("::notice::PAG_EXACT=" + " || ".join(pag_htmls).replace("%", "%25")[:3500])
-
-          # 2. Check Bleach, One Piece, The Crown full DOM episode counts + season/ep html sample + anime movie card!
-          ep_checks = []
+          # 1. Full inner HTML of a.gnrd-epc on Crown, Bleach, OnePiece
+          eps = []
           for u in [
               "https://ww3.gnulahd.nu/ver/the-crown/",
               "https://ww3.gnulahd.nu/ver/bleach-2004/",
               "https://ww3.gnulahd.nu/ver/one-piece-1999/",
           ]:
-              r = S.get(u, timeout=20)
-              sp = BeautifulSoup(r.text, "html.parser")
-              eps = sp.select("a.gnrd-epc")
-              seasons = sorted(set(e.get("data-s", "") for e in eps))
-              first_ep = re.sub(r"\s+", " ", str(eps[0]))[:450] if eps else ""
-              last_ep = re.sub(r"\s+", " ", str(eps[-1]))[:450] if eps else ""
-              # Recommendations section selector
-              rel_cards = [(c.parent.get("class"), c.find_previous(["h2","h3"]).get_text(" ", strip=True) if c.find_previous(["h2","h3"]) else "") for c in sp.select("a.gnrd-card")[:2]]
-              ep_checks.append(f"{u.split('/ver/')[-1]} cnt={len(eps)} seasons={seasons} first={first_ep} last={last_ep} rel={rel_cards}")
-          print("::notice::EP_COUNTS=" + " || ".join(ep_checks).replace("%", "%25")[:3500])
+              sp = BeautifulSoup(S.get(u, timeout=20).text, "html.parser")
+              for el in sp.select("svg"): el.decompose()
+              all_ep = sp.select("a.gnrd-epc")
+              eps.append(f"[{u.split('/ver/')[-1]}] first={re.sub(r'\\s+',' ',str(all_ep[0]))} || last={re.sub(r'\\s+',' ',str(all_ep[-1]))}")
+          print("::notice::EP_FULL_HTML=" + " || ".join(eps).replace("%", "%25")[:3500])
 
-          # 3. Check OkRu data-options vs videos & Vidsonic _0x1 + logo-gnula.png & favicon!
-          rok = requests.get("https://ok.ru/videoembed/13967573977684", headers={"User-Agent": UA}, timeout=15)
-          rvs = requests.get("https://vidsonic.net/e/gzihedvkxd57", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
-          m_vs = re.search(r"const _0x1\s*=\s*'([^']+)'", rvs.text)
-          vs_dec = ""
-          if m_vs:
-              hx = m_vs.group(1).replace("|", "")
-              vs_dec = "".join(chr(int(hx[i:i+2], 16)) for i in range(0, len(hx), 2))[::-1]
-          m_ok = re.search(r'data-options="([^"]+)"', rok.text)
-          print("::notice::OK_VIDSONIC=" + f"ok_status={rok.status_code} ok_has_videos={'videos' in rok.text} ok_opts={bool(m_ok)} || vs_status={rvs.status_code} vs_dec={vs_dec}".replace("%", "%25")[:2500])
+          # 2. Check Anime page card badges & Peliculas year dropdown & Search ?s=love page 2 vs 3 vs 4
+          sp_a = BeautifulSoup(S.get("https://ww3.gnulahd.nu/ver/anime/", timeout=20).text, "html.parser")
+          anime_cards = [(c.get("title"), c.get("href"), [s.get_text(strip=True) for s in c.select(".gnrd-type-badge, .gnrd-qbadge, .gnrd-lang")]) for c in sp_a.select("a.gnrd-card")[:8]]
+          sp_p = BeautifulSoup(S.get("https://ww3.gnulahd.nu/ver/peliculas/", timeout=20).text, "html.parser")
+          years = [a.get("href") for a in sp_p.select(".gnrd-dd--year a.gnrd-dd-opt")]
+          s_pags = []
+          for pg in [1, 2, 3, 4]:
+              su = f"https://ww3.gnulahd.nu/?s=love" if pg == 1 else f"https://ww3.gnulahd.nu/page/{pg}/?s=love"
+              rs = S.get(su, timeout=20)
+              sps = BeautifulSoup(rs.text, "html.parser")
+              cards = [c.get("href","").split("/ver/")[-1] for c in sps.select("a.gnrd-card")]
+              p_els = [re.sub(r'\s+', ' ', str(el))[:300] for el in sps.select(".gnrd-more-wrap, .gnrd-pag, .pagination, .nav-links")]
+              s_pags.append(f"p{pg}:status={rs.status_code},cnt={len(cards)},first={cards[:2]},p_els={p_els}")
+          print("::notice::ANIME_YEARS_SEARCH=" + f"anime={anime_cards} || years={years[:15]} || search={s_pags}".replace("%", "%25")[:3500])
 
-          # 4. Inspect GnulaHD logo & favicon PNG dimensions and colors
-          logos = []
-          for u in [
-              "https://ww3.gnulahd.nu/wp-content/themes/dramastream-child/img/logo-gnula.png?v=1782785985",
-              "https://ww3.gnulahd.nu/wp-content/uploads/2026/07/cropped-favicon-32x32-2-192x192.png",
-              "https://i2.wp.com/ww3.gnulahd.nu/wp-content/uploads/2026/07/cropped-favicon-32x32-2-192x192.png",
-          ]:
-              ri = S.get(u, timeout=15)
-              im = Image.open(io.BytesIO(ri.content))
-              logos.append(f"{u}=>{ri.status_code} {im.format} {im.mode} {im.size} bytes={len(ri.content)}")
-          print("::notice::LOGOS=" + " || ".join(logos).replace("%", "%25"))
+          # 3. Fetch official GnulaHD favicon (192x192) & logo-gnula.png -> re-save optimized RGBA PNG & emit base64!
+          rf = S.get("https://ww3.gnulahd.nu/wp-content/uploads/2026/07/cropped-favicon-32x32-2-192x192.png", timeout=15)
+          im = Image.open(io.BytesIO(rf.content)).convert("RGBA")
+          # Check if upscaling to 256x256 or keeping 192x192 is smaller
+          buf = io.BytesIO()
+          im.save(buf, format="PNG", optimize=True)
+          b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+          print(f"::notice::FAV_LEN={len(buf.getvalue())} B64_LEN={len(b64)}")
+          for i in range(0, len(b64), 3200):
+              print(f"::notice::FAV_B64_{i//3200}=" + b64[i:i+3200])
           PY
