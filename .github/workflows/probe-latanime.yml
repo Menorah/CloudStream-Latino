@@ -13,18 +13,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Install python deps
-        run: python3 -m pip install --quiet beautifulsoup4 requests lxml pillow
-      - name: Focused inspect of home/serie/calendario DOM, search endpoints, and host extractions
+        run: python3 -m pip install --quiet beautifulsoup4 requests lxml playwright && python3 -m playwright install chromium
+      - name: Probe hosts, search with browser/CF, detail types, and downloads
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
           python3 - <<'PY'
-          import os, json, zipfile, base64, re, pathlib, traceback, io
+          import os, json, re, traceback
           import requests
           from bs4 import BeautifulSoup
-          from PIL import Image
 
           def post_check(name, title, summary, text, conclusion="success"):
               url = f"https://api.github.com/repos/{os.environ['REPO']}/check-runs"
@@ -47,179 +46,118 @@ jobs:
               print("Posted:", name, r.status_code)
 
           try:
-              sess = requests.Session()
               ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-              sess.headers.update({"User-Agent": ua})
-              page_url = "https://tmpfiles.org/wBAVvkBJrDzt/latanime.org.zip"
-              r_page = sess.get(page_url, timeout=30)
-              dl_url = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', r_page.text).group(0)
-              r_zip = sess.get(dl_url, headers={"Referer": page_url}, timeout=120)
-              open("/tmp/latanime.zip", "wb").write(r_zip.content)
-              out_dir = pathlib.Path("/tmp/latanime_extracted")
-              out_dir.mkdir(parents=True, exist_ok=True)
-              with zipfile.ZipFile("/tmp/latanime.zip") as zf:
-                  zf.extractall(out_dir)
+              out = []
 
-              dom_out = []
-              home_html = (out_dir / "latanime.org/home/Latanime - Ver Anime Online Full HD.html").read_text(errors="replace")
-              home_soup = BeautifulSoup(home_html, "html.parser")
-              for sel in ("section.pepu", "section.navmovil", "footer"):
-                  el = home_soup.select_one(sel)
-                  dom_out.append(f"=== HOME {sel} ===\n{str(el)[:3000]}")
-              for h in home_soup.select("h2"):
-                  if "Series recientes" in h.get_text() or "Añadidos recientemente" in h.get_text():
-                      dom_out.append(f"=== HOME SECTION {h.get_text(strip=True)} ===\n{str(h.parent)[:5000]}")
-
-              serie_html = (out_dir / "latanime.org/ejemplo serie/Los Diarios De La Boticaria S3 Latino — Latanime.html").read_text(errors="replace")
-              serie_soup = BeautifulSoup(serie_html, "html.parser")
-              dom_out.append(f"=== SERIE FULL CONTAINER ===\n{str(serie_soup.select_one('div.container.my-3'))}")
-
-              # Check all distinct category/type badges across all directorio HTMLs in zip
-              badges = set()
-              for p in sorted(out_dir.rglob("*.html")):
-                  s = BeautifulSoup(p.read_text(errors="replace"), "html.parser")
-                  for sp in s.select("div.seriedetails span.opacity-75"):
-                      badges.add(sp.get_text(strip=True))
-              dom_out.append(f"=== ALL CARD BADGES IN ZIP ===\n{sorted(badges)}")
-
-              # Check CSS files for any custom rules / icon paths / layout clues
-              css = (out_dir / "latanime.org/home/Latanime - Ver Anime Online Full HD_files/style.css").read_text(errors="replace")
-              img_refs = sorted(set(re.findall(r'url\(["\']?([^"\')]+)["\']?\)', css)))
-              dom_out.append(f"=== STYLE.CSS url(...) REFS ===\n{img_refs}")
-
-              dom_txt = "\n".join(dom_out)
-              post_check("latanime-dom-clean", "Clean DOM: home, serie, badges", f"Len={len(dom_txt)}", dom_txt[:58000])
-
-              # Live probing: search_ajax, /animes?q=, /calendario full, one-piece-latino detail, hosts extraction
-              live = requests.Session()
-              live.headers.update({"User-Agent": ua, "Accept-Language": "es-419,es;q=0.9"})
-              r0 = live.get("https://latanime.org/", timeout=20)
-              s0 = BeautifulSoup(r0.text, "html.parser")
-              csrf = (s0.select_one('meta[name="csrf-token"]') or {}).get("content", "")
-              live_out = [f"HOME {r0.status_code} csrf={csrf!r}"]
-
-              for q in ["naruto", "one piece", "boticaria", "overlord", "dragon ball"]:
-                  ra = live.post(
-                      "https://latanime.org/buscar_ajax",
-                      json={"q": q},
-                      headers={"Referer": "https://latanime.org/", "X-CSRF-TOKEN": csrf, "Accept": "application/json", "Origin": "https://latanime.org"},
-                      timeout=20,
-                  )
-                  live_out.append(f"POST /buscar_ajax q={q!r} -> {ra.status_code} ct={ra.headers.get('Content-Type')} len={len(ra.text)} body={ra.text[:800]}")
-
-              # Test if /buscar_ajax works with form-urlencoded as in app.js
-              ra_form = live.post(
-                  "https://latanime.org/buscar_ajax",
-                  data={"_token": csrf, "q": "naruto"},
-                  headers={"Referer": "https://latanime.org/", "X-Requested-With": "XMLHttpRequest", "Origin": "https://latanime.org"},
-                  timeout=20,
-              )
-              live_out.append(f"POST form /buscar_ajax q='naruto' -> {ra_form.status_code} body={ra_form.text[:800]}")
-
-              # Check if /animes?q=naruto actually filtered!
-              rq1 = live.get("https://latanime.org/animes", timeout=20)
-              rq2 = live.get("https://latanime.org/animes?q=naruto", timeout=20)
-              sq1 = [a.get_text(strip=True) for a in BeautifulSoup(rq1.text, "html.parser").select(".seriedetails h3")[:5]]
-              sq2 = [a.get_text(strip=True) for a in BeautifulSoup(rq2.text, "html.parser").select(".seriedetails h3")[:5]]
-              live_out.append(f"/animes first5={sq1}")
-              live_out.append(f"/animes?q=naruto first5={sq2}")
-
-              # Check /calendario full main container
-              rcal = live.get("https://latanime.org/calendario", timeout=20)
-              scal = BeautifulSoup(rcal.text, "html.parser")
-              # Find the container with days (after nav)
-              containers = scal.select("div.container")
-              live_out.append(f"CALENDARIO containers={len(containers)}")
-              for idx, c in enumerate(containers):
-                  txt = c.get_text(" ", strip=True)
-                  if "lunes" in txt.lower() or "próximo" in txt.lower() or "calendario" in txt.lower():
-                      live_out.append(f"=== CALENDARIO CONTAINER[{idx}] ===\n{str(c)[:7000]}")
-
-              # Check /anime/one-piece-latino structure (long series!)
-              rop = live.get("https://latanime.org/anime/one-piece-latino", timeout=20)
-              sop = BeautifulSoup(rop.text, "html.parser")
-              op_eps = sop.select("a[href*='/ver/']")
-              op_pages = [el.get_text(strip=True) for el in sop.select(".pagesdiv, .pagesdiv span")]
-              live_out.append(f"ONE PIECE detail len={len(rop.text)} eps_count={len(op_eps)} pagesdiv={op_pages[:5]} first_ep={str(op_eps[0])[:400] if op_eps else None} last_ep={str(op_eps[-1])[:400] if op_eps else None}")
-              # Also check all metadata inside .col-lg-9.col-md-8 on one-piece & a movie & an ova
-              for test_detail in [
-                  "https://latanime.org/anime/one-piece-latino",
-                  "https://latanime.org/anime/overlord-the-sacred-kingdom",
-                  "https://latanime.org/anime/urusei-yatsura-ova",
+              # 1. Inspect full body of hexload, savefiles, playmogo, uqload, listeamed (with ?ch=1&js=...), lulu fallback, and direct downloads
+              for label, u, ref in [
+                  ("hexload", "https://hexload.com/embed-hvpmcryhwgkd", "https://latanime.org/"),
+                  ("savefiles", "https://savefiles.com/e/jxmuvev53n4r", "https://latanime.org/"),
+                  ("playmogo", "https://playmogo.com/e/qjgqehm9x9pq", "https://latanime.org/"),
+                  ("uqload.vc", "https://uqload.cx/embed-ye8kvr9dkrwk.html", "https://latanime.org/"),
+                  ("listeamed-noref", "https://listeamed.net/e/pVa4E8LYN66EkzM", None),
+                  ("luluvdo-onepiece", "https://luluvdo.com/e/o52nir7f4qeh", "https://latanime.org/"),
+                  ("luluvdo-overlord", "https://luluvdo.com/e/ao6sz1pykaep", "https://latanime.org/"),
               ]:
-                  rd = live.get(test_detail, timeout=20)
-                  sd = BeautifulSoup(rd.text, "html.parser")
-                  col = sd.select_one("div.col-lg-9.col-md-8")
-                  btn_est = sd.select_one(".btn-estado")
-                  live_out.append(f"DETAIL {test_detail} -> btn_estado={btn_est.get_text(' ', strip=True) if btn_est else None} meta={col.get_text(' | ', strip=True)[:600] if col else None}")
-
-              # Check host bodies/extractions!
-              host_urls = [
-                  ("filemoon", "https://filemoon.sx/e/3e6zzlq6hgb5"),
-                  ("byse", "https://bysewihe.com/d/sd4wti5rvfd7"),
-                  ("playmogo", "https://playmogo.com/e/qjgqehm9x9pq"),
-                  ("do7go", "https://do7go.com/e/gjwglehgacf0"),
-                  ("lulu.st", "https://lulu.st/e/ao6sz1pykaep"),
-                  ("uqload.cx", "https://uqload.cx/embed-ye8kvr9dkrwk.html"),
-                  ("mxdrop", "https://mxdrop.to/e/wlweppgdhvqrjn"),
-                  ("mixdrop.top", "https://mixdrop.top/e/677lgqn8hl8n183"),
-                  ("voe", "https://voe.sx/e/aaxn6pbhvuyv"),
-                  ("mp4upload", "https://www.mp4upload.com/embed-tmpwu8nvan2t.html"),
-                  ("hexload", "https://hexload.com/embed-hvpmcryhwgkd"),
-                  ("savefiles", "https://savefiles.com/e/jxmuvev53n4r"),
-                  ("listeamed", "https://listeamed.net/e/pVa4E8LYN66EkzM"),
-              ]
-              for label, hu in host_urls:
                   try:
-                      r = requests.get(hu, headers={"User-Agent": ua, "Referer": "https://latanime.org/"}, timeout=15, allow_redirects=True)
-                      live_out.append(f"\n--- HOST {label}: {hu} -> {r.status_code} final={r.url} ---")
-                      if label in ("filemoon", "byse"):
-                          from urllib.parse import urlparse
-                          pu = urlparse(r.url)
-                          code = pu.path.rstrip("/").split("/")[-1]
-                          det_u = f"{pu.scheme}://{pu.netloc}/api/videos/{code}/embed/details"
-                          rdet = requests.get(det_u, headers={"User-Agent": ua, "Referer": r.url}, timeout=12)
-                          live_out.append(f"  BYSE DETAILS {rdet.status_code}: {rdet.text[:500]}")
-                          if rdet.status_code == 200 and rdet.json().get("embed_frame_url"):
-                              efu = rdet.json()["embed_frame_url"]
-                              epu = urlparse(efu)
-                              ecode = epu.path.rstrip("/").split("/")[-1]
-                              pbu = f"{epu.scheme}://{epu.netloc}/api/videos/{ecode}/embed/playback"
-                              rpb = requests.get(pbu, headers={"User-Agent": ua, "Referer": efu, "x-embed-parent": r.url}, timeout=12)
-                              live_out.append(f"  BYSE PLAYBACK {rpb.status_code}: {rpb.text[:400]}")
-                      elif label in ("playmogo", "do7go"):
-                          m = re.search(r"/pass_md5/[^'\"]+", r.text)
-                          live_out.append(f"  pass_md5={m.group(0) if m else None} head={r.text[:400]!r}")
-                      elif label == "voe":
-                          live_out.append(f"  BODY: {r.text[:600]!r}")
-                          rm = re.search(r"window\.location\.href\s*=\s*'([^']+)'", r.text)
-                          if rm:
-                              r2 = requests.get(rm.group(1), headers={"User-Agent": ua, "Referer": "https://latanime.org/"}, timeout=12)
-                              live_out.append(f"  REDIRECT2 {r2.status_code} {r2.url} len={len(r2.text)} has_json={'application/json' in r2.text} has_altcha={'altcha' in r2.text.lower()} snippet={r2.text[:600]!r}")
+                      hdrs = {"User-Agent": ua}
+                      if ref:
+                          hdrs["Referer"] = ref
+                      r = requests.get(u, headers=hdrs, timeout=15, allow_redirects=True)
+                      out.append(f"\n=== {label}: {r.status_code} {r.url} (len={len(r.text)}) ===")
+                      if label == "listeamed-noref":
+                          m = re.search(r"window\.location\.replace\('([^']+)'\)", r.text)
+                          if m:
+                              r2 = requests.get(m.group(1), headers={"User-Agent": ua, "Referer": r.url}, timeout=15)
+                              out.append(f"  STEP2 {r2.status_code} {r2.url} len={len(r2.text)} body={r2.text[:2500]}")
                       elif label == "hexload":
-                          live_out.append(f"  SNIPPET: {r.text[r.text.find('data:'):r.text.find('data:')+400] if 'data:' in r.text else r.text[:400]!r}")
+                          out.append(r.text[:6000])
+                          m_id = re.search(r'id:\s*"([^"]+)"', r.text)
+                          if m_id:
+                              rp = requests.post("https://hexload.com/download", data={"op": "download3", "id": m_id.group(1), "ajax": "1", "method_free": "1", "dataType": "json"}, headers={"User-Agent": ua, "Referer": r.url, "X-Requested-With": "XMLHttpRequest"}, timeout=15)
+                              out.append(f"  HEXLOAD POST /download -> {rp.status_code} {rp.text[:1000]}")
+                              rp2 = requests.post(r.url, data={"op": "download3", "id": m_id.group(1), "ajax": "1", "method_free": "1", "dataType": "json"}, headers={"User-Agent": ua, "Referer": r.url, "X-Requested-With": "XMLHttpRequest"}, timeout=15)
+                              out.append(f"  HEXLOAD POST embed -> {rp2.status_code} {rp2.text[:1000]}")
                       elif label == "savefiles":
-                          live_out.append(f"  BODY: {r.text[:500]!r}")
-                      elif label == "mp4upload":
-                          m = re.search(r"player\.src\([^\)]+\)|src:\s*\"[^\"]+\"", r.text)
-                          live_out.append(f"  MATCH: {m.group(0) if m else r.text[:400]!r}")
-                      elif label == "lulu.st":
-                          live_out.append(f"  BODY: {r.text[:500]!r}")
-                      elif label == "listeamed":
-                          r_alt = requests.get(hu, headers={"User-Agent": ua}, timeout=12)
-                          live_out.append(f"  NO_REF {r_alt.status_code} {r_alt.url} {r_alt.text[:300]!r}")
-                      elif label in ("mxdrop", "mixdrop.top"):
-                          live_out.append(f"  HAS_MDCore={'MDCore' in r.text} snippet={r.text[:300]!r}")
+                          out.append(r.text[:4000])
+                          rp = requests.post("https://savefiles.com/dl", data={"op": "embed", "file_code": "jxmuvev53n4r", "auto": "1", "referer": "https://latanime.org/"}, headers={"User-Agent": ua, "Referer": r.url, "Origin": "https://savefiles.com"}, timeout=15)
+                          out.append(f"  SAVEFILES POST /dl -> {rp.status_code} len={len(rp.text)} body={rp.text[:2000]}")
+                      elif label == "playmogo":
+                          out.append(r.text[:5500])
+                      elif label == "uqload.vc":
+                          # check script with sources
+                          s = BeautifulSoup(r.text, "html.parser")
+                          for idx, sc in enumerate(s.find_all("script")):
+                              txt = (sc.string or sc.get_text() or "").strip()
+                              if "eval(" in txt or "sources" in txt or "jwplayer" in txt.lower():
+                                  out.append(f"  SCRIPT[{idx}]: {txt[:2000]}")
+                      else:
+                          out.append(r.text[:3000])
                   except Exception as ex:
-                      live_out.append(f"--- HOST {label} ERR: {ex}")
+                      out.append(f"\n=== {label} ERR: {ex} ===")
 
-              # Also check logito.png dimensions/transparency/crop info
-              rl = live.get("https://latanime.org/img/logito.png", timeout=15)
-              im = Image.open(io.BytesIO(rl.content))
-              live_out.append(f"LOGITO PNG: mode={im.mode} size={im.size} bbox={im.getbbox()}")
+              # 2. Check downloads from one-piece & boticaria
+              for dl_u in [
+                  "https://pixeldrain.com/u/s3mR5z98", # just test what one-piece actually has
+              ]:
+                  pass
+              r_op = requests.get("https://latanime.org/ver/one-piece-latino-episodio-1", headers={"User-Agent": ua}, timeout=20)
+              s_op = BeautifulSoup(r_op.text, "html.parser")
+              dl_links = [(a.get_text(" ", strip=True), a.get("href")) for a in s_op.select("a.direct-link")]
+              out.append(f"\n=== ONE PIECE DIRECT LINKS === {dl_links}")
+              for name, du in dl_links:
+                  if "pixeldrain" in du or "mediafire" in du or "gofile" in du:
+                      try:
+                          rd = requests.get(du, headers={"User-Agent": ua}, timeout=12)
+                          out.append(f"  DL {name} {du} -> {rd.status_code} ct={rd.headers.get('Content-Type')} len={len(rd.text)}")
+                      except Exception as ex:
+                          out.append(f"  DL {name} {du} -> ERR {ex}")
 
-              live_txt = "\n".join(live_out)
-              post_check("latanime-live-detail", "Search AJAX, Calendar, One Piece, Hosts", f"Len={len(live_txt)}", live_txt[:58000])
+              # 3. Check movie / multi-movie / ova detail pages & buscar?q= / buscar?q=...&p=2 with Playwright!
+              for det in [
+                  "https://latanime.org/anime/overlord-the-sacred-kingdom",
+                  "https://latanime.org/anime/seishun-buta-yarou-peliculas",
+                  "https://latanime.org/anime/urusei-yatsura-ova",
+                  "https://latanime.org/anime/dragon-ball-z-especial-bardock-el-padre-de-goku-latino",
+              ]:
+                  rd = requests.get(det, headers={"User-Agent": ua}, timeout=15)
+                  out.append(f"\n=== DETAIL {det} ({rd.status_code}) ===")
+                  sd = BeautifulSoup(rd.text, "html.parser")
+                  c = sd.select_one("div.container.my-3")
+                  out.append(str(c)[:3000] if c else "NO CONTAINER")
+
+              # 4. Playwright probe on /buscar?q=naruto and /buscar?q=dragon&p=2 and POST /buscar_ajax
+              from playwright.sync_api import sync_playwright
+              with sync_playwright() as p:
+                  br = p.chromium.launch(headless=True)
+                  ctx = br.new_context(user_agent=ua, locale="es-419")
+                  pg = ctx.new_page()
+                  pg.goto("https://latanime.org/", wait_until="domcontentloaded", timeout=30000)
+                  pg.wait_for_timeout(1500)
+                  csrf = pg.evaluate("document.querySelector('meta[name=csrf-token]')?.content")
+                  ajax_res = pg.evaluate("""async ([q, tok]) => {
+                      const r = await fetch('/buscar_ajax', {
+                          method: 'POST',
+                          headers: {'Content-Type': 'application/json', 'X-CSRF-TOKEN': tok},
+                          body: JSON.stringify({q})
+                      });
+                      return {status: r.status, text: await r.text()};
+                  }""", ["dragon ball", csrf])
+                  out.append(f"\n=== PW /buscar_ajax (home page ctx) === status={ajax_res['status']} text={ajax_res['text'][:1500]}")
+
+                  pg.goto("https://latanime.org/buscar?q=dragon", wait_until="domcontentloaded", timeout=30000)
+                  pg.wait_for_timeout(4000)
+                  title = pg.title()
+                  html = pg.content()
+                  out.append(f"\n=== PW GET /buscar?q=dragon === title={title!r} url={pg.url} len={len(html)}")
+                  s_b = BeautifulSoup(html, "html.parser")
+                  cards = [(a.get("href"), a.select_one("h3").get_text(strip=True) if a.select_one("h3") else None) for a in s_b.select("a[href*='/anime/']")[:10]]
+                  pags = [a.get("href") for a in s_b.select(".pagination a")]
+                  out.append(f"  CARDS={len(s_b.select('a[href*=\"/anime/\"]'))} sample={cards[:5]} pags={pags[:6]}")
+                  br.close()
+
+              full = "\n".join(out)
+              post_check("latanime-probe5", "Hosts, Downloads, Movies, Search PW", f"Len={len(full)}", full[:58000])
           except Exception as e:
               post_check("latanime-error", f"Exception: {e}", traceback.format_exc(), traceback.format_exc(), conclusion="failure")
               raise
