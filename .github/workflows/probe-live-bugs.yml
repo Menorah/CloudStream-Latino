@@ -1,0 +1,151 @@
+name: Probe Live Bugs
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/probe-live-bugs.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Instalar Playwright Chromium y curl_cffi/cloudscraper
+        run: |
+          python3 -m pip install --quiet requests beautifulsoup4 cloudscraper
+      - name: Sonda en vivo de las 3 URLs reportadas
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, requests
+          import cloudscraper
+          from bs4 import BeautifulSoup
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
+
+          def unpack_packer(html):
+              m = re.search(r"eval\(function\(p,a,c,k,e,[dr]\)\{.*?\}\('(.*?)',\s*(\d+),\s*(\d+),\s*'([^']*)'\.split\('\|'\)", html, re.S)
+              if not m:
+                  return None
+              p, a, c, sym = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
+              p = p.replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+              alpha = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+              def baseN(n, rad):
+                  if n == 0: return "0"
+                  out = []
+                  while n > 0:
+                      out.append(alpha[n % rad]); n //= rad
+                  return "".join(reversed(out))
+              table = {baseN(i, a): (sym[i] if i < len(sym) and sym[i] else baseN(i, a)) for i in range(c)}
+              return re.sub(r"\b\w+\b", lambda x: table.get(x.group(0), x.group(0)), p)
+
+          # ---------------- 1. repelis24.shop ----------------
+          print("\n=== 1. REPELIS24.SHOP ===")
+          u1 = "https://repelis24.shop/pelicula/los-juegos-del-hambre-amanecer-en-la-cosecha/"
+          r1 = scraper.get(u1, headers={"User-Agent": UA, "Referer": "https://repelis24.shop/"}, timeout=30)
+          print("HTTP:", r1.status_code, "len:", len(r1.text), "url:", r1.url)
+          soup1 = BeautifulSoup(r1.text, "html.parser")
+          servers = soup1.select("li[data-server]")
+          print("data-server count:", len(servers))
+          for i, li in enumerate(servers[:10]):
+              b64 = li.get("data-server", "")
+              dec = base64.b64decode(b64 + "=" * (-len(b64) % 4)).decode("utf-8", "ignore")
+              tab = li.find_parent(class_="tab-video-item")
+              lang = tab.select_one(".tab-item-name").get_text(" ", strip=True) if tab and tab.select_one(".tab-item-name") else "?"
+              print(f"  [{i}] lang={lang!r} decoded={dec}")
+              if "nupload.my/watch/" in dec and i < 3:
+                  for ref in ["https://nupload.my/", "https://repelis24.shop/"]:
+                      rw = scraper.get(dec, headers={"User-Agent": UA, "Referer": ref}, timeout=25)
+                      print(f"    GET watch (ref={ref}): HTTP {rw.status_code} len={len(rw.text)}")
+                      if rw.status_code == 200:
+                          scripts = [s.get_text() for s in BeautifulSoup(rw.text, "html.parser").select("script") if "atob" in s.get_text() or "fromCharCode" in s.get_text() or "var " in s.get_text()]
+                          print("    watch JS snippet:", "\n---\n".join(scripts)[:1800])
+                          break
+
+          # ---------------- 2. repelishd.hair ----------------
+          print("\n=== 2. REPELISHD.HAIR ===")
+          u2 = "https://repelishd.hair/ver-pelicula/1300968-los-juegos-del-hambre-amanecer-en-la-cosecha-online-espanol"
+          r2 = scraper.get(u2, headers={"User-Agent": UA, "Referer": "https://repelishd.hair/"}, timeout=30)
+          print("HTTP:", r2.status_code, "len:", len(r2.text), "url:", r2.url)
+          imdbs = sorted(set(re.findall(r"\btt\d{5,10}\b", r2.text)))
+          print("IMDb IDs in HTML:", imdbs[:5])
+          iframes = re.findall(r"<iframe[^>]+src=[\"']([^\"']+)[\"']", r2.text, re.I)
+          print("iframes in HTML:", iframes[:5])
+          dl_btns = re.findall(r"class=[\"']dl-btn[\"'][^>]*href=[\"']([^\"']+)[\"']|href=[\"']([^\"']+)[\"'][^>]*class=[\"']dl-btn[\"']", r2.text, re.I)
+          print("dl_btns:", dl_btns[:5])
+          pl_url = next((x for x in iframes if "playlatinsrc" in x), None) or (f"https://playlatinsrc.co/movie/{imdbs[0]}?lang=latino" if imdbs else None)
+          print("pl_url:", pl_url)
+          if pl_url:
+              rp = requests.get(pl_url, headers={"User-Agent": UA, "Referer": "https://repelishd.hair/"}, timeout=25)
+              print("playlatinsrc HTTP:", rp.status_code, "len:", len(rp.text))
+              tok = re.search(r"data-resolve-token=[\"']([^\"']+)[\"']", rp.text)
+              ep = re.search(r"data-resolve-endpoint=[\"']([^\"']+)[\"']", rp.text)
+              alt = re.search(r"(?:data-alt-url=|ALT_URL\s*=\s*)[\"']([^\"']+)[\"']", rp.text)
+              mfetch = re.search(r"fetch\(['\"](/api/embed-links)['\"].{0,250}", rp.text, re.S)
+              print("token:", tok.group(1) if tok else None, "endpoint:", ep.group(1) if ep else None, "alt:", alt.group(1) if alt else None)
+              if mfetch: print("mfetch:", mfetch.group(0)[:220])
+              if tok and imdbs:
+                  api_u = urllib.parse.urljoin("https://playlatinsrc.co", ep.group(1) if ep else "/api/resolve")
+                  ra = requests.post(api_u, json={"token": tok.group(1), "type": "movie", "id": imdbs[0]},
+                                     headers={"User-Agent": UA, "Referer": pl_url, "Origin": "https://playlatinsrc.co", "X-Requested-With": "XMLHttpRequest"}, timeout=25)
+                  print("API /resolve HTTP:", ra.status_code, ra.text[:1500])
+                  try:
+                      srcs = ra.json().get("sources", [])
+                      for s in srcs[:6]:
+                          su = s.get("url", "")
+                          print("  probe source:", s.get("name"), s.get("version"), su)
+                          if any(h in su for h in ["dropload", "dr0pstream", "supervideo", "superplayer"]):
+                              rs = requests.get(su, headers={"User-Agent": UA, "Referer": pl_url}, timeout=20)
+                              unp = unpack_packer(rs.text) or rs.text
+                              m3s = re.findall(r"""(?:file|src)\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", unp)
+                              print("    embed HTTP:", rs.status_code, "streams:", m3s[:3])
+                              for mu in m3s[:1]:
+                                  h_host = urllib.parse.urlparse(su)
+                                  origin_ref = f"{h_host.scheme}://{h_host.netloc}/"
+                                  for label, hdrs in [
+                                      ("no-hdr", {}),
+                                      ("ref-only", {"Referer": origin_ref}),
+                                      ("ref+UA", {"Referer": origin_ref, "User-Agent": UA}),
+                                      ("dalvik+ref", {"Referer": origin_ref, "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 13)"}),
+                                  ]:
+                                      try:
+                                          rm = requests.get(mu, headers=hdrs, timeout=15)
+                                          print(f"      stream GET ({label}): HTTP {rm.status_code} len={len(rm.text)} head={rm.text[:100]!r}")
+                                      except Exception as ex:
+                                          print(f"      stream GET ({label}): ERR {ex}")
+                  except Exception as ex:
+                      print("  parse sources err:", ex)
+
+          # ---------------- 3. cinecalidad.am ----------------
+          print("\n=== 3. CINECALIDAD.AM ===")
+          u3 = "https://www.cinecalidad.am/ver-pelicula/007-otro-dia-para-morir/"
+          r3 = scraper.get(u3, headers={"User-Agent": UA, "Referer": "https://www.cinecalidad.am/"}, timeout=30)
+          print("HTTP:", r3.status_code, "len:", len(r3.text), "url:", r3.url)
+          soup3 = BeautifulSoup(r3.text, "html.parser")
+          opts = soup3.select("#playeroptionsul li.dooplay_player_option[data-option], li.dooplay_player_option[data-option]")
+          print("playeroptions count:", len(opts))
+          print("raw panel_online:", str(soup3.select_one("#panel_online"))[:1800])
+          for li in opts:
+              raw_opt = li.get("data-option", "")
+              print("  li:", li.get_text(" ", strip=True), "data-option=", raw_opt)
+              if "zopass=" in raw_opt:
+                  zp = urllib.parse.parse_qs(urllib.parse.urlparse(raw_opt).query).get("zopass", [""])[0]
+                  dec = base64.b64decode(zp + "=" * (-len(zp) % 4)).decode("utf-8", "ignore")
+                  print("    zopass decoded:", dec)
+                  if "vimeos.net" in dec or "videoapp.zip" in dec:
+                      rv = requests.get(dec, headers={"User-Agent": UA, "Referer": u3}, timeout=20)
+                      print("    embed HTTP:", rv.status_code, "url:", rv.url, "len:", len(rv.text))
+                      unp = unpack_packer(rv.text) or rv.text
+                      m3s = re.findall(r"""file\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", unp)
+                      print("    streams:", m3s[:4])
+                      for mu in m3s[:1]:
+                          for label, hdrs in [
+                              ("no-hdr", {}),
+                              ("ref-only", {"Referer": "https://vimeos.net/"}),
+                              ("ref+UA", {"Referer": "https://vimeos.net/", "User-Agent": UA}),
+                              ("dalvik+ref", {"Referer": "https://vimeos.net/", "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 13)"}),
+                          ]:
+                              try:
+                                  rm = requests.get(mu, headers=hdrs, timeout=15)
+                                  print(f"      stream GET ({label}): HTTP {rm.status_code} len={len(rm.text)} head={rm.text[:100]!r}")
+                              except Exception as ex:
+                                  print(f"      stream GET ({label}): ERR {ex}")
+          PY
