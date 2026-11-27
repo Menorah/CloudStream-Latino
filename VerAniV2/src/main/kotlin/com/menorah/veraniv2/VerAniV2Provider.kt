@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SearchResponseList
 import com.lagradost.cloudstream3.SeasonData
+import com.lagradost.cloudstream3.ShowStatus
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.addDubStatus
@@ -164,7 +165,11 @@ class VerAniV2Provider : MainAPI() {
                     this.year = detail.year
                     this.plot = detail.plot
                     this.tags = detail.tags
-                    this.showStatus = detail.status
+                    this.showStatus = when (detail.status) {
+                        VerAniShowStatus.ONGOING -> ShowStatus.Ongoing
+                        VerAniShowStatus.COMPLETED -> ShowStatus.Completed
+                        null -> null
+                    }
                     this.seasonNames = detail.seasons.map { s ->
                         SeasonData(season = s.season, name = s.name, displaySeason = null)
                     }

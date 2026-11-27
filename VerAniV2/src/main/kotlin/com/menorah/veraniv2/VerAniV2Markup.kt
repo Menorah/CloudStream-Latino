@@ -3,12 +3,16 @@ package com.menorah.veraniv2
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import com.lagradost.cloudstream3.ShowStatus
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+
+internal enum class VerAniShowStatus {
+    ONGOING,
+    COMPLETED,
+}
 
 internal enum class VerAniPageKind {
     ANIME,
@@ -53,7 +57,7 @@ internal data class VerAniAnimeDetail(
     val backgroundUrl: String?,
     val year: Int?,
     val plot: String?,
-    val status: ShowStatus?,
+    val status: VerAniShowStatus?,
     val tags: List<String>,
     val trailerUrl: String?,
     val seasons: List<VerAniSeasonMeta>,
@@ -334,8 +338,8 @@ internal object VerAniV2Markup {
         val statusRaw = (doc.selectFirst(".anime-hero-status")?.text().orEmpty()
             .ifBlank { findInfoCardValue(doc, "Estado") }).lowercase()
         val showStatus = when {
-            statusRaw.contains("emisi") || statusRaw.contains("próxim") || statusRaw.contains("proxim") -> ShowStatus.Ongoing
-            statusRaw.contains("finaliz") -> ShowStatus.Completed
+            statusRaw.contains("emisi") || statusRaw.contains("próxim") || statusRaw.contains("proxim") -> VerAniShowStatus.ONGOING
+            statusRaw.contains("finaliz") -> VerAniShowStatus.COMPLETED
             else -> null
         }
 

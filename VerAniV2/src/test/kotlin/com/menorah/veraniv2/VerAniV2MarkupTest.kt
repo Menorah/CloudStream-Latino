@@ -1,6 +1,5 @@
 package com.menorah.veraniv2
 
-import com.lagradost.cloudstream3.ShowStatus
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -216,7 +215,7 @@ class VerAniV2MarkupTest {
         assertEquals("Boruto Demo", detail.title)
         assertEquals("https://image.tmdb.org/t/p/w1280/bg_real.jpg", detail.posterUrl)
         assertEquals(2017, detail.year)
-        assertEquals(ShowStatus.Completed, detail.status)
+        assertEquals(VerAniShowStatus.COMPLETED, detail.status)
         assertEquals(listOf("Acción", "Aventura"), detail.tags)
         assertEquals("https://www.youtube.com/embed/abc123", detail.trailerUrl)
         assertEquals(1, detail.recommendations.size)
