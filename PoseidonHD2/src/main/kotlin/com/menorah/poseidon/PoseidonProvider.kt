@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
 class PoseidonProvider : MainAPI() {
     override var mainUrl = PoseidonData.MAIN_URL
     override var name = "PoseidonHD 2"
-    override var lang = "es"
+    override var lang = "es-419"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)

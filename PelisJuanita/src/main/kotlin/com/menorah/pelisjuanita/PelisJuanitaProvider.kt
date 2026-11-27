@@ -26,7 +26,7 @@ class PelisJuanitaProvider(
 
     override var mainUrl = PelisJuanitaMarkup.MAIN_URL
     override var name = "PelisJuanita"
-    override var lang = "es"
+    override var lang = "es-419"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)

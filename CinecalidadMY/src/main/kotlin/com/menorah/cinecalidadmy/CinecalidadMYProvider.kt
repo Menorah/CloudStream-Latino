@@ -31,7 +31,7 @@ class CinecalidadMYProvider : MainAPI() {
     override var mainUrl = CinecalidadMYMarkup.DEFAULT_MAIN_URL
     override var name = "Cinecalidad.my"
     override val hasMainPage = true
-    override var lang = "es"
+    override var lang = "es-419"
     override val supportedTypes = setOf(TvType.Movie)
 
     override val mainPage = mainPageOf(

@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -8,11 +8,12 @@ dependencies {
 }
 
 cloudstream {
-    description = "Películas, series, anime y novelas de Cinecalidad.org en español."
+    description = "Películas, series, anime y novelas de Cinecalidad.org en español latino, castellano y subtitulado."
     authors = listOf("Menorah")
     status = 3
     tvTypes = listOf("Movie", "TvSeries", "Anime", "AnimeMovie")
-    language = "es"
+    language = "es-419"
+    iconUrl = "https://cinecalidad.org/wp-content/uploads/2026/10/cropped-Sin-titu2lo-3-192x192.png"
 }
 
 android {

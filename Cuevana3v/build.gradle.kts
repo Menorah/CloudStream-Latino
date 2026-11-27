@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -12,7 +12,8 @@ cloudstream {
     authors = listOf("Menorah")
     status = 1
     tvTypes = listOf("Movie", "TvSeries")
-    language = "es"
+    language = "es-419"
+    iconUrl = "https://cuevana3v.pro/favicon/apple-touch-favicon.png"
 }
 
 android {

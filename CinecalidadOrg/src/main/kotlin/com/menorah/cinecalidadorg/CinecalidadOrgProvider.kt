@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CinecalidadOrgProvider : MainAPI() {
     override var mainUrl = CinecalidadOrgApi.BASE
     override var name = "Cinecalidad.org"
-    override var lang = "es"
+    override var lang = "es-419"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AnimeMovie)

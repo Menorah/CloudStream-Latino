@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AnimeOnlineProvider(pluginContext: Context? = null) : MainAPI() {
     override var mainUrl = AnimeOnlineParser.BASE
     override var name = "AnimeOnline Ninja"
-    override var lang = "es"
+    override var lang = "es-419"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
