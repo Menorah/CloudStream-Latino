@@ -45,20 +45,7 @@ jobs:
               except Exception as e:
                   print(f"{tag}: ERR {e}")
           PY
-      - name: Emitir AONG y AONYAN p1
-        run: |
-          python3 - <<'PY'
-          import os
-          for tag in ["AONG", "AONYAN", "AONVER"]:
-              p = f"/tmp/{tag}.b64"
-              if not os.path.exists(p): continue
-              b64 = open(p).read()
-              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              if tag != "AONVER":
-                  for i, part in enumerate(parts):
-                      print(f"::notice::{tag}_{i:02d}_{len(parts):02d}:{part}")
-          PY
-      - name: Emitir AONVER si existe
+      - name: Emitir AONVER p1
         run: |
           python3 - <<'PY'
           import os
@@ -66,10 +53,10 @@ jobs:
           if os.path.exists(p):
               b64 = open(p).read()
               parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              for i in range(0, min(9, len(parts))):
+              for i in range(0, min(8, len(parts))):
                   print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
-      - name: Emitir AONVER p2 si existe
+      - name: Emitir AONVER p2
         run: |
           python3 - <<'PY'
           import os
@@ -77,6 +64,28 @@ jobs:
           if os.path.exists(p):
               b64 = open(p).read()
               parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-              for i in range(9, len(parts)):
+              for i in range(8, min(16, len(parts))):
+                  print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir AONVER p3
+        run: |
+          python3 - <<'PY'
+          import os
+          p = "/tmp/AONVER.b64"
+          if os.path.exists(p):
+              b64 = open(p).read()
+              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+              for i in range(16, min(24, len(parts))):
+                  print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir AONVER p4
+        run: |
+          python3 - <<'PY'
+          import os
+          p = "/tmp/AONVER.b64"
+          if os.path.exists(p):
+              b64 = open(p).read()
+              parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+              for i in range(24, len(parts)):
                   print(f"::notice::AONVER_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
