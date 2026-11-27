@@ -1,0 +1,156 @@
+name: Probe Icons
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/probe-icons.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: pip install -q curl_cffi beautifulsoup4 pillow requests
+      - name: Probar íconos parte 1 (6 sitios)
+        run: |
+          python3 - <<'PY'
+          import io, re, urllib.parse, requests
+          from curl_cffi import requests as cfreq
+          from bs4 import BeautifulSoup
+          from PIL import Image
+
+          SITES = [
+              ("AnimeOnlineNinja", "https://ww4.animeonline.ninja/", None),
+              ("VerAni", "https://verani.me/", "https://verani.me/wp-content/uploads/2026/01/Gemini_Generated_Image_y27f1qy27f1qy27f-1-e1767498152326.png"),
+              ("Repelis24CZ", "https://repelis24.cz/", "https://repelis24.my/wp-content/uploads/2026/04/cropped-repelis.top_.png"),
+              ("RePelis24Shop", "https://repelis24.shop/", "https://repelis24.shop/images/repelis24-icon.png"),
+              ("RePelisHD", "https://repelishd.hair/", "https://repelishd.hair/brand/repelishd/apple-touch.png"),
+              ("CinecalidadAM", "https://www.cinecalidad.am/", "https://www.cinecalidad.am/wp-content/themes/Cinecalidad/assets/img/logo.svg"),
+          ]
+
+          UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+          def inspect_img(url):
+              try:
+                  r = requests.get(url, headers={"User-Agent": UA}, timeout=12, allow_redirects=True)
+                  ct = r.headers.get("Content-Type", "").split(";")[0].strip()
+                  b = r.content
+                  if r.status_code != 200:
+                      return f"HTTP {r.status_code} ({ct})"
+                  if b.lstrip()[:5].lower().startswith(b"<svg") or b"<svg" in b[:300].lower():
+                      return f"200 SVG len={len(b)}"
+                  if b.lstrip()[:5].lower().startswith(b"<!doc") or b.lstrip()[:5].lower().startswith(b"<html"):
+                      return f"200 HTML/CF len={len(b)}"
+                  try:
+                      im = Image.open(io.BytesIO(b))
+                      return f"200 {im.format} {im.size[0]}x{im.size[1]} len={len(b)}"
+                  except Exception as e:
+                      return f"200 {ct} len={len(b)} raw={b[:16]!r} ({e})"
+              except Exception as e:
+                  return f"ERR {type(e).__name__}: {str(e)[:60]}"
+
+          for name, home, current in SITES:
+              host = urllib.parse.urlparse(home).netloc
+              found = []
+              if current:
+                  found.append(f"CUR[{current}]=>{inspect_img(current)}")
+              try:
+                  hr = cfreq.get(home, impersonate="chrome131", timeout=20, allow_redirects=True)
+                  soup = BeautifulSoup(hr.text, "html.parser")
+                  cands = []
+                  for el in soup.select('link[rel*="icon"], link[rel="apple-touch-icon"], meta[property="og:image"], header img, .logo img, a.logo img, #logo img'):
+                      u = el.get("href") or el.get("content") or el.get("src") or el.get("data-src")
+                      if u and not u.startswith("data:"):
+                          absu = urllib.parse.urljoin(str(hr.url), u)
+                          if absu not in cands:
+                              cands.append(absu)
+                  for extra in ["/favicon.png", "/apple-touch-icon.png", "/favicon.ico"]:
+                      absu = urllib.parse.urljoin(str(hr.url), extra)
+                      if absu not in cands:
+                          cands.append(absu)
+                  for c in cands[:8]:
+                      found.append(f"[{c}]=>{inspect_img(c)}")
+                  if hr.status_code != 200 or len(cands) <= 3:
+                      found.append(f"HOME_STATUS={hr.status_code} title={(soup.title.string.strip()[:40] if soup.title and soup.title.string else '')}")
+              except Exception as e:
+                  found.append(f"HOME_ERR={e}")
+              gurl = f"https://www.google.com/s2/favicons?domain={host}&sz=128"
+              found.append(f"G[{gurl}]=>{inspect_img(gurl)}")
+              msg = f"{name}: " + " | ".join(found)
+              print(msg)
+              print("::notice::" + msg.replace("%", "%25")[:1800])
+          PY
+      - name: Probar íconos parte 2 (6 sitios)
+        run: |
+          python3 - <<'PY'
+          import io, re, urllib.parse, requests
+          from curl_cffi import requests as cfreq
+          from bs4 import BeautifulSoup
+          from PIL import Image
+
+          SITES = [
+              ("CinecalidadMY", "https://www.cinecalidad.my/", "https://www.cinecalidad.my/wp-content/themes/gridthemeresponsive/images/logo.png"),
+              ("CinecalidadOrg", "https://cinecalidad.org/", None),
+              ("PoseidonHD2", "https://www.poseidonhd2.co/", None),
+              ("PeliCineHD", "https://pelicinehd.com/", None),
+              ("Cuevana3v", "https://cuevana3v.pro/", None),
+              ("PelisJuanita", "https://pelisjuanita.com/", None),
+          ]
+
+          UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+          def inspect_img(url):
+              try:
+                  r = requests.get(url, headers={"User-Agent": UA}, timeout=12, allow_redirects=True)
+                  ct = r.headers.get("Content-Type", "").split(";")[0].strip()
+                  b = r.content
+                  if r.status_code != 200:
+                      return f"HTTP {r.status_code} ({ct})"
+                  if b.lstrip()[:5].lower().startswith(b"<svg") or b"<svg" in b[:300].lower():
+                      return f"200 SVG len={len(b)}"
+                  if b.lstrip()[:5].lower().startswith(b"<!doc") or b.lstrip()[:5].lower().startswith(b"<html"):
+                      return f"200 HTML/CF len={len(b)}"
+                  try:
+                      im = Image.open(io.BytesIO(b))
+                      return f"200 {im.format} {im.size[0]}x{im.size[1]} len={len(b)}"
+                  except Exception as e:
+                      return f"200 {ct} len={len(b)} raw={b[:16]!r} ({e})"
+              except Exception as e:
+                  return f"ERR {type(e).__name__}: {str(e)[:60]}"
+
+          for name, home, current in SITES:
+              host = urllib.parse.urlparse(home).netloc
+              found = []
+              if current:
+                  found.append(f"CUR[{current}]=>{inspect_img(current)}")
+              try:
+                  hr = cfreq.get(home, impersonate="chrome131", timeout=20, allow_redirects=True)
+                  soup = BeautifulSoup(hr.text, "html.parser")
+                  cands = []
+                  for el in soup.select('link[rel*="icon"], link[rel="apple-touch-icon"], meta[property="og:image"], header img, .logo img, a.logo img, #logo img'):
+                      u = el.get("href") or el.get("content") or el.get("src") or el.get("data-src")
+                      if u and not u.startswith("data:"):
+                          absu = urllib.parse.urljoin(str(hr.url), u)
+                          if absu not in cands:
+                              cands.append(absu)
+                  for extra in ["/favicon.png", "/apple-touch-icon.png", "/favicon.ico"]:
+                      absu = urllib.parse.urljoin(str(hr.url), extra)
+                      if absu not in cands:
+                          cands.append(absu)
+                  for c in cands[:8]:
+                      found.append(f"[{c}]=>{inspect_img(c)}")
+                  if hr.status_code != 200 or len(cands) <= 3:
+                      found.append(f"HOME_STATUS={hr.status_code} title={(soup.title.string.strip()[:40] if soup.title and soup.title.string else '')}")
+              except Exception as e:
+                  found.append(f"HOME_ERR={e}")
+              gurl = f"https://www.google.com/s2/favicons?domain={host}&sz=128"
+              found.append(f"G[{gurl}]=>{inspect_img(gurl)}")
+              msg = f"{name}: " + " | ".join(found)
+              print(msg)
+              print("::notice::" + msg.replace("%", "%25")[:1800])
+          PY
