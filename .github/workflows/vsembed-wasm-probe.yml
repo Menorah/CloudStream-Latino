@@ -1,0 +1,123 @@
+name: Sonda wasm.php y /embed/tv
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/vsembed-wasm-probe.yml']
+permissions:
+  contents: read
+jobs:
+  inspect_wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Descargar e inspeccionar wasm.php y probar flujo /embed/tv
+        run: |
+          python3 -m pip install -q playwright
+          python3 -m playwright install chromium || true
+          xvfb-run -a python3 - <<'PY'
+          import base64, http.cookiejar, json, re, struct, time, urllib.parse, urllib.request
+          from playwright.sync_api import sync_playwright
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          U1477963 = "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
+          UTV = "https://vsembed.su/embed/tv?tmdb=247718&season=1&episode=1&ds_lang=es"
+
+          def emit(title, txt):
+              clean = str(txt).replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+              print(f"::notice title={title}::{clean[:3400]}")
+
+          op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+          def ufetch(url, ref=None):
+              h = {"User-Agent": UA}
+              if ref: h["Referer"] = ref
+              with op.open(urllib.request.Request(url, headers=h), timeout=15) as r:
+                  return r.read(), r.geturl()
+
+          # 1) Check TV landing/player flow
+          try:
+              b1_tv, u1_tv = ufetch(UTV, "https://pelisjuanita.com/")
+              t1_tv = b1_tv.decode("utf-8", "replace")
+              api_tv = re.search(r'data-api="([^"]+)"', t1_tv).group(1).replace("&amp;", "&")
+              b2_tv, _ = ufetch(urllib.parse.urljoin(u1_tv, api_tv), u1_tv)
+              land_tv = json.loads(b2_tv)["src"]
+              b3_tv, u3_tv = ufetch(land_tv, "https://vsembed.su/")
+              t3_tv = b3_tv.decode("utf-8", "replace")
+              cfg_tv = json.loads(re.search(r'window\.CFG\s*=\s*(\{.*?\});', t3_tv).group(1))
+              b4_tv, u4_tv = ufetch(urllib.parse.urljoin(u3_tv, cfg_tv["playerUrl"]), u3_tv)
+              t4_tv = b4_tv.decode("utf-8", "replace")
+              m_cfg_tv = re.search(r'window\.CONFIG\s*=\s*(\{.*?\});', t4_tv)
+              emit("TV_CONFIG", m_cfg_tv.group(1) if m_cfg_tv else t4_tv[:500])
+          except Exception as e:
+              emit("TV_ERR", repr(e))
+
+          # 2) Solve Turnstile via Chrome Xvfb on 1477963 to capture api_json + wasm_bytes
+          b1, u1 = ufetch(U1477963, "https://pelisjuanita.com/")
+          api_rel = re.search(r'data-api="([^"]+)"', b1.decode("utf-8", "replace")).group(1).replace("&amp;", "&")
+          b2, _ = ufetch(urllib.parse.urljoin(u1, api_rel), u1)
+          landing = json.loads(b2)["src"]
+
+          cap = {"api_json": "", "wasm": b"", "wasm_url": "", "stream": ""}
+          with sync_playwright() as p:
+              try:
+                  browser = p.chromium.launch(channel="chrome", headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+              except Exception:
+                  browser = p.chromium.launch(headless=False, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+              ctx = browser.new_context(viewport={"width": 1280, "height": 720})
+              page = ctx.new_page()
+              page.route(re.compile(r"disable-devtool", re.I), lambda r: r.abort())
+              def on_resp(resp):
+                  u = resp.url
+                  if "stream_urls" in u and "api.php" in u:
+                      try: cap["api_json"] = resp.text()
+                      except Exception: pass
+                  elif "wasm.php" in u:
+                      try:
+                          cap["wasm_url"] = u
+                          cap["wasm"] = resp.body()
+                      except Exception: pass
+              def on_req(req):
+                  if "/pl/" in req.url and "token=" in req.url and not cap["stream"]:
+                      cap["stream"] = req.url
+              page.on("response", on_resp)
+              page.on("request", on_req)
+              page.goto(landing, referer="https://vsembed.su/", wait_until="domcontentloaded", timeout=25000)
+              for _ in range(45):
+                  if cap["stream"]: break
+                  for fr in page.frames:
+                      if "/embed/movie/" in fr.url and "/embed/player/" not in fr.url:
+                          try:
+                              bp = fr.locator("#bigPlay")
+                              if bp.count() > 0 and bp.is_visible(): bp.click()
+                          except Exception: pass
+                  time.sleep(0.7)
+              browser.close()
+
+          emit("API_JSON", cap["api_json"][:2500])
+          w = cap["wasm"]
+          emit("WASM_INFO", json.dumps({"url": cap["wasm_url"], "len": len(w), "stream": cap["stream"][:120]}))
+          if w:
+              # Parse WASM sections
+              pos = 8
+              secs = {}
+              def read_uleb(buf, p):
+                  res, shift = 0, 0
+                  while True:
+                      b = buf[p]; p += 1
+                      res |= (b & 0x7f) << shift
+                      if not (b & 0x80): return res, p
+                      shift += 7
+              while pos < len(w):
+                  sid = w[pos]; pos += 1
+                  slen, pos = read_uleb(w, pos)
+                  secs[sid] = w[pos:pos+slen]
+                  pos += slen
+              emit("WASM_SECTIONS", json.dumps({k: len(v) for k, v in secs.items()}))
+              # Section 11 = Data
+              if 11 in secs:
+                  emit("WASM_DATA_HEX", secs[11].hex()[:3000])
+              # Also dump raw wasm base64 if <= 4000 bytes so we can analyze it offline!
+              b64w = base64.b64encode(w).decode()
+              for idx in range(0, min(len(b64w), 9000), 3000):
+                  emit(f"WASM_B64_{idx}", b64w[idx:idx+3000])
+          PY
