@@ -3,120 +3,59 @@ on:
   workflow_dispatch:
   push:
     branches: ['arena/**']
-    paths: ['.github/workflows/probe-latanime.yml']
+    paths: ['.github/workflows/probe-latanime.yml', 'Latanime/**']
 permissions:
   contents: read
   checks: write
 jobs:
-  probe:
+  live-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Install python deps
-        run: python3 -m pip install --quiet beautifulsoup4 requests pillow
-      - name: Probe savefiles /dl body, uqload unpack, icons, and pagination edge cases
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run Latanime unit + live tests
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
+          set +e
+          ./gradlew :Latanime:testDebugUnitTest -Dlatanime.live=true --info --rerun-tasks > gradle-live.txt 2>&1
+          status=$?
+          export STATUS=$status
           python3 - <<'PY'
-          import os, re, io, traceback
-          import requests
-          from bs4 import BeautifulSoup
-          from PIL import Image
-
-          def post_check(name, title, summary, text, conclusion="success"):
-              r = requests.post(
-                  f"https://api.github.com/repos/{os.environ['REPO']}/check-runs",
-                  json={
-                      "name": name, "head_sha": os.environ["SHA"],
-                      "status": "completed", "conclusion": conclusion,
-                      "output": {"title": str(title)[:255], "summary": str(summary)[:60000], "text": str(text)[:60000]},
+          import os, pathlib, requests, xml.etree.ElementTree as ET
+          log = pathlib.Path('gradle-live.txt').read_text(errors='replace')
+          live_lines = [s for s in log.splitlines() if 'LIVE_' in s or 'FAILED' in s or 'e: ' in s or 'Error' in s or 'Exception' in s]
+          xml_summary = []
+          for p in sorted(pathlib.Path('Latanime').glob('build/test-results/testDebugUnitTest/TEST-*.xml')):
+              root = ET.parse(p).getroot()
+              xml_summary.append(f"{p.name}: tests={root.get('tests')} failures={root.get('failures')} errors={root.get('errors')} skipped={root.get('skipped')}")
+              for tc in root.findall('testcase'):
+                  for fail in tc.findall('failure') + tc.findall('error'):
+                      xml_summary.append(f"  FAIL {tc.get('classname')}.{tc.get('name')}: {fail.get('message')}\n{(fail.text or '')[:1500]}")
+          text = "\n".join(xml_summary) + "\n\n--- LIVE & ERROR LOGS ---\n" + "\n".join(live_lines[:150]) + "\n\n--- LOG TAIL ---\n" + log[-15000:]
+          requests.post(
+              f"https://api.github.com/repos/{os.environ['REPO']}/check-runs",
+              json={
+                  "name": "latanime-live-suite",
+                  "head_sha": os.environ["SHA"],
+                  "status": "completed",
+                  "conclusion": "success" if int(os.environ.get("STATUS", "1")) == 0 else "failure",
+                  "output": {
+                      "title": f"Latanime unit+live tests (exit={os.environ.get('STATUS')})",
+                      "summary": "\n".join(xml_summary)[:60000] or "See text",
+                      "text": text[:60000],
                   },
-                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
-                  timeout=30,
-              )
-              print("Posted:", name, r.status_code)
-
-          try:
-              ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-              out = []
-
-              # 1. Savefiles /dl full tail (where jwplayer / sources live)
-              rp = requests.post(
-                  "https://savefiles.com/dl",
-                  data={"op": "embed", "file_code": "jxmuvev53n4r", "auto": "1", "referer": "https://latanime.org/"},
-                  headers={"User-Agent": ua, "Referer": "https://savefiles.com/e/jxmuvev53n4r", "Origin": "https://savefiles.com"},
-                  timeout=15,
-              )
-              out.append(f"=== SAVEFILES /dl TAIL (len={len(rp.text)}) ===\n{rp.text[3000:]}")
-
-              # 2. Check square/official icon candidates on latanime.org
-              for iu in [
-                  "https://latanime.org/img/logito.png",
-                  "https://latanime.org/img/anime.png",
-                  "https://latanime.org/img/capblank.png",
-                  "https://latanime.org/apple-touch-icon.png",
-                  "https://latanime.org/favicon-96x96.png",
-                  "https://latanime.org/favicon-32x32.png",
-                  "https://latanime.org/img/icon.png",
-                  "https://latanime.org/img/favicon.png",
-              ]:
-                  ri = requests.get(iu, headers={"User-Agent": ua}, timeout=12)
-                  ct = ri.headers.get("Content-Type", "")
-                  dim = None
-                  fmt = None
-                  if "image" in ct:
-                      try:
-                          im = Image.open(io.BytesIO(ri.content))
-                          dim, fmt = im.size, im.format
-                      except Exception as e:
-                          dim = str(e)
-                  out.append(f"ICON {ri.status_code} {iu} ct={ct} len={len(ri.content)} fmt={fmt} dim={dim}")
-
-              # 3. Check pagination edge cases & letra counts
-              for u in [
-                  "https://latanime.org/emision?p=3",
-                  "https://latanime.org/emision?p=4",
-                  "https://latanime.org/emision?p=999",
-                  "https://latanime.org/animes?fecha=false&genero=false&letra=N&categoria=false",
-                  "https://latanime.org/animes?fecha=false&genero=false&letra=O&categoria=false",
-                  "https://latanime.org/animes?fecha=false&genero=false&letra=D&categoria=false",
-                  "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=Pel%C3%ADcula%20Latino",
-              ]:
-                  r = requests.get(u, headers={"User-Agent": ua}, timeout=15)
-                  s = BeautifulSoup(r.text, "html.parser")
-                  cards = s.select("a[href*='/anime/']")
-                  pags = [(li.get("class"), li.get_text(strip=True), li.select_one("a").get("href") if li.select_one("a") else None) for li in s.select("ul.pagination li")]
-                  out.append(f"PAG {r.status_code} {u} -> cards={len(cards)} first={cards[0].get('href') if cards else None} pags={pags}")
-
-              # 4. Check recent episode downloads & hosts on a newer 2026 anime from home
-              rh = requests.get("https://latanime.org/", headers={"User-Agent": ua}, timeout=15)
-              sh = BeautifulSoup(rh.text, "html.parser")
-              first_ep = sh.select_one("a[href*='/ver/']")["href"]
-              rep = requests.get(first_ep, headers={"User-Agent": ua}, timeout=15)
-              sep = BeautifulSoup(rep.text, "html.parser")
-              import base64
-              players = []
-              for el in sep.select("a[data-player]"):
-                  dp = el.get("data-player")
-                  dec = base64.b64decode(dp + "=" * (-len(dp) % 4)).decode("utf-8", errors="replace")
-                  players.append((el.get_text(strip=True), dec))
-              dls = [(a.get_text(" ", strip=True), a.get("href")) for a in sep.select("a.direct-link")]
-              out.append(f"LATEST EP {first_ep}: players={players} dls={dls}")
-              for name, du in dls:
-                  du = du.strip()
-                  if "pixeldrain" in du or "mediafire" in du:
-                      try:
-                          rd = requests.get(du, headers={"User-Agent": ua}, timeout=12)
-                          out.append(f"  LATEST DL {name} {du} -> {rd.status_code} len={len(rd.text)}")
-                      except Exception as ex:
-                          out.append(f"  LATEST DL {name} {du} -> ERR {ex}")
-
-              txt = "\n".join(out)
-              post_check("latanime-probe6", "Savefiles, icons, pagination, latest ep", f"Len={len(txt)}", txt[:58000])
-          except Exception as e:
-              post_check("latanime-error", f"Exception: {e}", traceback.format_exc(), traceback.format_exc(), conclusion="failure")
-              raise
+              },
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+              timeout=30,
+          )
           PY
+          exit "$status"
