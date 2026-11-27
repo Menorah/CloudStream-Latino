@@ -1,4 +1,4 @@
-name: Probe GnulaHD Movie and Episode Player Trigger
+name: Probe GnulaHD Player JS Functions
 on:
   workflow_dispatch:
   push:
@@ -7,39 +7,30 @@ on:
 permissions:
   contents: read
 jobs:
-  inspect_triggers:
+  inspect_js:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -q requests beautifulsoup4
-      - name: Buscar trigger player en película y episodio
+      - run: pip install -q requests
+      - name: Extraer gnrdOpenPlayer y gnpvLoad
         run: |
           python3 - <<'PY'
           import re, requests
-          from bs4 import BeautifulSoup
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
           S = requests.Session()
           S.headers.update({"User-Agent": UA, "Accept-Language": "es-419,es;q=0.9"})
           def one(s): return re.sub(r"\s+", " ", s or "").strip()
 
-          for label, u in [
-              ("MOVIE", "https://ww3.gnulahd.nu/ver/the-jlo-show/"),
-              ("EP", "https://ww3.gnulahd.nu/the-crown-6x10/"),
-              ("ANIME", "https://ww3.gnulahd.nu/ver/bleach-2004/"),
-              ("SOON", "https://ww3.gnulahd.nu/proximos-estrenos/the-adventures-of-cliff-booth/"),
+          mhtml = S.get("https://ww3.gnulahd.nu/ver/the-jlo-show/", timeout=15).text
+          ehtml = S.get("https://ww3.gnulahd.nu/the-crown-6x10/", timeout=15).text
+          for label, html, pat in [
+              ("MOVIE_JS", mhtml, r"(?:function\s+gnrdOpenPlayer|gnrd/v1/player|GNRD_|_gnrd|gnpv)[\s\S]{0,1200}"),
+              ("EP_JS", ehtml, r"(?:function\s+gnpvLoad|gnrd/v1/player|gnep-player-box|GNEP_)[\s\S]{0,1200}"),
           ]:
-              html = S.get(u, timeout=15).text
-              soup = BeautifulSoup(html, "html.parser")
-              ey = one(soup.select_one(".gnrd-eyebrow").get_text(" ", strip=True) if soup.select_one(".gnrd-eyebrow") else "")
-              btns = [one(str(el)) for el in soup.select("#gnrd-play, .gnrd-play, .gnrd-btn-play, button, [onclick*='gnrd'], [data-t], [data-id], [data-post], [data-pid], [data-token]") if "player" in str(el).lower() or "gnrd" in str(el).lower() or "ver " in str(el).lower() or "reproducir" in str(el).lower() or el.has_attr("data-t") or el.has_attr("data-id") or el.has_attr("data-pid")]
-              # Search inline scripts for player/token/gnrd
-              hits = []
-              for m in re.finditer(r"(?:gnrd|player|token|_t\b|data-t|data-id|pid\b|post_id|v1/player)[^\n]{0,160}", html, re.I):
-                  hits.append(one(m.group(0)))
-                  if len(hits) >= 12: break
-              bc = [one(str(a)) for a in soup.select(".gnrd-crumb a, .breadcrumb a, a.gnrd-ep-series, .gnrd-epbar a, header a[href*='/ver/'], main a[href*='/ver/']")[:8]]
-              print(f"::notice::{label}_TRIGGERS=ey:{ey} || btns:{' | '.join(btns[:5])[:800]} || hits:{' | '.join(hits[:8])[:900]} || bc:{' | '.join(bc)[:400]}")
+              matches = [one(m.group(0))[:900] for m in re.finditer(pat, html)][:3]
+              for idx, txt in enumerate(matches):
+                  print(f"::notice::{label}_{idx}={txt}")
           PY
