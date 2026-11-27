@@ -15,56 +15,43 @@ jobs:
         with:
           python-version: '3.12'
       - name: Instalar dependencias
-        run: pip install -q curl_cffi beautifulsoup4 pillow requests
-      - name: Verificar detalles de íconos clave
+        run: |
+          pip install -q playwright requests pillow
+          playwright install chromium
+      - name: Inspeccionar RePelisHD y validar favicons de Google
         run: |
           python3 - <<'PY'
-          import io, hashlib, requests
-          from curl_cffi import requests as cfreq
-          from bs4 import BeautifulSoup
+          import hashlib, io, requests
           from PIL import Image
+          from playwright.sync_api import sync_playwright
 
           UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
-          def inspect_img(url, use_cf=False):
+          def info(b):
+              h = hashlib.md5(b).hexdigest()[:8]
               try:
-                  r = (cfreq.get(url, impersonate="chrome131", timeout=15) if use_cf
-                       else requests.get(url, headers={"User-Agent": UA}, timeout=12, allow_redirects=True))
-                  b = r.content
-                  h = hashlib.md5(b).hexdigest()[:8]
-                  if r.status_code != 200:
-                      return f"HTTP {r.status_code} md5={h}"
-                  if b.lstrip()[:5].lower().startswith(b"<!doc") or b.lstrip()[:5].lower().startswith(b"<html"):
-                      return f"200 HTML len={len(b)}"
-                  try:
-                      im = Image.open(io.BytesIO(b))
-                      return f"200 {im.format} {im.size[0]}x{im.size[1]} len={len(b)} md5={h}"
-                  except Exception as e:
-                      return f"200 len={len(b)} err={e}"
+                  im = Image.open(io.BytesIO(b))
+                  colors = len(set(im.convert("RGBA").getdata()))
+                  return f"{im.format} {im.size[0]}x{im.size[1]} len={len(b)} md5={h} colors={colors}"
               except Exception as e:
-                  return f"ERR {e}"
+                  return f"len={len(b)} md5={h} err={e}"
 
-          # 1. Google generic globe comparison vs repelishd / pelicinehd / yandex / ddg
-          g_generic = inspect_img("https://www.google.com/s2/favicons?domain=nonexistent-domain-xyz-99999.invalid&sz=128")
-          print("::notice::G_GENERIC=" + g_generic)
+          for dom in ["repelishd.hair", "pelicinehd.com", "repelishd.surf", "repelis24.cz", "example.com", "definitely-no-icon-12345.com"]:
+              r = requests.get(f"https://www.google.com/s2/favicons?domain={dom}&sz=128", timeout=10)
+              print(f"::notice::G[{dom}] status={r.status_code} {info(r.content)}")
 
-          for dom in ["repelishd.hair", "pelicinehd.com"]:
-              g = inspect_img(f"https://www.google.com/s2/favicons?domain={dom}&sz=128")
-              ddg = inspect_img(f"https://icons.duckduckgo.com/ip3/{dom}.ico")
-              yan = inspect_img(f"https://favicon.yandex.net/favicon/{dom}?size=120")
-              print(f"::notice::{dom}: G={g} | DDG={ddg} | YAN={yan}")
-
-          # 2. repelishd.hair real icon via curl_cffi
-          print("::notice::REPELISHD_CF=" + inspect_img("https://repelishd.hair/brand/repelishd/apple-touch.png", use_cf=True))
-
-          # 3. verani.me link rel=icon tags
-          hr = cfreq.get("https://verani.me/", impersonate="chrome131", timeout=20)
-          soup = BeautifulSoup(hr.text, "html.parser")
-          icons = [(el.get("rel"), el.get("sizes"), el.get("href")) for el in soup.select("link[rel*='icon']")]
-          print("::notice::VERANI_LINKS=" + str(icons)[:900])
-
-          # 4. repelis24.cz & ww4.animeonline.ninja direct candidates
-          print("::notice::REPELIS24CZ_512=" + inspect_img("https://repelis24.cz/wp-content/uploads/2026/04/cropped-repelis.top_.png"))
-          print("::notice::ANIMEONLINE_WW4=" + inspect_img("https://ww4.animeonline.ninja/fh_assets/apple-touch-icon.png"))
-          print("::notice::ANIMEONLINE_WW4_96=" + inspect_img("https://ww4.animeonline.ninja/fh_assets/favicon-96x96.png"))
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=True)
+              ctx = b.new_context(user_agent=UA)
+              page = ctx.new_page()
+              for url in ["https://repelishd.hair/", "https://repelishd.hair/brand/repelishd/apple-touch.png", "https://repelishd.surf/"]:
+                  try:
+                      resp = page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                      page.wait_for_timeout(4000)
+                      title = page.title()
+                      links = page.eval_on_selector_all("link[rel*='icon'], header img, img", "els => els.slice(0,10).map(e => e.href || e.src)")
+                      print(f"::notice::PW[{url}] status={resp.status if resp else None} title={title[:40]} links={links[:5]}")
+                  except Exception as e:
+                      print(f"::notice::PW[{url}] ERR={str(e)[:120]}")
+              b.close()
           PY
