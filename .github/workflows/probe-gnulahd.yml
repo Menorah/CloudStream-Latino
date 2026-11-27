@@ -1,4 +1,4 @@
-name: Probe GnulaHD Final Verification
+name: Probe GnulaHD Pagination and Episodes
 on:
   workflow_dispatch:
   push:
@@ -7,115 +7,84 @@ on:
 permissions:
   contents: read
 jobs:
-  final_live_audit:
+  check_pagination_episodes_icons:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -q beautifulsoup4 requests
-      - name: Auditar extractores en vivo, paginacion de busqueda, anime movie, posts sin srvs y logo/poster headers
+      - run: pip install -q beautifulsoup4 requests pillow
+      - name: Verificar selector paginacion, total episodios Bleach/OnePiece, OkRu/Vidsonic, y logo/favicon PNG
         run: |
           python3 - <<'PY'
-          import base64, json, re, requests
+          import io, re, requests
           from bs4 import BeautifulSoup
+          from PIL import Image
 
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
           S = requests.Session()
           S.headers.update({"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"})
 
-          # 1. Check amor-sin-medida (why srvs=[]) + anime movie + header brand logo!
-          r_home = S.get("https://ww3.gnulahd.nu/", timeout=20)
-          sp_h = BeautifulSoup(r_home.text, "html.parser")
-          logo_dom = str(sp_h.select_one("header .gnrd-logo, header a[href='https://ww3.gnulahd.nu/'], .gnrd-brand"))[:500]
-          print("::notice::HEADER_LOGO=" + re.sub(r"\s+", " ", logo_dom).replace("%", "%25"))
-
-          for lbl, u in [
-              ("NO_SRV", "https://ww3.gnulahd.nu/ver/amor-sin-medida/"),
-              ("ANIME_MOV", "https://ww3.gnulahd.nu/ver/dragon-ball-z-los-dos-guerreros-del-futuro-gohan-y-trunks/"),
-              ("VIDSONIC_OLD", "https://ww3.gnulahd.nu/ver/scary-movie-3/"),
-              ("EP_CROWN", "https://ww3.gnulahd.nu/the-crown-1x01/"),
+          # 1. Exact HTML of pagination element on peliculas, genres, search, and last page
+          pag_htmls = []
+          for u in [
+              "https://ww3.gnulahd.nu/ver/peliculas/",
+              "https://ww3.gnulahd.nu/ver/peliculas/?page=464",
+              "https://ww3.gnulahd.nu/genres/terror/",
+              "https://ww3.gnulahd.nu/?s=love",
+              "https://ww3.gnulahd.nu/page/5/?s=love",
+              "https://ww3.gnulahd.nu/recien-agregado/",
           ]:
               r = S.get(u, timeout=20)
               sp = BeautifulSoup(r.text, "html.parser")
-              ey = (sp.select_one(".gnrd-eyebrow") or sp.select_one(".gnrd-fi-eyebrow"))
-              pid = re.search(r'_gnrdPid\s*=\s*(\d+)', r.text)
-              tok = re.search(r'_gnrdTok\s*=\s*"([^"]+)"', r.text)
-              ep_cnt = len(sp.select("a.gnrd-epc"))
-              # Check player JSON if pid/tok
-              srvs = []
-              if pid and tok:
-                  rp = S.get(f"https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id={pid.group(1)}&t={tok.group(1)}", headers={"User-Agent": UA, "Referer": u}, timeout=20)
-                  if rp.status_code == 200:
-                      raw = base64.b64decode(rp.json().get("p", ""))
-                      d = json.loads(bytes(b ^ [103,78,55,100][i & 3] for i, b in enumerate(raw)).decode("utf-8"))
-                      srvs = [(l.get("label"), [sv.get("src") for sv in l.get("servers", [])]) for l in d.get("langs", [])]
-              print(f"::notice::CHK_{lbl}=ey={ey.get_text(' ',strip=True) if ey else None!r} pid={pid.group(1) if pid else None} ep_cnt={ep_cnt} srvs={srvs}".replace("%", "%25")[:3200])
+              # Find any element containing "Cargar más" or "›" or "?page=2" or "/page/2/"
+              hits = []
+              for el in sp.select("a[href*='page='], a[href*='/page/']"):
+                  p_cls = ".".join(el.parent.get("class", [])) if el.parent else ""
+                  pp_cls = ".".join(el.parent.parent.get("class", [])) if el.parent and el.parent.parent else ""
+                  hits.append(f"{pp_cls}>{p_cls}>a({el.get_text(strip=True)})={el.get('href')}")
+              pag_htmls.append(f"{u} => {hits[:6]}")
+          print("::notice::PAG_EXACT=" + " || ".join(pag_htmls).replace("%", "%25")[:3500])
 
-          # 2. Check search pagination & category URLs & 683x1024 poster headers
-          pag_res = []
+          # 2. Check Bleach, One Piece, The Crown full DOM episode counts + season/ep html sample + anime movie card!
+          ep_checks = []
           for u in [
-              "https://ww3.gnulahd.nu/?s=love",
-              "https://ww3.gnulahd.nu/page/2/?s=love",
-              "https://ww3.gnulahd.nu/?s=love&page=2",
-              "https://ww3.gnulahd.nu/ver/peliculas/?orderby=views&page=2",
-              "https://ww3.gnulahd.nu/ver/series/latino/",
-              "https://ww3.gnulahd.nu/ver/anime/latino/",
-              "https://ww3.gnulahd.nu/ver/anime/?orderby=views",
+              "https://ww3.gnulahd.nu/ver/the-crown/",
+              "https://ww3.gnulahd.nu/ver/bleach-2004/",
+              "https://ww3.gnulahd.nu/ver/one-piece-1999/",
           ]:
-              ru = S.get(u, timeout=20)
-              su = BeautifulSoup(ru.text, "html.parser")
-              c = len(su.select("a.gnrd-card"))
-              first = (su.select_one("a.gnrd-card") or {}).get("href", "")
-              pags = [(a.get_text(strip=True), a.get("href")) for a in su.select(".gnrd-pag a, .pagination a")]
-              pag_res.append(f"{u}=>{ru.status_code} cards={c} first={first.split('/ver/')[-1]} pags={pags[:4]}")
-          print("::notice::PAG_TESTS=" + " || ".join(pag_res).replace("%", "%25")[:3500])
+              r = S.get(u, timeout=20)
+              sp = BeautifulSoup(r.text, "html.parser")
+              eps = sp.select("a.gnrd-epc")
+              seasons = sorted(set(e.get("data-s", "") for e in eps))
+              first_ep = re.sub(r"\s+", " ", str(eps[0]))[:450] if eps else ""
+              last_ep = re.sub(r"\s+", " ", str(eps[-1]))[:450] if eps else ""
+              # Recommendations section selector
+              rel_cards = [(c.parent.get("class"), c.find_previous(["h2","h3"]).get_text(" ", strip=True) if c.find_previous(["h2","h3"]) else "") for c in sp.select("a.gnrd-card")[:2]]
+              ep_checks.append(f"{u.split('/ver/')[-1]} cnt={len(eps)} seasons={seasons} first={first_ep} last={last_ep} rel={rel_cards}")
+          print("::notice::EP_COUNTS=" + " || ".join(ep_checks).replace("%", "%25")[:3500])
 
-          # 3. Live test extractors: Savefiles, Vidara (strip #gnraw!), ByseVepoin, Voe, OkRu!
-          ext_res = []
-          # Savefiles POST /dl
-          try:
-              rsf = requests.post("https://savefiles.com/dl", data={"op":"embed","file_code":"4k581w054dxn","auto":"1","referer":"https://ww3.gnulahd.nu/"}, headers={"User-Agent": UA, "Referer": "https://savefiles.com/e/4k581w054dxn", "Origin": "https://savefiles.com"}, timeout=15)
-              m_sf = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', rsf.text)
-              ext_res.append(f"Savefiles=>{rsf.status_code} streams={m_sf[:3]}")
-          except Exception as e:
-              ext_res.append(f"Savefiles=>ERR:{e}")
+          # 3. Check OkRu data-options vs videos & Vidsonic _0x1 + logo-gnula.png & favicon!
+          rok = requests.get("https://ok.ru/videoembed/13967573977684", headers={"User-Agent": UA}, timeout=15)
+          rvs = requests.get("https://vidsonic.net/e/gzihedvkxd57", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
+          m_vs = re.search(r"const _0x1\s*=\s*'([^']+)'", rvs.text)
+          vs_dec = ""
+          if m_vs:
+              hx = m_vs.group(1).replace("|", "")
+              vs_dec = "".join(chr(int(hx[i:i+2], 16)) for i in range(0, len(hx), 2))[::-1]
+          m_ok = re.search(r'data-options="([^"]+)"', rok.text)
+          print("::notice::OK_VIDSONIC=" + f"ok_status={rok.status_code} ok_has_videos={'videos' in rok.text} ok_opts={bool(m_ok)} || vs_status={rvs.status_code} vs_dec={vs_dec}".replace("%", "%25")[:2500])
 
-          # Vidara POST /api/stream (without #gnraw)
-          for vd_u, code in [("https://vidara.to", "rll3Cm6mqgnLJ"), ("https://vidaraa.cc", "QGKzkFZxmQ9jM")]:
-              try:
-                  rvd = requests.post(f"{vd_u}/api/stream", json={"filecode": code, "device": "web"}, headers={"User-Agent": UA, "Referer": f"{vd_u}/e/{code}"}, timeout=15)
-                  ext_res.append(f"{vd_u}=>{rvd.status_code} body={rvd.text[:250]}")
-              except Exception as e:
-                  ext_res.append(f"{vd_u}=>ERR:{e}")
-
-          # ByseVepoin details -> playback
-          try:
-              rdet = requests.get("https://bysevepoin.com/api/videos/2n71086n81zc/embed/details", headers={"User-Agent": UA}, timeout=15)
-              ext_res.append(f"ByseVepoin_det=>{rdet.status_code} body={rdet.text[:250]}")
-          except Exception as e:
-              ext_res.append(f"ByseVepoin=>ERR:{e}")
-
-          # Voe live check on xlpslkgo8zlg
-          try:
-              rvoe = requests.get("https://voe.sx/e/xlpslkgo8zlg", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15, allow_redirects=True)
-              ext_res.append(f"Voe=>{rvoe.status_code} final={rvoe.url} len={len(rvoe.text)} has_json={'application/json' in rvoe.text}")
-          except Exception as e:
-              ext_res.append(f"Voe=>ERR:{e}")
-
-          # OkRu live check
-          try:
-              rok = requests.get("https://ok.ru/videoembed/13967573977684", headers={"User-Agent": UA}, timeout=15)
-              ext_res.append(f"OkRu=>{rok.status_code} len={len(rok.text)} has_flash={'data-options' in rok.text or 'ondemandHls' in rok.text}")
-          except Exception as e:
-              ext_res.append(f"OkRu=>ERR:{e}")
-
-          # 683x1024 poster bare okhttp vs cs_ua
-          p_u = "https://ww3.gnulahd.nu/wp-content/uploads/2026/11/nzIXSQNgYZwFOMrmv0d0I3ulvkM-683x1024.webp"
-          rb = requests.get(p_u, headers={"User-Agent": "okhttp/4.12.0"}, timeout=15)
-          rc = requests.get(p_u, headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
-          ext_res.append(f"Poster683=>bare={rb.status_code} cs={rc.status_code}")
-
-          print("::notice::EXTRACTOR_AND_IMG_PROBES=" + " || ".join(ext_res).replace("%", "%25")[:3500])
+          # 4. Inspect GnulaHD logo & favicon PNG dimensions and colors
+          logos = []
+          for u in [
+              "https://ww3.gnulahd.nu/wp-content/themes/dramastream-child/img/logo-gnula.png?v=1782785985",
+              "https://ww3.gnulahd.nu/wp-content/uploads/2026/07/cropped-favicon-32x32-2-192x192.png",
+              "https://i2.wp.com/ww3.gnulahd.nu/wp-content/uploads/2026/07/cropped-favicon-32x32-2-192x192.png",
+          ]:
+              ri = S.get(u, timeout=15)
+              im = Image.open(io.BytesIO(ri.content))
+              logos.append(f"{u}=>{ri.status_code} {im.format} {im.mode} {im.size} bytes={len(ri.content)}")
+          print("::notice::LOGOS=" + " || ".join(logos).replace("%", "%25"))
           PY
