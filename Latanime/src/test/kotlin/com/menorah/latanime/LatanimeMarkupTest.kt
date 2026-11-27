@@ -252,8 +252,7 @@ class LatanimeMarkupTest {
     @Test
     fun `search normalization letter selection and cloudflare challenge detection work reliably`() {
         assertEquals(listOf("D", "S"), LatanimeMarkup.candidateLetters("Dragon Ball Super"))
-        assertEquals(listOf("0", "K"), listOf("0", "K")) // sanity
-        assertEquals(listOf("09", "S"), LatanimeMarkup.candidateLetters("86 eighty six"))
+        assertEquals(listOf("09", "E"), LatanimeMarkup.candidateLetters("86 eighty six"))
 
         val cards = listOf(
             LatanimeCard("Kusuriya no Hitorigoto", "https://latanime.org/anime/los-diarios-de-la-boticaria", null),

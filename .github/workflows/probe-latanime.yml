@@ -24,9 +24,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          LATANIME_LIVE: 'true'
         run: |
           set +e
-          ./gradlew :Latanime:testDebugUnitTest -Dlatanime.live=true --info --rerun-tasks > gradle-live.txt 2>&1
+          LATANIME_LIVE=true ./gradlew :Latanime:testDebugUnitTest --info --rerun-tasks > gradle-live.txt 2>&1
           status=$?
           export STATUS=$status
           python3 - <<'PY'
