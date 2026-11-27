@@ -1,0 +1,356 @@
+name: Sonda 5 Sitios Bis
+
+on:
+  push:
+    branches:
+      - 'arena/**'
+    paths:
+      - '.github/workflows/bis-sites-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe_repelis24cz:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe repelis24.cz
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, urllib.request, zlib
+
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          def get(url, ref='https://repelis24.cz/', data=None, hdrs=None):
+              h = {'User-Agent': UA, 'Accept': 'text/html,application/json,*/*', 'Accept-Language': 'es-MX,es;q=0.9', 'Referer': ref}
+              if hdrs: h.update(hdrs)
+              req = urllib.request.Request(url, data=data, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=18) as r:
+                      return r.getcode(), r.geturl(), dict(r.info()), r.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.geturl(), dict(e.headers), e.read().decode('utf-8', 'replace')
+              except Exception as e:
+                  return 0, url, {}, str(e)
+
+          out = {}
+          for name, u in [
+              ('home', 'https://repelis24.cz/'),
+              ('peliculas', 'https://repelis24.cz/peliculas/'),
+              ('peliculas_p2', 'https://repelis24.cz/peliculas/page/2/'),
+              ('series', 'https://repelis24.cz/series/'),
+              ('search', 'https://repelis24.cz/?s=spider'),
+              ('search_p2', 'https://repelis24.cz/page/2/?s=spider'),
+              ('movie', 'https://repelis24.cz/peliculas/codigo-venganza-2/'),
+              ('movie2', 'https://repelis24.cz/peliculas/super-mario-galaxy-la-pelicula/'),
+              ('serie', 'https://repelis24.cz/series/los-altruistas/'),
+          ]:
+              c, fu, hd, txt = get(u)
+              out[name + '_meta'] = {'code': c, 'final_url': fu, 'len': len(txt)}
+              if name == 'home':
+                  out['home_nav'] = re.findall(r'<nav[^>]*>.*?</nav>', txt, re.S)[:3]
+                  out['home_forms'] = re.findall(r'<form[^>]*>.*?</form>', txt, re.S)[:3]
+                  m_main = re.search(r'<div id="contenedor".*', txt, re.S)
+                  out['home_sample'] = (m_main.group(0) if m_main else txt)[:7000]
+              elif name in ('peliculas', 'series', 'search'):
+                  m_arch = re.search(r'<div class="content[^>]*>.*', txt, re.S) or re.search(r'<div id="contenedor".*', txt, re.S)
+                  out[name + '_sample'] = (m_arch.group(0) if m_arch else txt)[:5000]
+                  out[name + '_pag'] = re.findall(r'<div class="pagination">.*?</div>', txt, re.S)[:2]
+              elif name in ('movie', 'movie2'):
+                  m_s = re.search(r'<div id="single".*', txt, re.S)
+                  body = m_s.group(0) if m_s else txt
+                  out[name + '_head'] = body[:6500]
+                  # Player options + ajax
+                  opts = re.findall(r'<li[^>]*class=["\'][^"\']*dooplay_player_option[^"\']*["\'][^>]*>.*?</li>', txt, re.S)
+                  out[name + '_player_opts'] = opts
+                  out[name + '_scripts'] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', txt, re.S) if any(k in s for k in ('dtAjax', 'dooplay', 'ajax', 'player'))][:5]
+                  out[name + '_script_srcs'] = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', txt)
+                  ajax_res = []
+                  for o in opts[:6]:
+                      post = re.search(r'data-post=["\']([^"\']+)["\']', o)
+                      nume = re.search(r'data-nume=["\']([^"\']+)["\']', o)
+                      typ = re.search(r'data-type=["\']([^"\']+)["\']', o)
+                      if post and nume and typ:
+                          # Test both admin-ajax and wp-json/dooplayer/v2
+                          form = urllib.parse.urlencode({'action': 'doo_player_ajax', 'post': post.group(1), 'nume': nume.group(1), 'type': typ.group(1)}).encode()
+                          ac, _, _, ab = get('https://repelis24.cz/wp-admin/admin-ajax.php', ref=u, data=form, hdrs={'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded'})
+                          rc, _, _, rb = get(f'https://repelis24.cz/wp-json/dooplayer/v2/{post.group(1)}/{typ.group(1)}/{nume.group(1)}', ref=u)
+                          ajax_res.append({'opt': o[:220], 'admin_ajax': [ac, ab[:600]], 'rest': [rc, rb[:600]]})
+                  out[name + '_ajax_res'] = ajax_res
+              elif name == 'serie':
+                  m_s = re.search(r'<div id="single".*', txt, re.S)
+                  out['serie_body'] = (m_s.group(0) if m_s else txt)[:7000]
+                  ep_m = re.search(r'href=["\'](https://repelis24\.cz/episodios/[^"\']+)["\']', txt)
+                  if ep_m:
+                      ec, efu, _, eb = get(ep_m.group(1), ref=u)
+                      out['ep_url'] = ep_m.group(1)
+                      out['ep_opts'] = re.findall(r'<li[^>]*class=["\'][^"\']*dooplay_player_option[^"\']*["\'][^>]*>.*?</li>', eb, re.S)
+                      ep_ajax = []
+                      for o in out['ep_opts'][:4]:
+                          post = re.search(r'data-post=["\']([^"\']+)["\']', o)
+                          nume = re.search(r'data-nume=["\']([^"\']+)["\']', o)
+                          typ = re.search(r'data-type=["\']([^"\']+)["\']', o)
+                          if post and nume and typ:
+                              form = urllib.parse.urlencode({'action': 'doo_player_ajax', 'post': post.group(1), 'nume': nume.group(1), 'type': typ.group(1)}).encode()
+                              ac, _, _, ab = get('https://repelis24.cz/wp-admin/admin-ajax.php', ref=ep_m.group(1), data=form, hdrs={'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded'})
+                              ep_ajax.append({'opt': o[:200], 'ajax': [ac, ab[:600]]})
+                      out['ep_ajax'] = ep_ajax
+
+          blob = base64.b64encode(zlib.compress(json.dumps(out, ensure_ascii=False).encode(), 9)).decode()
+          step = 3400
+          chunks = [blob[i:i+step] for i in range(0, len(blob), step)]
+          print(f"CZ blob={len(blob)} chunks={len(chunks)}")
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=CZ_{idx+1}_{len(chunks)}::{ch}")
+          PY
+
+  probe_repelis24shop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe repelis24.shop
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, urllib.request, zlib
+
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          def get(url, ref=None, data=None, hdrs=None, binary=False):
+              h = {'User-Agent': UA, 'Accept': '*/*', 'Accept-Language': 'es-MX,es;q=0.9'}
+              if ref is not None: h['Referer'] = ref
+              if hdrs: h.update(hdrs)
+              req = urllib.request.Request(url, data=data, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=18) as r:
+                      raw = r.read()
+                      return r.getcode(), r.geturl(), dict(r.info()), (raw if binary else raw.decode('utf-8', 'replace'))
+              except urllib.error.HTTPError as e:
+                  raw = e.read()
+                  return e.code, e.geturl(), dict(e.headers), (raw if binary else raw.decode('utf-8', 'replace'))
+              except Exception as e:
+                  return 0, url, {}, (b'' if binary else str(e))
+
+          out = {}
+          for name, u in [
+              ('home', 'https://repelis24.shop/'),
+              ('peliculas', 'https://repelis24.shop/peliculas/'),
+              ('peliculas_p2', 'https://repelis24.shop/peliculas/page/2/'),
+              ('series', 'https://repelis24.shop/series/'),
+              ('busqueda', 'https://repelis24.shop/busqueda/'),
+              ('search_q', 'https://repelis24.shop/?s=spider'),
+              ('search_bq', 'https://repelis24.shop/busqueda/?q=spider'),
+              ('movie', 'https://repelis24.shop/pelicula/the-accountant-2-el-contador-2/'),
+              ('serie', 'https://repelis24.shop/serie/cats-eyes/'),
+          ]:
+              c, fu, hd, txt = get(u, ref='https://repelis24.shop/')
+              out[name + '_meta'] = {'code': c, 'final_url': fu, 'len': len(txt)}
+              if name in ('home', 'peliculas', 'series', 'busqueda', 'search_q', 'search_bq'):
+                  out[name + '_sample'] = txt[:4500]
+                  if name == 'home':
+                      out['home_nav'] = re.findall(r'<header[^>]*>.*?</header>|<nav[^>]*>.*?</nav>', txt, re.S)[:3]
+                      # Test CDN image with and without Referer
+                      img_m = re.search(r'https://repelis24\.shop/cdn/[^"\'\s>]+', txt)
+                      if img_m:
+                          iu = img_m.group(0)
+                          c1, _, h1, b1 = get(iu, ref=None, binary=True)
+                          c2, _, h2, b2 = get(iu, ref='https://repelis24.shop/', binary=True)
+                          out['cdn_img_test'] = {'url': iu, 'no_ref': [c1, len(b1), h1.get('Content-Type')], 'with_ref': [c2, len(b2), h2.get('Content-Type')]}
+                  if name in ('peliculas', 'series', 'busqueda'):
+                      out[name + '_forms'] = re.findall(r'<form[^>]*>.*?</form>', txt, re.S)
+                      out[name + '_scripts'] = re.findall(r'<script[^>]*>.*?</script>', txt, re.S)
+                      out[name + '_pag'] = re.findall(r'<[^>]*(?:pag|next)[^>]*>.*?</(?:nav|div|ul)>', txt, re.S)[:3]
+              elif name == 'movie':
+                  out['movie_html'] = txt[:9000]
+                  out['movie_tail'] = txt[9000:18000]
+                  out['movie_servers'] = re.findall(r'<[^>]*data-server[^>]*>.*?</(?:li|button|div|a)>', txt, re.S)
+                  out['movie_scripts'] = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', txt)
+                  for src in out['movie_scripts']:
+                      if 'repelis24.shop' in src or src.startswith('/'):
+                          su = urllib.parse.urljoin(u, src)
+                          sc, _, _, sb = get(su, ref=u)
+                          out.setdefault('js_bundles', {})[su] = [sc, sb[:6000]]
+              elif name == 'serie':
+                  out['serie_html'] = txt[:10000]
+                  temp_m = re.search(r'href=["\'](https://repelis24\.shop/temporada/[^"\']+|/temporada/[^"\']+)["\']', txt)
+                  if temp_m:
+                      tu = urllib.parse.urljoin(u, temp_m.group(1))
+                      tc, tfu, _, tb = get(tu, ref=u)
+                      out['temporada_url'] = tu
+                      out['temporada_html'] = [tc, tb[:8000]]
+                      ep_m = re.search(r'href=["\'](https://repelis24\.shop/(?:episodio|capitulo|ver)[^"\']+|/(?:episodio|capitulo|ver)[^"\']+)["\']', tb)
+                      if ep_m:
+                          eu = urllib.parse.urljoin(tu, ep_m.group(1))
+                          ec, _, _, eb = get(eu, ref=tu)
+                          out['ep_url'] = eu
+                          out['ep_servers'] = re.findall(r'<[^>]*data-server[^>]*>.*?</(?:li|button|div|a)>', eb, re.S)
+                          out['ep_html_tail'] = eb[-5000:]
+
+          blob = base64.b64encode(zlib.compress(json.dumps(out, ensure_ascii=False).encode(), 9)).decode()
+          step = 3400
+          chunks = [blob[i:i+step] for i in range(0, len(blob), step)]
+          print(f"SH blob={len(blob)} chunks={len(chunks)}")
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=SH_{idx+1}_{len(chunks)}::{ch}")
+          PY
+
+  probe_repelishd:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe repelishd.surf
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, urllib.request, zlib
+
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          def get(url, ref='https://repelishd.surf/', data=None, hdrs=None):
+              h = {'User-Agent': UA, 'Accept': 'text/html,application/json,*/*', 'Accept-Language': 'es-MX,es;q=0.9', 'Referer': ref}
+              if hdrs: h.update(hdrs)
+              req = urllib.request.Request(url, data=data, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=18) as r:
+                      return r.getcode(), r.geturl(), r.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.geturl(), e.read().decode('utf-8', 'replace')
+              except Exception as e:
+                  return 0, url, str(e)
+
+          out = {}
+          for name, u in [
+              ('home', 'https://repelishd.surf/'),
+              ('top', 'https://repelishd.surf/top-espana'),
+              ('search_s', 'https://repelishd.surf/?s=iron'),
+              ('search_b', 'https://repelishd.surf/buscar?q=iron'),
+              ('movie', 'https://repelishd.surf/ver-pelicula/1726-iron-man-online-espanol'),
+              ('movie2', 'https://repelishd.surf/ver-pelicula/969681-spider-man-brand-new-day-online-espanol'),
+              ('serie', 'https://repelishd.surf/ver-serie/1413-american-horror-story-online-espanol'),
+          ]:
+              c, fu, txt = get(u)
+              out[name + '_meta'] = {'code': c, 'final_url': fu, 'len': len(txt)}
+              if name == 'home':
+                  out['home_links'] = sorted(set(re.findall(r'href=["\']([^"\']+)["\']', txt)))[:80]
+                  out['home_forms'] = re.findall(r'<form[^>]*>.*?</form>', txt, re.S)
+                  out['home_scripts'] = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', txt)
+                  out['home_html'] = txt[3000:13000]
+              elif name in ('top', 'search_s', 'search_b'):
+                  out[name + '_sample'] = txt[:4500]
+              elif name in ('movie', 'movie2'):
+                  out[name + '_head'] = txt[:8000]
+                  out[name + '_tail'] = txt[8000:18000]
+                  out[name + '_inline_scripts'] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', txt, re.S) if len(s.strip()) > 20][:6]
+                  out[name + '_iframes'] = re.findall(r'<iframe[^>]+>', txt)
+              elif name == 'serie':
+                  out['serie_head'] = txt[:8000]
+                  out['serie_tail'] = txt[8000:18000]
+                  out['serie_inline_scripts'] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', txt, re.S) if len(s.strip()) > 20][:6]
+
+          blob = base64.b64encode(zlib.compress(json.dumps(out, ensure_ascii=False).encode(), 9)).decode()
+          step = 3400
+          chunks = [blob[i:i+step] for i in range(0, len(blob), step)]
+          print(f"HD blob={len(blob)} chunks={len(chunks)}")
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=HD_{idx+1}_{len(chunks)}::{ch}")
+          PY
+
+  probe_cinecalidadam:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe cinecalidad.am
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, urllib.request, zlib
+
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          def get(url, ref='https://www.cinecalidad.am/'):
+              req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*', 'Accept-Language': 'es-MX,es;q=0.9', 'Referer': ref})
+              try:
+                  with urllib.request.urlopen(req, timeout=18) as r:
+                      return r.getcode(), r.geturl(), r.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.geturl(), e.read().decode('utf-8', 'replace')
+              except Exception as e:
+                  return 0, url, str(e)
+
+          out = {}
+          for name, u in [
+              ('home', 'https://www.cinecalidad.am/'),
+              ('home_p2', 'https://www.cinecalidad.am/page/2/'),
+              ('search', 'https://www.cinecalidad.am/?s=batman'),
+              ('movie', 'https://www.cinecalidad.am/ver-pelicula/007-otro-dia-para-morir/'),
+              ('movie2', 'https://www.cinecalidad.am/ver-pelicula/el-supersabio/'),
+              ('serie', 'https://www.cinecalidad.am/ver-serie/batman-la-serie-animada/'),
+          ]:
+              c, fu, txt = get(u)
+              out[name + '_meta'] = {'code': c, 'final_url': fu, 'len': len(txt)}
+              if name == 'home':
+                  out['home_nav'] = re.findall(r'<header[^>]*>.*?</header>|<nav[^>]*>.*?</nav>|<ul id="menu[^"]*">.*?</ul>', txt, re.S)[:4]
+                  out['home_links'] = sorted(set(re.findall(r'href=["\'](https://www\.cinecalidad\.am/[^"\']+)["\']', txt)))[:60]
+                  out['home_sample'] = txt[3000:12000]
+                  out['home_pag'] = re.findall(r'<div[^>]*pag[^>]*>.*?</div>|<nav[^>]*pag[^>]*>.*?</nav>', txt, re.S)[:3]
+              elif name == 'search':
+                  out['search_sample'] = txt[3000:10000]
+              elif name in ('movie', 'movie2'):
+                  out[name + '_head'] = txt[3000:13000]
+                  out[name + '_tail'] = txt[13000:22000]
+                  out[name + '_scripts'] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', txt, re.S) if any(k in s for k in ('iframe', 'data-', 'player', 'atob', 'option', 'url'))][:6]
+                  out[name + '_data_attrs'] = re.findall(r'<[^>]*(?:data-src|data-url|data-option|data-video)[^>]*>.*?</(?:li|a|button|div)>', txt, re.S)[:20]
+              elif name == 'serie':
+                  out['serie_body'] = txt[3000:16000]
+                  ep_m = re.search(r'href=["\'](https://www\.cinecalidad\.am/(?:ver-episodio|episodio|ver-capitulo)[^"\']+)["\']', txt)
+                  if ep_m:
+                      ec, efu, eb = get(ep_m.group(1), ref=u)
+                      out['ep_url'] = ep_m.group(1)
+                      out['ep_body'] = eb[3000:14000]
+
+          blob = base64.b64encode(zlib.compress(json.dumps(out, ensure_ascii=False).encode(), 9)).decode()
+          step = 3400
+          chunks = [blob[i:i+step] for i in range(0, len(blob), step)]
+          print(f"AM blob={len(blob)} chunks={len(chunks)}")
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=AM_{idx+1}_{len(chunks)}::{ch}")
+          PY
+
+  probe_cinecalidadmy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe cinecalidad.my
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, urllib.request, zlib
+
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          def get(url, ref='https://www.cinecalidad.my/'):
+              req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*', 'Accept-Language': 'es-MX,es;q=0.9', 'Referer': ref})
+              try:
+                  with urllib.request.urlopen(req, timeout=18) as r:
+                      return r.getcode(), r.geturl(), r.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.geturl(), e.read().decode('utf-8', 'replace')
+              except Exception as e:
+                  return 0, url, str(e)
+
+          out = {}
+          for name, u in [
+              ('home', 'https://www.cinecalidad.my/'),
+              ('home_p2', 'https://www.cinecalidad.my/page/2/'),
+              ('search', 'https://www.cinecalidad.my/?s=ne+zha'),
+              ('movie', 'https://www.cinecalidad.my/pelicula/ne-zha-2-el-renacer-del-alma-2025-online-descarga/'),
+              ('movie2', 'https://www.cinecalidad.my/pelicula/heartland-2026-online-descarga/'),
+          ]:
+              c, fu, txt = get(u)
+              out[name + '_meta'] = {'code': c, 'final_url': fu, 'len': len(txt)}
+              if name == 'home':
+                  out['home_nav'] = re.findall(r'<header[^>]*>.*?</header>|<nav[^>]*>.*?</nav>|<ul[^>]*menu[^>]*>.*?</ul>', txt, re.S)[:4]
+                  out['home_links'] = sorted(set(re.findall(r'href=["\'](https://www\.cinecalidad\.my/[^"\']+)["\']', txt)))[:70]
+                  out['home_sample'] = txt[3000:12000]
+                  out['home_pag'] = re.findall(r'<div[^>]*pag[^>]*>.*?</div>|<nav[^>]*pag[^>]*>.*?</nav>', txt, re.S)[:3]
+              elif name == 'search':
+                  out['search_sample'] = txt[3000:10000]
+              elif name in ('movie', 'movie2'):
+                  out[name + '_head'] = txt[3000:13000]
+                  out[name + '_tail'] = txt[13000:24000]
+                  out[name + '_scripts'] = [s for s in re.findall(r'<script[^>]*>(.*?)</script>', txt, re.S) if len(s.strip()) > 20][:6]
+                  out[name + '_data_attrs'] = re.findall(r'<[^>]*(?:data-src|data-url|data-option|data-video|data-link|data-embed)[^>]*>.*?</(?:li|a|button|div)>', txt, re.S)[:25]
+                  out[name + '_iframes'] = re.findall(r'<iframe[^>]+>', txt)
+
+          blob = base64.b64encode(zlib.compress(json.dumps(out, ensure_ascii=False).encode(), 9)).decode()
+          step = 3400
+          chunks = [blob[i:i+step] for i in range(0, len(blob), step)]
+          print(f"MY blob={len(blob)} chunks={len(chunks)}")
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=MY_{idx+1}_{len(chunks)}::{ch}")
+          PY
