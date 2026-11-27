@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Install python deps
+        run: python3 -m pip install --quiet beautifulsoup4 requests lxml
       - name: Analyze latanime.org.zip and live site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -19,226 +21,231 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           python3 - <<'PY'
-          import os, json, zipfile, urllib.request, urllib.parse, base64, re, pathlib
+          import os, json, zipfile, base64, re, pathlib, traceback
+          import requests
           from bs4 import BeautifulSoup
 
-          def post_check(name, title, summary, text):
+          def post_check(name, title, summary, text, conclusion="success"):
               url = f"https://api.github.com/repos/{os.environ['REPO']}/check-runs"
               payload = {
                   "name": name,
                   "head_sha": os.environ["SHA"],
                   "status": "completed",
-                  "conclusion": "success",
+                  "conclusion": conclusion,
                   "output": {
-                      "title": title[:255],
-                      "summary": summary[:60000],
-                      "text": text[:60000],
+                      "title": str(title)[:255],
+                      "summary": str(summary)[:60000],
+                      "text": str(text)[:60000],
                   },
               }
-              req = urllib.request.Request(
+              r = requests.post(
                   url,
-                  data=json.dumps(payload).encode("utf-8"),
+                  json=payload,
                   headers={
                       "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
                       "Accept": "application/vnd.github+json",
-                      "Content-Type": "application/json",
                   },
-                  method="POST",
+                  timeout=30,
               )
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  print("Posted check:", name, r.status)
+              print("Posted check:", name, r.status_code, r.text[:200])
 
-          zip_url = "https://tmpfiles.org/dl/1795816953.881bd24aee06c58a/wBAVvkBJrDzt/latanime.org.zip"
-          zip_path = "/tmp/latanime.zip"
-          req = urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"})
           try:
-              with urllib.request.urlopen(req, timeout=120) as r, open(zip_path, "wb") as f:
-                  f.write(r.read())
-              zip_ok = True
-              zip_err = None
-          except Exception as e:
-              zip_ok = False
-              zip_err = repr(e)
+              sess = requests.Session()
+              sess.headers.update({
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+              })
+              page_url = "https://tmpfiles.org/wBAVvkBJrDzt/latanime.org.zip"
+              r_page = sess.get(page_url, timeout=30)
+              dl_match = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', r_page.text)
+              dl_url = dl_match.group(0) if dl_match else "https://tmpfiles.org/dl/1795816953.881bd24aee06c58a/wBAVvkBJrDzt/latanime.org.zip"
+              r_zip = sess.get(dl_url, headers={"Referer": page_url}, timeout=120)
+              zip_path = "/tmp/latanime.zip"
+              with open(zip_path, "wb") as f:
+                  f.write(r_zip.content)
 
-          inv_lines = [f"zip_ok={zip_ok} err={zip_err}"]
-          html_files = []
-          if zip_ok:
+              inv_lines = [
+                  f"page_status={r_page.status_code} dl_url={dl_url} zip_status={r_zip.status_code} ct={r_zip.headers.get('Content-Type')} bytes={len(r_zip.content)}"
+              ]
               out_dir = pathlib.Path("/tmp/latanime_extracted")
               out_dir.mkdir(parents=True, exist_ok=True)
               with zipfile.ZipFile(zip_path) as zf:
                   for info in zf.infolist():
                       inv_lines.append(f"{info.file_size:9d}  {info.filename}")
                   zf.extractall(out_dir)
-              for p in sorted(out_dir.rglob("*")):
-                  if p.is_file() and p.suffix.lower() in (".html", ".htm", ".js"):
-                      html_files.append(p)
 
-          inv_summary = "\n".join(inv_lines[:150])
-          inv_text = "\n".join(inv_lines[150:])
-          post_check("latanime-zip-inventory", f"Zip inventory ({len(inv_lines)} entries)", inv_summary, inv_text)
-
-          # Analyze every HTML file in detail
-          report_chunks = []
-          for p in html_files:
-              rel = str(p.relative_to("/tmp/latanime_extracted"))
-              if p.suffix.lower() == ".js":
-                  txt = p.read_text(errors="replace")
-                  if any(k in txt.lower() for k in ("player", "latanime", "ajax", "buscar", "search", "reproductor", "base64", "atob", "episodio")):
-                      report_chunks.append(f"\n### JS: {rel} ({len(txt)} chars)\n{txt[:4000]}")
-                  continue
-              raw = p.read_text(errors="replace")
-              soup = BeautifulSoup(raw, "html.parser")
-              lines = [f"\n========================================\nFILE: {rel} ({len(raw)} bytes)"]
-              lines.append(f"TITLE: {soup.title.get_text(strip=True) if soup.title else None}")
-
-              # Head meta & icons
-              icons = [(l.get("rel"), l.get("type"), l.get("sizes"), l.get("href")) for l in soup.find_all("link") if any(r in str(l.get("rel", "")).lower() for r in ("icon", "shortcut"))]
-              metas = [(m.get("property") or m.get("name"), m.get("content")) for m in soup.find_all("meta") if (m.get("property") or m.get("name") or "").startswith(("og:", "description"))]
-              lines.append(f"ICONS: {icons}")
-              lines.append(f"METAS: {metas[:10]}")
-
-              # Navbar links & forms
-              nav_links = [(a.get_text(strip=True), a.get("href")) for a in soup.select("nav a, header a") if a.get("href")]
-              lines.append(f"NAV_LINKS: {nav_links[:30]}")
-              forms = []
-              for fm in soup.find_all("form"):
-                  inputs = [(i.get("name"), i.get("type"), i.get("placeholder"), i.get("value")) for i in fm.find_all(["input", "select", "button"])]
-                  forms.append({"action": fm.get("action"), "method": fm.get("method"), "class": fm.get("class"), "inputs": inputs})
-              lines.append(f"FORMS: {forms}")
-
-              # Selects (filters)
-              for sel in soup.find_all("select"):
-                  opts = [(o.get("value"), o.get_text(strip=True)) for o in sel.find_all("option")]
-                  lines.append(f"SELECT name={sel.get('name')} id={sel.get('id')} class={sel.get('class')} opts_count={len(opts)} first5={opts[:8]} last5={opts[-5:]}")
-
-              # Sections / headings + container HTML snippet
-              for h in soup.select("h1, h2, h3, h4"):
-                  parent = h.parent
-                  lines.append(f"HEADING {h.name}.{'.'.join(h.get('class', []))} text={h.get_text(' ', strip=True)[:80]!r} parent={parent.name if parent else None}.{'.'.join(parent.get('class', [])) if parent else ''}")
-
-              # Pagination
-              pags = soup.select(".pagination, ul.pagination, nav[aria-label]")
-              for pg in pags[:3]:
-                  lines.append(f"PAGINATION HTML: {str(pg)[:800]}")
-
-              # Player tabs / data-player / iframes
-              players = []
-              for el in soup.select("[data-player], #play-video, .play-video, iframe, video"):
-                  dp = el.get("data-player")
-                  decoded = None
-                  if dp:
-                      try:
-                          padded = dp + "=" * (-len(dp) % 4)
-                          decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
-                      except Exception as ex:
-                          decoded = f"ERR:{ex}"
-                  players.append({
-                      "tag": el.name,
-                      "class": el.get("class"),
-                      "id": el.get("id"),
-                      "text": el.get_text(strip=True)[:40],
-                      "data-player": dp,
-                      "decoded": decoded,
-                      "src": el.get("src") or el.get("data-src"),
-                  })
-              if players:
-                  lines.append(f"PLAYERS ({len(players)}): {json.dumps(players[:20], ensure_ascii=False)}")
-
-              # Sample raw snippets of key structural blocks (cards, episodes, details, carousel)
-              for css in (
-                  ".carousel-inner .carousel-item",
-                  ".row a[href*='/ver/']",
-                  ".row a[href*='/anime/']",
-                  ".col-md-4, .col-md-2, .col-lg-2, .col-6, .caps a, .cap-layout",
-                  "div.chapter, .chapters, .episodios, ul.nav-tabs, .tab-content",
-                  ".series_info, .anime-info, .chapter-box, .download-box, .descarga",
-                  "main, .container",
-              ):
-                  found = soup.select(css)
-                  if found:
-                      snip = str(found[0])[:1200]
-                      lines.append(f"SAMPLE '{css}' (count={len(found)}):\n{snip}")
-
-              # Inline scripts
-              for i, sc in enumerate(soup.find_all("script")):
-                  src = sc.get("src")
-                  body = (sc.string or sc.get_text() or "").strip()
-                  if src:
-                      lines.append(f"SCRIPT_SRC[{i}]: {src}")
-                  if body and any(k in body.lower() for k in ("player", "data-player", "atob", "ajax", "buscar", "animes", "filtro", "cap", "url", "window.location")):
-                      lines.append(f"INLINE_SCRIPT[{i}]:\n{body[:2500]}")
-
-              report_chunks.append("\n".join(lines))
-
-          full_dom = "\n".join(report_chunks)
-          # Split into check runs of max 55000 chars
-          chunk_size = 55000
-          parts = [full_dom[i:i+chunk_size] for i in range(0, len(full_dom), chunk_size)] or ["(empty)"]
-          for idx, part in enumerate(parts[:6]):
+              html_files = [
+                  p for p in sorted(out_dir.rglob("*"))
+                  if p.is_file() and p.suffix.lower() in (".html", ".htm", ".js")
+              ]
               post_check(
-                  f"latanime-zip-dom-{idx+1}",
-                  f"Zip HTML/JS analysis part {idx+1}/{len(parts)}",
-                  f"Total chars: {len(full_dom)}, showing chunk {idx+1}/{len(parts)}",
-                  part,
+                  "latanime-zip-inventory",
+                  f"Zip inventory ({len(inv_lines)} entries, {len(html_files)} html/js)",
+                  "\n".join(inv_lines[:200]),
+                  "\n".join(inv_lines[200:]),
               )
 
-          # Live probes to latanime.org
-          live_lines = []
-          headers = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-              "Accept-Language": "es-419,es;q=0.9",
-          }
-          test_urls = [
-              "https://latanime.org/",
-              "https://latanime.org/animes",
-              "https://latanime.org/animes?p=2",
-              "https://latanime.org/emision",
-              "https://latanime.org/emision?p=2",
-              "https://latanime.org/calendario",
-              "https://latanime.org/buscar?q=naruto",
-              "https://latanime.org/anime/one-piece-latino",
-              "https://latanime.org/ver/one-piece-latino-episodio-1",
-              "https://latanime.org/img/favicon.png",
-              "https://latanime.org/favicon.ico",
-          ]
-          for u in test_urls:
-              try:
-                  r = urllib.request.Request(u, headers=headers)
-                  with urllib.request.urlopen(r, timeout=20) as resp:
-                      ct = resp.headers.get("Content-Type", "")
-                      srv = resp.headers.get("Server", "")
-                      data = resp.read()
-                      live_lines.append(f"OK {resp.status} {u} ct={ct} server={srv} len={len(data)}")
-                      if "html" in ct and "/ver/" in u:
-                          s = BeautifulSoup(data.decode("utf-8", errors="replace"), "html.parser")
-                          for li in s.select("[data-player]"):
-                              dp = li.get("data-player", "")
-                              dec = base64.b64decode(dp + "=" * (-len(dp) % 4)).decode("utf-8", errors="replace")
-                              live_lines.append(f"  PLAYER {li.get_text(strip=True)}: {dec}")
-                      if "html" in ct and "/buscar" in u:
-                          s = BeautifulSoup(data.decode("utf-8", errors="replace"), "html.parser")
-                          links = [(a.get_text(" ", strip=True)[:50], a.get("href")) for a in s.select("a[href*='/anime/']")]
-                          live_lines.append(f"  SEARCH HITS ({len(links)}): {links[:8]}")
-                      if "html" in ct and ("animes" in u or "emision" in u):
-                          s = BeautifulSoup(data.decode("utf-8", errors="replace"), "html.parser")
-                          links = [(a.get_text(" ", strip=True)[:40], a.get("href")) for a in s.select("a[href*='/anime/']")]
-                          pags = [a.get("href") for a in s.select(".pagination a")]
-                          live_lines.append(f"  CATALOG HITS ({len(links)}): first3={links[:3]} pag={pags[:8]}")
-              except Exception as e:
-                  live_lines.append(f"ERR {u}: {e}")
+              report_chunks = []
+              for p in html_files:
+                  rel = str(p.relative_to(out_dir))
+                  raw = p.read_text(errors="replace")
+                  if p.suffix.lower() == ".js":
+                      if any(k in raw.lower() for k in ("player", "latanime", "ajax", "buscar", "search", "reproductor", "base64", "atob", "episodio")):
+                          report_chunks.append(f"\n### JS: {rel} ({len(raw)} chars)\n{raw[:4000]}")
+                      continue
+                  soup = BeautifulSoup(raw, "html.parser")
+                  lines = [f"\n========================================\nFILE: {rel} ({len(raw)} bytes)"]
+                  lines.append(f"TITLE: {soup.title.get_text(strip=True) if soup.title else None}")
 
-          # Also inspect image assets in latanime.org/assets or head links on live /
-          try:
-              with urllib.request.urlopen(urllib.request.Request("https://latanime.org/", headers=headers), timeout=20) as resp:
-                  s = BeautifulSoup(resp.read().decode("utf-8", errors="replace"), "html.parser")
-                  live_lines.append("LIVE HEAD LINKS: " + str([(l.get("rel"), l.get("href")) for l in s.find_all("link")]))
-                  live_lines.append("LIVE NAV HTML:\n" + str(s.select_one("header, nav"))[:3000])
-                  live_lines.append("LIVE FORMS:\n" + str(s.find_all("form"))[:1500])
-                  live_lines.append("LIVE SCRIPTS:\n" + str([sc.get("src") for sc in s.find_all("script") if sc.get("src")]))
-                  live_lines.append("LIVE LOGO IMGS:\n" + str([(img.get("src"), img.get("alt")) for img in s.select("header img, nav img, .navbar-brand img, .logo img")]))
+                  icons = [(l.get("rel"), l.get("type"), l.get("sizes"), l.get("href")) for l in soup.find_all("link") if "icon" in str(l.get("rel", "")).lower()]
+                  metas = [(m.get("property") or m.get("name"), m.get("content")) for m in soup.find_all("meta") if (m.get("property") or m.get("name") or "").startswith(("og:", "description"))]
+                  lines.append(f"ICONS: {icons}")
+                  lines.append(f"METAS: {metas[:10]}")
+
+                  nav_links = [(a.get_text(" ", strip=True), a.get("href")) for a in soup.select("nav a, header a") if a.get("href")]
+                  lines.append(f"NAV_LINKS ({len(nav_links)}): {nav_links[:40]}")
+
+                  forms = []
+                  for fm in soup.find_all("form"):
+                      inputs = [(i.get("name"), i.get("type"), i.get("placeholder"), i.get("value")) for i in fm.find_all(["input", "select", "button"])]
+                      forms.append({"action": fm.get("action"), "method": fm.get("method"), "class": fm.get("class"), "inputs": inputs})
+                  lines.append(f"FORMS: {forms}")
+
+                  for sel in soup.find_all("select"):
+                      opts = [(o.get("value"), o.get_text(strip=True)) for o in sel.find_all("option")]
+                      lines.append(f"SELECT name={sel.get('name')} id={sel.get('id')} class={sel.get('class')} count={len(opts)} all={opts[:60]}")
+
+                  for h in soup.select("h1, h2, h3, h4"):
+                      parent = h.parent
+                      lines.append(f"HEADING {h.name}.{'.'.join(h.get('class', []))} text={h.get_text(' ', strip=True)[:80]!r} parent={parent.name if parent else None}.{'.'.join(parent.get('class', [])) if parent else ''}")
+
+                  for pg in soup.select(".pagination, ul.pagination")[:2]:
+                      lines.append(f"PAGINATION HTML: {str(pg)[:1000]}")
+
+                  players = []
+                  for el in soup.select("[data-player], #play-video, .play-video, iframe, video"):
+                      dp = el.get("data-player")
+                      decoded = None
+                      if dp:
+                          try:
+                              decoded = base64.b64decode(dp + "=" * (-len(dp) % 4)).decode("utf-8", errors="replace")
+                          except Exception as ex:
+                              decoded = f"ERR:{ex}"
+                      players.append({
+                          "tag": el.name,
+                          "class": el.get("class"),
+                          "id": el.get("id"),
+                          "text": el.get_text(" ", strip=True)[:40],
+                          "data-player": dp,
+                          "decoded": decoded,
+                          "src": el.get("src") or el.get("data-src"),
+                      })
+                  if players:
+                      lines.append(f"PLAYERS ({len(players)}): {json.dumps(players[:25], ensure_ascii=False)}")
+
+                  # Download links if any
+                  dls = [(a.get_text(" ", strip=True), a.get("href"), a.get("class")) for a in soup.select("a.btn-descarga, .descarga a, a[download], .downloads a, .link_descarga a, a[href*='mega.nz'], a[href*='mediafire'], a[href*='gofile'], a[href*='pixeldrain'], a[href*='1cloudfile']")]
+                  if dls:
+                      lines.append(f"DOWNLOADS ({len(dls)}): {dls[:15]}")
+
+                  # Inspect raw main content structure (compact children summary)
+                  main_root = soup.select_one("main") or soup.body
+                  if main_root:
+                      blocks = []
+                      for child in main_root.find_all(recursive=False):
+                          blocks.append(f"<{child.name} id={child.get('id')} class={child.get('class')}> len={len(str(child))}")
+                      lines.append("BODY/MAIN TOP BLOCKS: " + "; ".join(blocks[:20]))
+
+                  # Print representative snippets of key elements
+                  for desc, css in (
+                      ("carousel", "#carouselExampleCaptions, .carousel, .owl-carousel"),
+                      ("ep-cards", "a[href*='/ver/']"),
+                      ("anime-cards", "a[href*='/anime/']"),
+                      ("details-box", ".chapter, .row, .col-lg-9, .col-md-8, .series_info, .anime-detail"),
+                      ("genres", "a[href*='/genero/']"),
+                      ("tabs", ".nav-tabs, .tab-content"),
+                  ):
+                      found = soup.select(css)
+                      if found:
+                          item = found[0]
+                          # For card links, print parent container if it's small
+                          target = item.parent if desc in ("ep-cards", "anime-cards") and item.parent and len(str(item.parent)) < 2000 else item
+                          lines.append(f"SNIP[{desc}] (count={len(found)}):\n{str(target)[:1800]}")
+
+                  for i, sc in enumerate(soup.find_all("script")):
+                      src = sc.get("src")
+                      body = (sc.string or sc.get_text() or "").strip()
+                      if src:
+                          lines.append(f"SCRIPT_SRC[{i}]: {src}")
+                      if body and any(k in body.lower() for k in ("player", "data-player", "atob", "ajax", "buscar", "animes", "filtro", "cap", "url", "window", "document")):
+                          lines.append(f"INLINE_SCRIPT[{i}]:\n{body[:2500]}")
+
+                  report_chunks.append("\n".join(lines))
+
+              full_dom = "\n".join(report_chunks)
+              chunk_size = 55000
+              parts = [full_dom[i:i+chunk_size] for i in range(0, len(full_dom), chunk_size)] or ["(empty)"]
+              for idx, part in enumerate(parts[:8]):
+                  post_check(
+                      f"latanime-zip-dom-{idx+1}",
+                      f"Zip HTML/JS analysis part {idx+1}/{len(parts)}",
+                      f"Total chars: {len(full_dom)}, chunk {idx+1}/{len(parts)}",
+                      part,
+                  )
+
+              # Live probes
+              live_lines = []
+              live_sess = requests.Session()
+              live_sess.headers.update({
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                  "Accept-Language": "es-419,es;q=0.9",
+              })
+              test_urls = [
+                  "https://latanime.org/",
+                  "https://latanime.org/animes",
+                  "https://latanime.org/animes?p=2",
+                  "https://latanime.org/emision",
+                  "https://latanime.org/calendario",
+                  "https://latanime.org/buscar?q=naruto",
+                  "https://latanime.org/anime/one-piece-latino",
+                  "https://latanime.org/ver/one-piece-latino-episodio-1",
+                  "https://latanime.org/reproductor",
+                  "https://latanime.org/assets/img/logo.png",
+                  "https://latanime.org/img/favicon.png",
+                  "https://latanime.org/favicon.ico",
+              ]
+              for u in test_urls:
+                  try:
+                      r = live_sess.get(u, timeout=20, allow_redirects=True)
+                      ct = r.headers.get("Content-Type", "")
+                      srv = r.headers.get("Server", "")
+                      live_lines.append(f"{r.status_code} {r.url} (orig={u}) ct={ct} server={srv} len={len(r.content)}")
+                      if "html" in ct:
+                          s = BeautifulSoup(r.text, "html.parser")
+                          if u == "https://latanime.org/":
+                              live_lines.append("LIVE HEAD LINKS: " + str([(l.get("rel"), l.get("href")) for l in s.find_all("link")]))
+                              live_lines.append("LIVE NAV FORMS: " + str(s.find_all("form")))
+                              live_lines.append("LIVE SCRIPTS: " + str([sc.get("src") for sc in s.find_all("script") if sc.get("src")]))
+                          if "/ver/" in u:
+                              for el in s.select("[data-player]"):
+                                  dp = el.get("data-player", "")
+                                  dec = base64.b64decode(dp + "=" * (-len(dp) % 4)).decode("utf-8", errors="replace")
+                                  live_lines.append(f"  PLAYER {el.get_text(' ', strip=True)}: {dec}")
+                              for i, sc in enumerate(s.find_all("script")):
+                                  body = (sc.string or sc.get_text() or "").strip()
+                                  if body and ("player" in body.lower() or "atob" in body.lower()):
+                                      live_lines.append(f"  VER_SCRIPT[{i}]: {body[:1200]}")
+                          if "/buscar" in u:
+                              links = [(a.get_text(" ", strip=True)[:50], a.get("href")) for a in s.select("a[href*='/anime/']")]
+                              live_lines.append(f"  SEARCH HITS ({len(links)}): {links[:10]}")
+                          if "animes" in u or "emision" in u:
+                              links = [(a.get_text(" ", strip=True)[:40], a.get("href")) for a in s.select("a[href*='/anime/']")]
+                              pags = [a.get("href") for a in s.select(".pagination a")]
+                              live_lines.append(f"  CATALOG ({len(links)}): first3={links[:3]} pag={pags[:8]}")
+                  except Exception as e:
+                      live_lines.append(f"ERR {u}: {e}")
+
+              post_check("latanime-live-probes", "Live HTTP/HTML probes for latanime.org", f"Probed {len(test_urls)} URLs", "\n".join(live_lines))
           except Exception as e:
-              live_lines.append(f"LIVE HEAD ERR: {e}")
-
-          live_text = "\n".join(live_lines)
-          post_check("latanime-live-probes", "Live HTTP/HTML probes for latanime.org", f"Probed {len(test_urls)} URLs", live_text)
+              post_check("latanime-error", f"Exception: {e}", traceback.format_exc(), traceback.format_exc(), conclusion="failure")
+              raise
           PY
