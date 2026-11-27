@@ -592,6 +592,12 @@ internal object VerAniV2Markup {
         }
     }
 
+    fun decorateLinkName(base: String, badge: String): String {
+        val cleanBadge = badge.trim()
+        if (cleanBadge.isEmpty()) return base
+        return if (base.contains("[$cleanBadge]", ignoreCase = true)) base else "$base [$cleanBadge]"
+    }
+
     fun isBrokenEmbedPlaceholder(url: String): Boolean {
         val low = url.lowercase().trim()
         return low.isEmpty() ||

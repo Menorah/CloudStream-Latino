@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -301,6 +300,47 @@ internal object VerAniV2VoeDecoder {
     }.getOrNull()
 }
 
+internal object VerAniV2JsUnpacker {
+    private val PACKED_REGEX = Regex(
+        """eval\(function\(p,a,c,k,e,[dr]\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)""",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+    private val WORD_REGEX = Regex("""\b\w+\b""")
+
+    private fun decodeRadix(token: String, radix: Int): Int? {
+        var value = 0
+        for (ch in token) {
+            val digit = when (ch) {
+                in '0'..'9' -> ch.code - '0'.code
+                in 'a'..'z' -> ch.code - 'a'.code + 10
+                in 'A'..'Z' -> ch.code - 'A'.code + 36
+                else -> return null
+            }
+            if (digit >= radix) return null
+            value = value * radix + digit
+        }
+        return value
+    }
+
+    fun unpackAll(html: String): List<String> {
+        val out = mutableListOf(html)
+        for (match in PACKED_REGEX.findAll(html)) {
+            val payload = match.groupValues[1]
+                .replace("\\'", "'")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+            val radix = match.groupValues[2].toIntOrNull()?.coerceIn(2, 62) ?: continue
+            val words = match.groupValues[4].split('|')
+            val unpacked = WORD_REGEX.replace(payload) { mr ->
+                val idx = decodeRadix(mr.value, radix)
+                if (idx != null && idx in words.indices && words[idx].isNotEmpty()) words[idx] else mr.value
+            }
+            out += unpacked
+        }
+        return out
+    }
+}
+
 internal object VerAniV2Mp4UploadParser {
     private val DIRECT_SRC_OBJ_REGEX = Regex("""player\.src\(\s*\{[^}]*\bsrc\s*:\s*["']([^"']+)["']""", RegexOption.DOT_MATCHES_ALL)
     private val DIRECT_SRC_STR_REGEX = Regex("""player\.src\(\s*["']([^"']+)["']\s*\)""")
@@ -319,8 +359,7 @@ internal object VerAniV2Mp4UploadParser {
     }
 
     fun extractVideoSrc(html: String): String? {
-        val candidateBodies = listOf(html, getAndUnpack(html))
-        for (body in candidateBodies) {
+        for (body in VerAniV2JsUnpacker.unpackAll(html)) {
             DIRECT_SRC_OBJ_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }?.let { return it }
             DIRECT_SRC_STR_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }?.let { return it }
             SOURCE_TAG_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.startsWith("http") }?.let { return it }
@@ -336,8 +375,7 @@ internal object VerAniV2MxDropParser {
     private val WURL_REGEX = Regex("""MDCore\.wurl\s*=\s*["']([^"']+)["']""")
 
     fun extractWurl(html: String): String? {
-        val bodies = listOf(html, getAndUnpack(html))
-        for (body in bodies) {
+        for (body in VerAniV2JsUnpacker.unpackAll(html)) {
             val raw = WURL_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim().orEmpty()
             if (raw.isNotEmpty()) {
                 return if (raw.startsWith("//")) "https:$raw" else raw
@@ -1378,11 +1416,8 @@ internal object VerAniV2ExtractorDispatcher {
     private val mxDrop = VerAniV2MxDropExtractor()
     private val byse = VerAniV2ByseExtractor()
 
-    fun decorateName(base: String, badge: String): String {
-        val cleanBadge = badge.trim()
-        if (cleanBadge.isEmpty()) return base
-        return if (base.contains("[$cleanBadge]", ignoreCase = true)) base else "$base [$cleanBadge]"
-    }
+    fun decorateName(base: String, badge: String): String =
+        VerAniV2Markup.decorateLinkName(base, badge)
 
     suspend fun extractTab(
         tab: VerAniPlayerTab,

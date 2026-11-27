@@ -23,8 +23,9 @@ class VerAniV2CryptoTest {
 
         assertEquals(16, keyBytes.size)
         assertEquals(16, ivBytes.size)
-        // IV must start with 0x1f510 (🔐) + 0x1f5dd (🗝️ without fe0f) + 0x1f511 (🔑) + 0x1f6aa (🚪)
-        assertEquals("1f5101f5dd1f5111f6aa1f6e126a17475", VerAniV2Crypto.bytesToHex(ivBytes))
+        // IV prefix = 1f510 (🔐) + 1f5dd (🗝️) + 1f511 (🔑) + 1f6aa (🚪) + 1f6e1 (🛡️) + 26a1 (⚡) = 29 hex chars,
+        // padded to 32 hex chars with start of UTF-8 hex of "turboembed.com" ("7475..." -> "747")
+        assertEquals("1f5101f5dd1f5111f6aa1f6e126a1747", VerAniV2Crypto.bytesToHex(ivBytes))
 
         val cipherHex = VerAniV2TurboEmbedCrypto.encryptHex("9r03", "turboembed.com", nowMs = fixedNow)
         val decrypted = VerAniV2TurboEmbedCrypto.decryptHex(cipherHex, "turboembed.com", nowMs = fixedNow)
@@ -188,8 +189,14 @@ class VerAniV2CryptoTest {
 
     @Test
     fun `decorateName appends language badge once`() {
-        assertEquals("TurboEmbed [Latino]", VerAniV2ExtractorDispatcher.decorateName("TurboEmbed", "Latino"))
-        assertEquals("TurboEmbed [Latino]", VerAniV2ExtractorDispatcher.decorateName("TurboEmbed [Latino]", "Latino"))
-        assertEquals("Voe", VerAniV2ExtractorDispatcher.decorateName("Voe", ""))
+        assertEquals("TurboEmbed [Latino]", VerAniV2Markup.decorateLinkName("TurboEmbed", "Latino"))
+        assertEquals("TurboEmbed [Latino]", VerAniV2Markup.decorateLinkName("TurboEmbed [Latino]", "Latino"))
+        assertEquals("Voe", VerAniV2Markup.decorateLinkName("Voe", ""))
+    }
+
+    @Test
+    fun `mxdrop parser unpacks Dean Edwards packed script`() {
+        val packed = "eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\\\b'+c.toString(a)+'\\\\b','g'),k[c]);return p}('0.1=\"//2.3/4/5.6\";',10,7,'MDCore|wurl|s1|mxdcontent|v|9999|mp4'.split('|')))"
+        assertEquals("https://s1.mxdcontent/v/9999.mp4", VerAniV2MxDropParser.extractWurl(packed))
     }
 }
