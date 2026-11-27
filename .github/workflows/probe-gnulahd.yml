@@ -1,4 +1,4 @@
-name: Probe GnulaHD Player JS Functions
+name: Probe GnulaHD Player JS Vars
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  inspect_js:
+  inspect_vars:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q requests
-      - name: Extraer gnrdOpenPlayer y gnpvLoad
+      - name: Extraer _gnrdPid y _gnrdTok en película y episodio
         run: |
           python3 - <<'PY'
           import re, requests
@@ -24,13 +24,12 @@ jobs:
           S.headers.update({"User-Agent": UA, "Accept-Language": "es-419,es;q=0.9"})
           def one(s): return re.sub(r"\s+", " ", s or "").strip()
 
-          mhtml = S.get("https://ww3.gnulahd.nu/ver/the-jlo-show/", timeout=15).text
-          ehtml = S.get("https://ww3.gnulahd.nu/the-crown-6x10/", timeout=15).text
-          for label, html, pat in [
-              ("MOVIE_JS", mhtml, r"(?:function\s+gnrdOpenPlayer|gnrd/v1/player|GNRD_|_gnrd|gnpv)[\s\S]{0,1200}"),
-              ("EP_JS", ehtml, r"(?:function\s+gnpvLoad|gnrd/v1/player|gnep-player-box|GNEP_)[\s\S]{0,1200}"),
+          for label, u in [
+              ("MOVIE", "https://ww3.gnulahd.nu/ver/the-jlo-show/"),
+              ("EP", "https://ww3.gnulahd.nu/the-crown-6x10/"),
           ]:
-              matches = [one(m.group(0))[:900] for m in re.finditer(pat, html)][:3]
-              for idx, txt in enumerate(matches):
-                  print(f"::notice::{label}_{idx}={txt}")
+              html = S.get(u, timeout=15).text
+              idx = html.find("gnrd/v1/player")
+              snippet = one(html[max(0, idx - 1200):idx + 200]) if idx != -1 else "NOT_FOUND"
+              print(f"::notice::{label}_CTX={snippet[:1400]}")
           PY
