@@ -7,90 +7,78 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_cz_r6:
+  probe_mirrors:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          python3 -m pip install -q playwright
-          playwright install chromium
           python3 - <<'PY'
-          import base64, json, re, zlib
-          from playwright.sync_api import sync_playwright
+          import base64, json, re, urllib.request, zlib
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          def fetch(u, hdrs=None):
+              h = {"User-Agent": UA, "Accept": "*/*"}
+              if hdrs: h.update(hdrs)
+              req = urllib.request.Request(u, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, u, e.read().decode("utf-8", "replace")
+              except Exception as e:
+                  return -1, u, str(e)
+
+          def unpack_packer(html):
+              m = re.search(r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", html, re.S)
+              if not m: return None
+              p, a, c_cnt, k_str = m.groups()
+              a, c_cnt = int(a), int(c_cnt)
+              k = k_str.split('|')
+              alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+              def baseN(num, b):
+                  if num == 0: return "0"
+                  res = []
+                  while num > 0:
+                      res.append(alphabet[num % b]); num //= b
+                  return "".join(reversed(res))
+              d_map = {baseN(i, a): (k[i] if i < len(k) and k[i] else baseN(i, a)) for i in range(c_cnt - 1, -1, -1)}
+              return re.sub(r'\b\w+\b', lambda m: d_map.get(m.group(0), m.group(0)), p)
 
           out = {}
-          with sync_playwright() as p:
-              b = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-              ctx = b.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", locale="es-ES")
-              page = ctx.new_page()
-              page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+          for name, u in [
+              ("dr0pstream", "https://dr0pstream.com/e/74ba1v9zwn71"),
+              ("superplayer", "https://superplayer.ws/e/boqho6c3wl01"),
+              ("dood", "https://doodstream.com/e/oxr71q950aj2"),
+              ("mxdrop", "https://mxdrop.to/e/nlmmqg4ksl19je3"),
+              ("streamwish", "https://streamwish.to/e/55812cgpja3d"),
+          ]:
+              c, fu, h = fetch(u, {"Referer": "https://playlatinsrc.co/"})
+              unp = unpack_packer(h)
+              out[name] = {
+                  "code": c, "final": fu, "len": len(h),
+                  "unpacked": unp[:2500] if unp else None,
+                  "head": h[:2500] if not unp else None,
+              }
+              if unp:
+                  m = re.search(r'https?://[^\s"\'\)]+\.m3u8[^\s"\'\)]*', unp)
+                  if m:
+                      mu = m.group(0)
+                      mc_ref, _, mb = fetch(mu, {"Referer": fu})
+                      mc_no, _, _ = fetch(mu, {})
+                      out[name]["m3u8"] = {"url": mu, "with_ref": mc_ref, "no_ref": mc_no, "head": mb[:600]}
 
-              reqs = []
-              def on_resp(r):
-                  if "repelis24.cz" in r.url and ("ajax" in r.url or "wp-json" in r.url or "doo" in r.url):
-                      try:
-                          txt = r.text()
-                      except Exception:
-                          txt = ""
-                      reqs.append({
-                          "url": r.url,
-                          "method": r.request.method,
-                          "post": (r.request.post_data or "")[:500],
-                          "status": r.status,
-                          "body": txt[:1500]
-                      })
-              page.on("response", on_resp)
-
-              def go(u):
-                  resp = page.goto(u, wait_until="domcontentloaded", timeout=30000)
-                  if "moment" in page.title().lower() or len(page.content()) < 6000:
-                      page.wait_for_timeout(7000)
-                  return (resp.status if resp else -1), page.content()
-
-              # 1. Home sections + genres + Peliculas pagination
-              _, h_home = go("https://repelis24.cz/")
-              out["home_secs"] = re.findall(r'<section class="chk-sec".*?<div class="dpu-sec-head">.*?</div>', h_home, re.S)
-              out["nav_links"] = re.findall(r'href="(https://repelis24\.cz/genero/[^"]+|https://repelis24\.cz/peliculas/[^"]*|https://repelis24\.cz/series/[^"]*)"[^>]*>([^<]{1,40})<', h_home)[:50]
-
-              _, h_pel = go("https://repelis24.cz/peliculas/")
-              m_pag = re.search(r'<div[^>]+class="[^"]*pag[^"]*"[^>]*>.*?</div>', h_pel, re.S)
-              out["pel_pag"] = m_pag.group(0)[:1000] if m_pag else re.findall(r'page/\d+/', h_pel)[:10]
-
-              # 2. Movie: player JS + click option 1 & 4 + links
-              reqs.clear()
-              _, h_mov = go("https://repelis24.cz/peliculas/codigo-venganza-2/")
-              out["mov_scripts"] = [s[:2000] for s in re.findall(r'<script[^>]*>(.*?)</script>', h_mov, re.S) if any(k in s for k in ("admin-ajax", "dooplay_player_option", "dtAjax", "doo_player"))][:3]
-              out["mov_dl"] = re.findall(r'https://repelis24\.cz/links/[^"\'\s<]+', h_mov)[:5]
-              page.evaluate("""() => {
-                  const opt = document.querySelector('#player-option-1');
-                  if (opt) opt.click();
-              }""")
-              page.wait_for_timeout(2000)
-              page.evaluate("""() => {
-                  const opt = document.querySelector('#player-option-4');
-                  if (opt) opt.click();
-              }""")
-              page.wait_for_timeout(2000)
-              out["mov_iframe_after"] = page.evaluate("() => Array.from(document.querySelectorAll('#dooplay_player_response iframe, iframe')).map(i => i.src)")
-              out["mov_reqs"] = list(reqs)
-
-              # 3. Series: click episode card 1 & inspect player JS / AJAX
-              reqs.clear()
-              _, h_ser = go("https://repelis24.cz/series/tu-amigo-y-vecino-spider-man/")
-              out["ser_scripts"] = [s[:2000] for s in re.findall(r'<script[^>]*>(.*?)</script>', h_ser, re.S) if any(k in s for k in ("dpu-episode-card", "dpu-ajax-playerhub", "admin-ajax", "data-episode"))][:3]
-              out["ser_dl"] = re.findall(r'https://repelis24\.cz/links/[^"\'\s<]+', h_ser)[:5]
-              page.evaluate("""() => {
-                  const ep = document.querySelector('.dpu-episode-card');
-                  if (ep) ep.click();
-              }""")
-              page.wait_for_timeout(2500)
-              out["ser_hub_html"] = page.evaluate("() => { const h = document.querySelector('#dpu-ajax-playerhub'); return h ? h.innerHTML.slice(0, 2000) : ''; }")
-              out["ser_reqs"] = list(reqs)
-
-              b.close()
+          # Also check a few more cinecalidad.my movies for OnlineNetu sample
+          _, _, ch = fetch("https://www.cinecalidad.my/page/3/")
+          for mu in re.findall(r'https://www\.cinecalidad\.my/pelicula/[^"\'\s>]+', ch)[:6]:
+              _, _, mh = fetch(mu)
+              m_netu = re.search(r'service=OnlineNetu\s+data=([^\s>]+)', mh)
+              if m_netu:
+                  nc, nfu, nh = fetch(f"https://www.zarato.top/watch_video.php?v={m_netu.group(1)}", {"Referer": "https://www.cinecalidad.my/"})
+                  out["zarato"] = {"id": m_netu.group(1), "code": nc, "final": nfu, "len": len(nh), "head": nh[:2500]}
+                  break
 
           raw = zlib.compress(json.dumps(out, ensure_ascii=False).encode("utf-8"), 9)
           b64 = base64.b64encode(raw).decode("ascii")
           chunks = [b64[i:i+3800] for i in range(0, len(b64), 3800)]
           for idx, ch in enumerate(chunks[:9]):
-              print(f"::notice title=CZ6_{idx+1}_{len(chunks)}::{ch}")
+              print(f"::notice title=MIR_{idx+1}_{len(chunks)}::{ch}")
           PY
