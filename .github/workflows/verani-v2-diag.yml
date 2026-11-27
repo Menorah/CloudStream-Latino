@@ -1,0 +1,112 @@
+name: Sonda VerAni.me v2
+on:
+  push:
+    paths:
+      - '.github/workflows/verani-v2-diag.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recopilar y emitir parte 1
+        run: |
+          python3 - <<'PY'
+          import base64, json, re, urllib.parse, urllib.request, zlib
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+          def fetch(url):
+              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9,en;q=0.8"})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, e.geturl(), e.read().decode("utf-8", "replace")
+              except Exception as ex:
+                  return -1, url, repr(ex)
+
+          out = {}
+          urls = {
+              "home": "https://verani.me/",
+              "animes": "https://verani.me/animes/",
+              "animes_p2": "https://verani.me/animes/page/2/",
+              "peliculas": "https://verani.me/peliculas/",
+              "search": "https://verani.me/?s=naruto",
+              "anime_single": "https://verani.me/kiniro-no-corda-primo-passo/",
+              "anime_multi": "https://verani.me/tensei-shitara-ken-deshita/",
+              "movie1": "https://verani.me/pelicula/el-nino-y-la-bestia/",
+              "movie2": "https://verani.me/xxxholic/pelicula/xxxholic-el-sueno-de-una-noche-de-verano/",
+              "ep1": "https://verani.me/kikansha-no-mahou-wa-tokubetsu-desu/capitulo-8-episodio-8-629/",
+              "ep2": "https://verani.me/tensei-shitara-ken-deshita/capitulo-9-episodio-9-600/",
+          }
+
+          scripts_found = set()
+          for k, u in urls.items():
+              code, final_u, txt = fetch(u)
+              out[k] = {
+                  "code": code,
+                  "final_url": final_u,
+                  "len": len(txt),
+                  "title": re.findall(r"<title>(.*?)</title>", txt, re.S)[:1],
+              }
+              for m in re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', txt, re.I):
+                  if "verani.me" in m or m.startswith("/"):
+                      scripts_found.add(urllib.parse.urljoin(final_u, m))
+              if code == 200:
+                  m_main = re.search(r"<main[^>]*>.*</main>|<main[^>]*>.*", txt, re.S)
+                  body = m_main.group(0) if m_main else txt
+                  if k == "home":
+                      out[k]["sample"] = body[:20000]
+                      out[k]["forms"] = re.findall(r"<form[^>]*>.*?</form>", txt, re.S)[:5]
+                  elif k in ("animes", "animes_p2", "peliculas", "search"):
+                      out[k]["sample"] = body[:18000]
+                      out[k]["forms"] = re.findall(r"<form[^>]*>.*?</form>", txt, re.S)[:5]
+                      out[k]["nav_links"] = re.findall(r'<a[^>]+class=["\'][^"\']*(?:page|next|prev)[^"\']*["\'][^>]*>.*?</a>', txt, re.S)[:15]
+                  elif k in ("anime_single", "anime_multi"):
+                      out[k]["sample"] = body[:20000]
+                  elif k in ("movie1", "movie2", "ep1", "ep2"):
+                      out[k]["sample"] = body[:22000]
+                      out[k]["inline_scripts"] = [s for s in re.findall(r"<script(?![^>]*src)[^>]*>(.*?)</script>", txt, re.S) if len(s.strip()) > 10]
+                      out[k]["iframes"] = re.findall(r"<iframe[^>]*>", txt, re.I)
+                      out[k]["data_attrs"] = re.findall(r"<(?:button|div|li|a|span)[^>]+data-[^>]+>", txt, re.I)[:60]
+              else:
+                  out[k]["head"] = txt[:1000]
+
+          out["theme_scripts"] = {}
+          for su in sorted(scripts_found):
+              if any(x in su for x in ("wp-includes", "jquery", "da-reactions", "wp-embed", "emoji", "onesignal")):
+                  continue
+              c, fu, stxt = fetch(su)
+              out["theme_scripts"][su] = {"code": c, "len": len(stxt), "text": stxt[:25000]}
+
+          raw = json.dumps(out, ensure_ascii=False).encode("utf-8")
+          comp = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
+          open("/tmp/verani_comp.txt", "w").write(comp)
+          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
+          print("TOTAL PARTS:", len(parts), "RAW:", len(raw), "COMP:", len(comp))
+          for idx, p in enumerate(parts[:9]):
+              print(f"::notice title=VERANI_{idx}_{len(parts)}::{p}")
+          PY
+      - name: Emitir parte 2
+        run: |
+          python3 - <<'PY'
+          comp = open("/tmp/verani_comp.txt").read()
+          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
+          for idx in range(9, min(18, len(parts))):
+              print(f"::notice title=VERANI_{idx}_{len(parts)}::{parts[idx]}")
+          PY
+      - name: Emitir parte 3
+        run: |
+          python3 - <<'PY'
+          comp = open("/tmp/verani_comp.txt").read()
+          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
+          for idx in range(18, min(27, len(parts))):
+              print(f"::notice title=VERANI_{idx}_{len(parts)}::{parts[idx]}")
+          PY
+      - name: Emitir parte 4
+        run: |
+          python3 - <<'PY'
+          comp = open("/tmp/verani_comp.txt").read()
+          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
+          for idx in range(27, min(36, len(parts))):
+              print(f"::notice title=VERANI_{idx}_{len(parts)}::{parts[idx]}")
+          PY
