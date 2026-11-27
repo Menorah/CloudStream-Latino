@@ -1,4 +1,4 @@
-name: Probe GnulaHD Exact Selectors
+name: Probe GnulaHD Movie and Episode Player Trigger
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  inspect_dom:
+  inspect_triggers:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q requests beautifulsoup4
-      - name: Inspeccionar selectores exactos
+      - name: Buscar trigger player en película y episodio
         run: |
           python3 - <<'PY'
           import re, requests
@@ -26,48 +26,20 @@ jobs:
           def one(s): return re.sub(r"\s+", " ", s or "").strip()
 
           for label, u in [
-              ("ANIME_CARD", "https://ww3.gnulahd.nu/ver/anime/"),
-              ("MOVIE_CARD", "https://ww3.gnulahd.nu/ver/peliculas/"),
-              ("SOON_CARD", "https://ww3.gnulahd.nu/proximos-estrenos/"),
+              ("MOVIE", "https://ww3.gnulahd.nu/ver/the-jlo-show/"),
+              ("EP", "https://ww3.gnulahd.nu/the-crown-6x10/"),
+              ("ANIME", "https://ww3.gnulahd.nu/ver/bleach-2004/"),
+              ("SOON", "https://ww3.gnulahd.nu/proximos-estrenos/the-adventures-of-cliff-booth/"),
           ]:
-              soup = BeautifulSoup(S.get(u, timeout=15).text, "html.parser")
-              c = soup.select_one("a.gnrd-card")
-              more = soup.select_one("div.gnrd-more-wrap a.gnrd-loadmore")
-              print(f"::notice::{label}=" + one(str(c))[:1200] + " || MORE=" + one(str(more))[:400])
-
-          # Genre pagination link check
-          gsoup = BeautifulSoup(S.get("https://ww3.gnulahd.nu/genres/accion/", timeout=15).text, "html.parser")
-          print("::notice::GENRE_MORE=" + one(str(gsoup.select_one("div.gnrd-more-wrap")))[:600])
-
-          # Movie detail (first movie from /ver/peliculas/)
-          msoup0 = BeautifulSoup(S.get("https://ww3.gnulahd.nu/ver/peliculas/", timeout=15).text, "html.parser")
-          mu = msoup0.select_one("a.gnrd-card")["href"]
-          msoup = BeautifulSoup(S.get(mu, timeout=15).text, "html.parser")
-          trigger = msoup.select("[data-id][data-t]")
-          qfacts = one(str(msoup.select_one(".gnrd-qfacts")))
-          infs = " | ".join(one(str(x)) for x in msoup.select(".gnrd-info-row")[:4])
-          cast = one(str(msoup.select_one(".gnrd-castc")))
-          ey = one(msoup.select_one(".gnrd-eyebrow").get_text(" ", strip=True) if msoup.select_one(".gnrd-eyebrow") else "")
-          tr = one(str(msoup.select_one(".gnrd-trailer")))
-          print(f"::notice::MOVIE[{mu}]=ey:{ey} || triggers:{one(str(trigger))[:400]} || tr:{tr[:200]}")
-          print(f"::notice::MOVIE_META=qfacts:{qfacts[:600]} || info:{infs[:700]} || cast:{cast[:500]}")
-
-          # Series ep card + episode standalone page
-          tsoup = BeautifulSoup(S.get("https://ww3.gnulahd.nu/ver/the-crown/", timeout=15).text, "html.parser")
-          epc = tsoup.select_one("a.gnrd-epc")
-          ep_u = epc["href"]
-          esoup = BeautifulSoup(S.get(ep_u, timeout=15).text, "html.parser")
-          ep_triggers = one(str(esoup.select("[data-id][data-t]")))
-          ep_bc = one(str(esoup.select_one("nav, .gnrd-bc, .breadcrumb, .gnrd-ep-nav, a[href*='/ver/the-crown/']")))
-          print("::notice::EP_CARD_FULL=" + one(str(epc))[:1400])
-          print(f"::notice::EP_PAGE[{ep_u}]=triggers:{ep_triggers[:500]} || back:{ep_bc[:600]}")
-
-          # Upcoming detail
-          ssoup0 = BeautifulSoup(S.get("https://ww3.gnulahd.nu/proximos-estrenos/", timeout=15).text, "html.parser")
-          su = ssoup0.select_one("a.gnrd-card")["href"]
-          ssoup = BeautifulSoup(S.get(su, timeout=15).text, "html.parser")
-          strig = one(str(ssoup.select("[data-id][data-t]")))
-          sey = one(ssoup.select_one(".gnrd-eyebrow").get_text(" ", strip=True) if ssoup.select_one(".gnrd-eyebrow") else "")
-          strl = one(str(ssoup.select_one(".gnrd-trailer")))
-          print(f"::notice::SOON[{su}]=ey:{sey} || triggers:{strig[:300]} || tr:{strl[:250]}")
+              html = S.get(u, timeout=15).text
+              soup = BeautifulSoup(html, "html.parser")
+              ey = one(soup.select_one(".gnrd-eyebrow").get_text(" ", strip=True) if soup.select_one(".gnrd-eyebrow") else "")
+              btns = [one(str(el)) for el in soup.select("#gnrd-play, .gnrd-play, .gnrd-btn-play, button, [onclick*='gnrd'], [data-t], [data-id], [data-post], [data-pid], [data-token]") if "player" in str(el).lower() or "gnrd" in str(el).lower() or "ver " in str(el).lower() or "reproducir" in str(el).lower() or el.has_attr("data-t") or el.has_attr("data-id") or el.has_attr("data-pid")]
+              # Search inline scripts for player/token/gnrd
+              hits = []
+              for m in re.finditer(r"(?:gnrd|player|token|_t\b|data-t|data-id|pid\b|post_id|v1/player)[^\n]{0,160}", html, re.I):
+                  hits.append(one(m.group(0)))
+                  if len(hits) >= 12: break
+              bc = [one(str(a)) for a in soup.select(".gnrd-crumb a, .breadcrumb a, a.gnrd-ep-series, .gnrd-epbar a, header a[href*='/ver/'], main a[href*='/ver/']")[:8]]
+              print(f"::notice::{label}_TRIGGERS=ey:{ey} || btns:{' | '.join(btns[:5])[:800]} || hits:{' | '.join(hits[:8])[:900]} || bc:{' | '.join(bc)[:400]}")
           PY
