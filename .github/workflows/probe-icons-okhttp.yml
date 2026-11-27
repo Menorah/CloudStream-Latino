@@ -1,4 +1,4 @@
-name: Probe Icons RePelisHD
+name: Probe Icons Extract
 on:
   workflow_dispatch:
   push:
@@ -7,78 +7,215 @@ on:
 permissions:
   contents: read
 jobs:
-  probe:
+  diagnose_repelishd:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Instalar dependencias
-        run: pip install -q pillow requests curl_cffi
-      - name: Inspeccionar RePelisHD y fuentes de íconos
+      - run: pip install -q requests pillow
+      - name: Verificar headers y tamanos RePelisHD vs PeliCineHD
         run: |
           python3 - <<'PY'
           import io, requests
-          from collections import Counter
+          from PIL import Image
+
+          out = []
+          for dom in ["repelishd.hair", "pelicinehd.com"]:
+              for sz in ["24", "48", "50", "72", "96", "128", "%size%"]:
+                  u = f"https://www.google.com/s2/favicons?domain={dom}&sz={sz}"
+                  r = requests.get(u, timeout=10)
+                  ct = r.headers.get("Content-Type", "")
+                  cc = r.headers.get("Cache-Control", "")
+                  try:
+                      im = Image.open(io.BytesIO(r.content))
+                      sz_info = f"{im.format} {im.size} {im.mode}"
+                  except Exception as e:
+                      sz_info = f"ERR({e})"
+                  out.append(f"{dom}[{sz}]=>{r.status_code} {ct} cc={cc} {len(r.content)}B {sz_info}")
+          print("::notice::REPELIS_DIAG_1=" + " | ".join(out[:7]).replace("%", "%25"))
+          print("::notice::REPELIS_DIAG_2=" + " | ".join(out[7:]).replace("%", "%25"))
+          PY
+
+  fetch_latanime_repelishd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q requests curl_cffi pillow
+      - name: Descargar Latanime y RePelisHD
+        run: |
+          python3 - <<'PY'
+          import base64, io, requests
           from PIL import Image
           from curl_cffi import requests as cfreq
 
-          lines = []
-          for sz in [16, 32, 64, 128, 256]:
-              u = f"https://www.google.com/s2/favicons?domain=repelishd.hair&sz={sz}"
-              r = requests.get(u, timeout=10)
-              im = Image.open(io.BytesIO(r.content))
-              rgba = im.convert("RGBA")
-              top_colors = Counter(rgba.getdata()).most_common(4)
-              top_hex = [(f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}a{c[3]:02x}", n) for c, n in top_colors]
-              lines.append(f"sz={sz}=>{r.status_code} redir={r.url[:65]} size={im.size} {len(r.content)}B colors={top_hex}")
-          print("::notice::REPELIS_G=" + " || ".join(lines).replace("%", "%25"))
+          r1 = requests.get("https://www.google.com/s2/favicons?domain=repelishd.hair&sz=256", timeout=15)
+          assert r1.status_code == 200
+          open("/tmp/rep.b64", "w").write(base64.b64encode(r1.content).decode())
 
-          # Check Wayback / CDX / other domains / apple-touch.png
-          cands = [
-              ("repelishd_hair_apple", "https://repelishd.hair/brand/repelishd/apple-touch.png"),
-              ("repelishd_hair_fav", "https://repelishd.hair/favicon.ico"),
-              ("repelishd_hair_logo", "https://repelishd.hair/brand/repelishd/logo.png"),
-              ("repelishd_surf_apple", "https://repelishd.surf/brand/repelishd/apple-touch.png"),
-              ("repelishd_lat_apple", "https://repelishd.lat/brand/repelishd/apple-touch.png"),
-              ("repelishd_co_apple", "https://repelishd.co/brand/repelishd/apple-touch.png"),
-              ("repelishd_one_apple", "https://repelishd.one/brand/repelishd/apple-touch.png"),
-              ("repelishd_com_apple", "https://repelishd.com/brand/repelishd/apple-touch.png"),
-              ("wayback_apple", "https://web.archive.org/web/2026id_/https://repelishd.hair/brand/repelishd/apple-touch.png"),
-          ]
-          res_c = []
-          for label, u in cands:
-              try:
-                  r = cfreq.get(u, impersonate="chrome131", timeout=12)
-                  ct = r.headers.get("Content-Type", "").split(";")[0]
-                  extra = ""
-                  if r.status_code == 200 and ct.startswith("image/"):
-                      im = Image.open(io.BytesIO(r.content))
-                      extra = f" {im.format} {im.size}"
-                  res_c.append(f"{label}:{r.status_code}({ct},{len(r.content)}B{extra})")
-              except Exception as e:
-                  res_c.append(f"{label}:ERR({str(e)[:40]})")
-          print("::notice::REPELIS_CANDS=" + " | ".join(res_c).replace("%", "%25"))
+          r2 = cfreq.get("https://latanime.org/img/logito.png", impersonate="chrome131", timeout=15)
+          assert r2.status_code == 200
+          im = Image.open(io.BytesIO(r2.content))
+          buf = io.BytesIO()
+          im.save(buf, format="PNG", optimize=True)
+          raw2 = buf.getvalue() if len(buf.getvalue()) < len(r2.content) else r2.content
+          open("/tmp/lat.b64", "w").write(base64.b64encode(raw2).decode())
+          PY
+      - name: Emitir parte 1
+        run: |
+          python3 - <<'PY'
+          rep = open("/tmp/rep.b64").read()
+          print(f"::notice::REPELISHD_00_01:{rep}")
+          b64 = open("/tmp/lat.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(0, min(8, len(parts))):
+              print(f"::notice::LATANIME_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir parte 2
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/lat.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(8, len(parts)):
+              print(f"::notice::LATANIME_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
 
-          # Check CDX for repelishd.hair images
-          try:
-              cdx = requests.get("https://web.archive.org/cdx/search/cdx?url=repelishd.hair/brand/*&output=json&limit=10", timeout=15)
-              print("::notice::CDX_BRAND=" + cdx.text[:1500].replace("%", "%25"))
-          except Exception as e:
-              print("::notice::CDX_ERR=" + str(e)[:200])
+  fetch_pelisjuanita:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q requests curl_cffi pillow
+      - name: Descargar PelisJuanita
+        run: |
+          python3 - <<'PY'
+          import base64
+          from curl_cffi import requests as cfreq
+          r1 = cfreq.get("https://pelisjuanita.com/favicon.png", impersonate="chrome131", timeout=15)
+          assert r1.status_code == 200
+          open("/tmp/pjfav.b64", "w").write(base64.b64encode(r1.content).decode())
+          r2 = cfreq.get("https://pelisjuanita.com/apple-touch-icon.png", impersonate="chrome131", timeout=15)
+          assert r2.status_code == 200
+          open("/tmp/pjapp.b64", "w").write(base64.b64encode(r2.content).decode())
+          PY
+      - name: Emitir PJFAV p1
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/pjfav.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(0, min(8, len(parts))):
+              print(f"::notice::PJFAV_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir PJFAV p2
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/pjfav.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(8, len(parts)):
+              print(f"::notice::PJFAV_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir PJAPPLE p1
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/pjapp.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(0, min(8, len(parts))):
+              print(f"::notice::PJAPPLE_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir PJAPPLE p2
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/pjapp.b64").read()
+          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
+          for i in range(8, len(parts)):
+              print(f"::notice::PJAPPLE_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
 
-          # Also check PelisJuanita favicon.png vs apple-touch-icon.png vs logo-juanita.png, and Latanime logito.png top colors
-          for label, u in [
-              ("Latanime_logito", "https://latanime.org/img/logito.png"),
-              ("PelisJuanita_fav", "https://pelisjuanita.com/favicon.png"),
-              ("PelisJuanita_apple", "https://pelisjuanita.com/apple-touch-icon.png"),
-              ("AnimeOnline_ver2", "https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png"),
-          ]:
-              r = cfreq.get(u, impersonate="chrome131", timeout=15)
-              im = Image.open(io.BytesIO(r.content))
-              rgba = im.convert("RGBA")
-              top = [(f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}a{c[3]:02x}", n) for c, n in Counter(rgba.getdata()).most_common(4)]
-              print(f"::notice::DETAIL_{label}={r.status_code} {im.format} {im.mode} {im.size} {len(r.content)}B top={top}".replace("%", "%25"))
+  fetch_animeonline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q requests curl_cffi pillow
+      - name: Obtener AnimeOnlineNinja icon
+        run: |
+          python3 - <<'PY'
+          import base64, io, time, requests
+          from PIL import Image
+          from curl_cffi import requests as cfreq
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
+          raw = None
+          for attempt in range(5):
+              for fn in [
+                  lambda: requests.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", headers={"User-Agent": UA}, timeout=12),
+                  lambda: cfreq.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", impersonate="chrome131", timeout=12),
+                  lambda: requests.get("https://ver2.animeonline.ninja/fh_assets/favicon-96x96.png", headers={"User-Agent": UA}, timeout=12),
+              ]:
+                  try:
+                      r = fn()
+                      if r.status_code == 200 and r.content.startswith(b"\x89PNG"):
+                          raw = r.content
+                          break
+                  except Exception:
+                      pass
+              if raw:
+                  break
+              time.sleep(2)
+          assert raw is not None, "Could not fetch AnimeOnline icon"
+          im = Image.open(io.BytesIO(raw))
+          # Optimize PNG losslessly or save RGBA optimized
+          buf = io.BytesIO()
+          im.save(buf, format="PNG", optimize=True)
+          out_raw = buf.getvalue() if len(buf.getvalue()) < len(raw) else raw
+          if len(out_raw) > 25000:
+              # Lossless resize to 128x128 if still > 25KB, or split across 20 chunks (2 jobs/steps)
+              pass
+          b64 = base64.b64encode(out_raw).decode()
+          open("/tmp/aon.b64", "w").write(b64)
+          print(f"AON size={im.size} raw={len(raw)} opt={len(out_raw)} b64={len(b64)}")
+          PY
+      - name: Emitir parte 1
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/aon.b64").read()
+          chunk = 3500
+          parts = [b64[i:i+chunk] for i in range(0, len(b64), chunk)]
+          for i in range(0, min(9, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir parte 2
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/aon.b64").read()
+          chunk = 3500
+          parts = [b64[i:i+chunk] for i in range(0, len(b64), chunk)]
+          for i in range(9, min(18, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir parte 3
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/aon.b64").read()
+          chunk = 3500
+          parts = [b64[i:i+chunk] for i in range(0, len(b64), chunk)]
+          for i in range(18, min(26, len(parts))):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
+          PY
+      - name: Emitir parte 4
+        run: |
+          python3 - <<'PY'
+          b64 = open("/tmp/aon.b64").read()
+          chunk = 3500
+          parts = [b64[i:i+chunk] for i in range(0, len(b64), chunk)]
+          for i in range(26, len(parts)):
+              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
           PY
