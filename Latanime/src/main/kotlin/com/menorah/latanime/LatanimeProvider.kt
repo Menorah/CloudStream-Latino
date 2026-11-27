@@ -96,10 +96,12 @@ class LatanimeProvider : MainAPI() {
         return if (tvType == TvType.AnimeMovie) {
             newMovieSearchResponse(title, url, TvType.AnimeMovie) {
                 this.posterUrl = this@toSearchResponse.posterUrl
+                this.year = this@toSearchResponse.year
             }
         } else {
             newAnimeSearchResponse(title, url, tvType) {
                 this.posterUrl = this@toSearchResponse.posterUrl
+                this.year = this@toSearchResponse.year
                 val ep = this@toSearchResponse.episodeNumber
                 if (ep != null && ep > 0) {
                     addDubStatus(isDub = this@toSearchResponse.isDub, episodes = ep)

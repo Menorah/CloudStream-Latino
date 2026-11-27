@@ -57,18 +57,19 @@ class LatanimeLiveTest {
         println("LIVE_CALENDAR: count=${calCards.size}, first=${calCards.first().title}")
 
         val filters = listOf(
-            "Audio Latino" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=Latino",
+            "Audio Latino" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=latino",
             "Peliculas Latino" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=Pel%C3%ADcula%20Latino",
             "En Emision" to "https://latanime.org/emision",
-            "Castellano" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=Castellano",
-            "OVAs" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=Ova",
+            "Castellano" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=castellano",
+            "Peliculas" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=Pel%C3%ADcula",
+            "OVAs" to "https://latanime.org/animes?fecha=false&genero=false&letra=false&categoria=ova",
         )
         for ((label, url) in filters) {
             val (_, doc) = fetchDoc(url)
             val page = LatanimeMarkup.parseCatalogCards(doc, currentPage = 1)
             assertTrue("Catalog $label non-empty", page.items.isNotEmpty())
             assertTrue("No capblank placeholders in $label", page.items.none { it.posterUrl?.contains("capblank") == true })
-            println("LIVE_CATALOG[$label]: count=${page.items.size}, hasNext=${page.hasNext}, maxPage=${page.maxPage}")
+            println("LIVE_CATALOG[$label]: count=${page.items.size}, hasNext=${page.hasNext}, maxPage=${page.maxPage}, firstBadge=${page.items.first().badge}, firstTitle=${page.items.first().title}")
         }
     }
 

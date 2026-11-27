@@ -24,6 +24,7 @@ data class LatanimeCard(
     val url: String,
     val posterUrl: String?,
     val badge: String? = null,
+    val year: Int? = null,
     val episodeNumber: Int? = null,
     val isDub: Boolean = false,
     val kind: LatanimeCardKind = LatanimeCardKind.ANIME,
@@ -90,13 +91,16 @@ object LatanimeMarkup {
         val cleanBase = baseUrl.trimEnd('/')
         return listOf(
             SECTION_HOME_EPISODES to "Últimos Capítulos",
-            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=Latino" to "Audio Latino",
+            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=latino" to "Audio Latino",
             "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=Pel%C3%ADcula%20Latino" to "Películas Latino",
+            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=ova-latino" to "OVAs Latino",
             "$cleanBase/emision" to "En Emisión",
-            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=Castellano" to "Castellano",
+            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=castellano" to "Castellano",
+            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=Pel%C3%ADcula%20Castellano" to "Películas Castellano",
             "$cleanBase/animes" to "Catálogo Reciente",
             "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=Pel%C3%ADcula" to "Películas",
-            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=Ova" to "OVAs",
+            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=ova" to "OVAs",
+            "$cleanBase/animes?fecha=false&genero=false&letra=false&categoria=sin-censura" to "Sin Censura",
             SECTION_CALENDAR to "Calendario Semanal",
             "$cleanBase/animes?fecha=false&genero=accion&letra=false&categoria=false" to "Acción",
             "$cleanBase/animes?fecha=false&genero=aventura&letra=false&categoria=false" to "Aventura",
@@ -252,10 +256,12 @@ object LatanimeMarkup {
 
     fun cleanHomeEpisodeTitle(rawText: String, episodeNum: Int?): String {
         var title = rawText.replace('\u00A0', ' ').replace(MULTISPACE_REGEX, " ").trim()
+        title = title.replace(Regex("""(?i)^(?:episodio|cap[ií]tulo|ep\.?)\s*\d+(?:\.\d+)?\s*[-:]*\s*"""), "")
         title = title.replace(Regex("""(?i)\s*-\s*(?:episodio|cap[ií]tulo)\s*\d+.*$"""), "")
         title = title.replace(Regex("""(?i)\s+(?:episodio|cap[ií]tulo)\s*\d+.*$"""), "")
         if (episodeNum != null) {
             title = title.replace(Regex("""\s*-\s*$episodeNum\s*$"""), "")
+            title = title.replace(Regex("""^$episodeNum\s*[-:]\s*"""), "")
         }
         return title.trim().ifEmpty { rawText.trim() }
     }
@@ -310,6 +316,9 @@ object LatanimeMarkup {
 
             val badge = a.selectFirst(".seriedetails span.opacity-75, .seriedetails span, span.badge, span.opacity-75")
                 ?.text()?.trim()?.ifEmpty { null }
+            val year = a.select(".seriedetails span")
+                .mapNotNull { YEAR_REGEX.find(it.text())?.groupValues?.getOrNull(1)?.toIntOrNull() }
+                .firstOrNull()
             val rawTitle = a.selectFirst("h3, h2, h4, .seriedetails .my-1")?.text()?.trim().orEmpty()
                 .ifEmpty { a.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
                 .ifEmpty {
@@ -333,6 +342,7 @@ object LatanimeMarkup {
                     url = url,
                     posterUrl = poster,
                     badge = badge,
+                    year = year,
                     episodeNumber = epNum,
                     isDub = isDub,
                     kind = kind,

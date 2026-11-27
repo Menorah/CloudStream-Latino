@@ -63,7 +63,7 @@ class LatanimeMarkupTest {
                 <div class="col-6">
                   <a href="https://latanime.org/ver/terror-en-tokio-castellano-episodio-5">
                     <img src="https://latanime.org/thumbs/portada/tet5.jpg" alt="Terror en Tokio Castellano" />
-                    <h3>Terror en Tokio Castellano - Episodio 5</h3>
+                    <h3>Episodio 5 - Terror en Tokio Castellano</h3>
                   </a>
                 </div>
               </div>
@@ -89,7 +89,7 @@ class LatanimeMarkupTest {
             <div class="row">
               <div class="col-6"><a href="https://latanime.org/anime/overlord-the-sacred-kingdom">
                 <img data-src="https://latanime.org/thumbs/imagen/overlord.jpg" src="https://latanime.org/img/capblank.png" />
-                <div class="seriedetails"><span class="opacity-75">Pelicula Latino</span><h3 class="my-1">Overlord: The Sacred Kingdom</h3></div>
+                <div class="seriedetails"><span class="opacity-75">Pelicula Latino</span><span>2024</span><h3 class="my-1">Overlord: The Sacred Kingdom</h3></div>
               </a></div>
               <div class="col-6"><a href="https://latanime.org/anime/urusei-yatsura-ova">
                 <img src="https://latanime.org/thumbs/imagen/urusei.jpg" />
@@ -116,6 +116,7 @@ class LatanimeMarkupTest {
 
         assertEquals(LatanimeCardKind.MOVIE, page.items[0].kind)
         assertTrue(page.items[0].isDub)
+        assertEquals(2024, page.items[0].year)
         assertEquals("https://latanime.org/thumbs/imagen/overlord.jpg", page.items[0].posterUrl)
 
         assertEquals(LatanimeCardKind.OVA, page.items[1].kind)
