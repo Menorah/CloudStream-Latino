@@ -1,4 +1,4 @@
-name: Probe GnulaHD Decode Players
+name: Probe GnulaHD Deep Hosts and Legacy
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  decode_live_players:
+  probe_hosts_and_edge_cases:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q beautifulsoup4 requests
-      - name: Decodificar /wp-json/gnrd/v1/player en Peliculas, Series y Anime + gnrdVdWarm + detail DOM
+      - name: Inspeccionar script VD_RESOLVE/TT_ON, posts antiguos, proximos-estrenos, search y embed hosts
         run: |
           python3 - <<'PY'
           import base64, json, re, requests
@@ -29,150 +29,100 @@ jobs:
           def unpack(s):
               raw = base64.b64decode(s)
               k = [103, 78, 55, 100]
-              out = bytes(b ^ k[i & 3] for i, b in enumerate(raw))
-              return json.loads(out.decode("utf-8"))
+              return json.loads(bytes(b ^ k[i & 3] for i, b in enumerate(raw)).decode("utf-8"))
 
-          # 1. Inspect full inline script containing gnrdVdWarm or _epLoadingId on live movie + series + episode
-          for lbl, u in [
-              ("MOV_JS", "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/"),
-              ("SER_JS", "https://ww3.gnulahd.nu/ver/the-crown/"),
-              ("EP_JS", "https://ww3.gnulahd.nu/the-crown-1x01/"),
-          ]:
-              r = S.get(u, timeout=20)
-              soup = BeautifulSoup(r.text, "html.parser")
-              for s in soup.select("script:not([src])"):
-                  t = s.get_text()
-                  if "gnrdVdWarm" in t or "_epLoadingId" in t or "_gdLoad" in t:
-                      idx = max(t.find("gnrdVdWarm"), 0)
-                      tail = t[max(0, t.find("/* =====")):] if "/* =====" in t else t
-                      print(f"::notice::{lbl}_SCRIPT=" + re.sub(r"\s+", " ", tail)[-3400:].replace("%", "%25"))
+          # 1. Inspect the 44KB player resolver script (first 6000 chars) on live page
+          r = S.get("https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/", timeout=20)
+          soup = BeautifulSoup(r.text, "html.parser")
+          for s in soup.select("script:not([src])"):
+              t = s.get_text()
+              if "VD_RESOLVE" in t or "TT_ON" in t:
+                  clean = re.sub(r"\s+", " ", t.strip())
+                  print("::notice::VD_TT_HEAD=" + clean[:3500].replace("%", "%25"))
+                  print("::notice::VD_TT_MID=" + clean[3500:7000].replace("%", "%25"))
+                  break
 
-          # 2. Sample ~15 titles (movies, series, anime) from live site and call /wp-json/gnrd/v1/player!
-          targets = [
-              ("M", "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/"),
-              ("M", "https://ww3.gnulahd.nu/ver/matrix/"),
-              ("M", "https://ww3.gnulahd.nu/ver/godzilla-minus-zero/"),
-              ("M", "https://ww3.gnulahd.nu/ver/street-fighter/"),
-              ("M", "https://ww3.gnulahd.nu/ver/aniquilacion-2026/"),
-              ("M", "https://ww3.gnulahd.nu/ver/the-jlo-show/"),
-              ("S", "https://ww3.gnulahd.nu/ver/the-crown/"),
-              ("S", "https://ww3.gnulahd.nu/ver/tulsa-king/"),
-              ("S", "https://ww3.gnulahd.nu/ver/el-senor-de-los-anillos-los-anillos-de-poder/"),
-              ("S", "https://ww3.gnulahd.nu/ver/visionquest/"),
-              ("A", "https://ww3.gnulahd.nu/ver/bleach-2004/"),
-              ("A", "https://ww3.gnulahd.nu/ver/cyberpunk-edgerunners/"),
-              ("A", "https://ww3.gnulahd.nu/ver/attack-on-titan/"),
-              ("A", "https://ww3.gnulahd.nu/ver/fool-night/"),
-              ("A", "https://ww3.gnulahd.nu/ver/one-piece-1999/"),
-          ]
-
+          # 2. Check legacy/older movies & series (page 200 and 450 of peliculas, page 18 of series)
+          legacy_res = []
           all_hosts = {}
-          decoded_samples = []
-          for kind, url in targets:
-              try:
-                  r = S.get(url, timeout=20)
-                  soup = BeautifulSoup(r.text, "html.parser")
-                  if kind == "M":
-                      mpid = re.search(r'_gnrdPid\s*=\s*(\d+)', r.text)
-                      mtok = re.search(r'_gnrdTok\s*=\s*"([^"]+)"', r.text)
-                      if not (mpid and mtok):
-                          decoded_samples.append(f"[{kind}]{url}=>NO_PID_TOK")
-                          continue
-                      pid, tok = mpid.group(1), mtok.group(1)
-                  else:
-                      ep = soup.select_one("a.gnrd-epc[data-id][data-t]")
-                      if not ep:
-                          decoded_samples.append(f"[{kind}]{url}=>NO_EPC")
-                          continue
-                      pid, tok = ep["data-id"], ep["data-t"]
-                  api_u = f"https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id={pid}&t={tok}"
-                  rp = S.get(api_u, headers={"User-Agent": UA, "Referer": url, "X-Gn-Scr": "1920x1080|1920x1040|1920x1080|1|0|0|8|8|24|0|1|hw", "X-Gn-Dev": "a1b2c3d4e5f6"}, timeout=20)
-                  if rp.status_code != 200:
-                      decoded_samples.append(f"[{kind}]{url}=>API_{rp.status_code}:{rp.text[:120]}")
-                      continue
-                  j = rp.json()
-                  data = unpack(j["p"])
-                  langs_summary = []
-                  for l in data.get("langs", []):
-                      srvs = [s.get("src", "") for s in l.get("servers", [])]
-                      for s in srvs:
-                          h = urlparse(s).netloc
-                          all_hosts[h] = all_hosts.get(h, 0) + 1
-                      langs_summary.append(f"{l.get('label')}:[{', '.join(srvs)}]")
-                  dl_cnt = len(data.get("dl", []))
-                  decoded_samples.append(f"[{kind}]{url.split('/ver/')[-1]} (dl={dl_cnt}) => " + " | ".join(langs_summary))
-              except Exception as e:
-                  decoded_samples.append(f"[{kind}]{url}=>ERR:{e}")
-
-          print("::notice::HOST_COUNTS=" + json.dumps(all_hosts, indent=None))
-          chunk = "\n".join(decoded_samples)
-          for i in range(0, len(chunk), 3300):
-              print(f"::notice::DECODED_{i//3300}=" + chunk[i:i+3300].replace("%", "%25").replace("\n", " || "))
-          PY
-
-  inspect_details_home_and_search:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install -q beautifulsoup4 requests
-      - name: Inspeccionar detalle exacto de Movie/Series/Anime, Home Tendencias, Anios, y Search JSON
-        run: |
-          python3 - <<'PY'
-          import json, re, requests
-          from bs4 import BeautifulSoup
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-          S = requests.Session()
-          S.headers.update({"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"})
-
-          # 1. Search JSON & search HTML pagination
-          rs1 = S.get("https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=a", timeout=20).json()
-          rs2 = S.get("https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=dragon", timeout=20).json()
-          rs_page1 = S.get("https://ww3.gnulahd.nu/?s=a", timeout=20)
-          sp1 = BeautifulSoup(rs_page1.text, "html.parser")
-          pag1 = [(a.get_text(strip=True), a.get("href")) for a in sp1.select(".gnrd-pag a, .pagination a, a[href*='page']")]
-          print("::notice::SEARCH_DETAILS=" + f"q=a_cnt={len(rs1.get('results',[]))} q=dragon_cnt={len(rs2.get('results',[]))} sample={json.dumps(rs2.get('results',[])[:3])} html_cards={len(sp1.select('a.gnrd-card'))} html_pag={pag1[:8]}".replace("%", "%25")[:3500])
-
-          # 2. Check Peliculas dropdowns (years, genres, languages) & Home Tendencias panes
-          rp = S.get("https://ww3.gnulahd.nu/ver/peliculas/", timeout=20)
-          spp = BeautifulSoup(rp.text, "html.parser")
-          dds = []
-          for dd in spp.select(".gnrd-dd"):
-              opts = [(a.get_text(" ", strip=True), a.get("href")) for a in dd.select("a.gnrd-dd-opt")]
-              dds.append(opts[:35])
-          lang_tabs = [(a.get_text(" ", strip=True), a.get("href")) for a in spp.select(".gnrd-lrow a")]
-          print("::notice::PELIS_FILTERS=" + f"lang_tabs={lang_tabs} dropdowns={dds}".replace("%", "%25")[:3500])
-
-          # 3. Check Home Tendencias tabs + Hero + Row "Ver todo" links
-          rh = S.get("https://ww3.gnulahd.nu/", timeout=20)
-          sph = BeautifulSoup(rh.text, "html.parser")
-          panes = [(p.get("data-pane") or p.get("id") or " ".join(p.get("class", [])), len(p.select("a.gnrd-card"))) for p in sph.select(".gnrd-trend-pane")]
-          all_row_links = [(r.select_one(".gnrd-row-head").get_text(" ", strip=True) if r.select_one(".gnrd-row-head") else "", [a.get("href") for a in r.select(".gnrd-row-head a")], len(r.select("a.gnrd-card"))) for r in sph.select("section.gnrd-row, .gnrd-row")]
-          print("::notice::HOME_STRUCTURE=" + f"panes={panes} rows={all_row_links}".replace("%", "%25")[:3500])
-
-          # 4. Inspect full detail DOM for Movie + Series + Anime (poster, bg, duration, status, genres, actors, trailer, related, episode HTML)
-          det_out = []
-          for u in [
-              "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/",
-              "https://ww3.gnulahd.nu/ver/the-crown/",
-              "https://ww3.gnulahd.nu/ver/bleach-2004/",
+          for list_u in [
+              "https://ww3.gnulahd.nu/ver/peliculas/?page=300",
+              "https://ww3.gnulahd.nu/ver/peliculas/?page=460",
+              "https://ww3.gnulahd.nu/ver/series/?page=18",
           ]:
-              rd = S.get(u, timeout=20)
-              sd = BeautifulSoup(rd.text, "html.parser")
-              eyebrow = (sd.select_one(".gnrd-eyebrow") or {}).get_text(" ", strip=True) if sd.select_one(".gnrd-eyebrow") else ""
-              meta_img = sd.select_one("meta[itemprop='image']")
-              meta_img_u = meta_img.get("content", "") if meta_img else ""
-              bg_el = sd.select_one(".gnrd-fi-bg")
-              bg_s = bg_el.get("style", "") if bg_el else ""
-              info_rows = [(r.select_one(".gnrd-info-k").get_text(strip=True), r.select_one(".gnrd-info-v").get_text(" ", strip=True)) for r in sd.select(".gnrd-info-row") if r.select_one(".gnrd-info-k") and r.select_one(".gnrd-info-v")]
-              qfacts = [(f.get_text(" ", strip=True)) for f in sd.select(".gnrd-qfacts > *")]
-              ep0 = sd.select_one("a.gnrd-epc")
-              ep0_html = re.sub(r"\s+", " ", str(ep0)) if ep0 else ""
-              rel_cards = len(sd.select("a.gnrd-card"))
-              rel_heading = [(h.get_text(" ", strip=True)) for h in sd.select("h2.gnrd-sec-h, .gnrd-row-head")]
-              det_out.append(f"[{u.split('/ver/')[-1]}] eyebrow={eyebrow!r} meta_img={meta_img_u} bg={bg_s} info={info_rows} qfacts={qfacts[:8]} rel_cards={rel_cards} rel_h={rel_heading} ep0={ep0_html[:500]}")
-          print("::notice::DETAIL_FIELDS=" + " || ".join(det_out).replace("%", "%25")[:3500])
+              rl = S.get(list_u, timeout=20)
+              sl = BeautifulSoup(rl.text, "html.parser")
+              cards = [a["href"] for a in sl.select("a.gnrd-card[href]")]
+              for cu in cards[:4]:
+                  rc = S.get(cu, timeout=20)
+                  sc = BeautifulSoup(rc.text, "html.parser")
+                  mpid = re.search(r'_gnrdPid\s*=\s*(\d+)', rc.text)
+                  mtok = re.search(r'_gnrdTok\s*=\s*"([^"]+)"', rc.text)
+                  ep = sc.select_one("a.gnrd-epc[data-id][data-t]")
+                  if mpid and mtok:
+                      pid, tok = mpid.group(1), mtok.group(1)
+                  elif ep:
+                      pid, tok = ep["data-id"], ep["data-t"]
+                  else:
+                      # Legacy? check iframes or tabs!
+                      ifr = [f.get("src") or f.get("data-src") for f in sc.select("iframe")]
+                      legacy_res.append(f"NO_API:{cu} title={sc.title.string if sc.title else ''} ifr={ifr}")
+                      continue
+                  rp = S.get(f"https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id={pid}&t={tok}", headers={"User-Agent": UA, "Referer": cu}, timeout=20)
+                  if rp.status_code == 200:
+                      d = unpack(rp.json().get("p", ""))
+                      srvs = [sv.get("src", "") for l in d.get("langs", []) for sv in l.get("servers", [])]
+                      for sv in srvs:
+                          h = urlparse(sv).netloc
+                          all_hosts[h] = all_hosts.get(h, 0) + 1
+                      legacy_res.append(f"OK:{cu.split('/ver/')[-1]} srvs={srvs[:3]}")
+                  else:
+                      legacy_res.append(f"API_{rp.status_code}:{cu}")
+          print("::notice::LEGACY_HOSTS=" + json.dumps(all_hosts) + " || " + " | ".join(legacy_res).replace("%", "%25")[:2800])
+
+          # 3. Check search behaviour (/?s=home vs /wp-json/gnrd/v1/search?q=home vs ?s=the&page=2) & /recien-agregado/ & /proximos-estrenos/violent-night-2/
+          extra = []
+          for u in [
+              "https://ww3.gnulahd.nu/?s=home",
+              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=home",
+              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=matrix",
+              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=la",
+              "https://ww3.gnulahd.nu/recien-agregado/",
+              "https://ww3.gnulahd.nu/proximos-estrenos/violent-night-2/",
+          ]:
+              ru = S.get(u, timeout=20)
+              if "json" in ru.headers.get("Content-Type", ""):
+                  j = ru.json()
+                  extra.append(f"{u}=>cnt={len(j.get('results',[]))} types={set(x.get('type') for x in j.get('results',[]))}")
+              else:
+                  su = BeautifulSoup(ru.text, "html.parser")
+                  cards = len(su.select("a.gnrd-card"))
+                  pags = [(a.get_text(strip=True), a.get("href")) for a in su.select(".gnrd-pag a, .pagination a")]
+                  ey = su.select_one(".gnrd-eyebrow")
+                  pid = re.search(r'_gnrdPid\s*=\s*(\d+)', ru.text)
+                  extra.append(f"{u}=>{ru.status_code} cards={cards} pags={pags[:4]} ey={ey.get_text(strip=True) if ey else ''} pid={pid.group(1) if pid else None}")
+          print("::notice::SEARCH_AND_PROX=" + " || ".join(extra).replace("%", "%25")[:3500])
+
+          # 4. Probe actual live responses of embed hosts (savefiles, bysevepoin, byse.sx, vidara.to, vidaraa.cc, voe.sx) + gnrd dl sample!
+          rp0 = S.get("https://ww3.gnulahd.nu/wp-json/gnrd/v1/player?id=525453&t=7f836484fab7aa0bc441ec75fe0b1af9", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/"}, timeout=20)
+          d0 = unpack(rp0.json()["p"])
+          print("::notice::DL_AND_LANGS_EXACT=" + json.dumps({"langs": d0.get("langs", []), "dl_sample": d0.get("dl", [])[:2]})[:3500].replace("%", "%25"))
+
+          host_tests = []
+          sample_embeds = [
+              "https://savefiles.com/e/obnc66iwt6px",
+              "https://bysevepoin.com/e/2n71086n81zc",
+              "https://byse.sx/e/d51shlcaib2c",
+              "https://vidara.to/e/p0Rvu1FStzi1J#gnraw",
+              "https://vidaraa.cc/e/QGKzkFZxmQ9jM#gnraw",
+              "https://voe.sx/e/89eqs4ngzliz",
+          ]
+          for eu in sample_embeds:
+              try:
+                  re_ = requests.get(eu.split("#")[0], headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15, allow_redirects=True)
+                  has_m3u8 = bool(re.search(r'\.m3u8|\.mp4|jwplayer|file:|sources:|hls|packed|eval\(function|b1=|"file"|\'file\'|vidara', re_.text, re.I))
+                  host_tests.append(f"{eu}=>{re_.status_code} final={re_.url} len={len(re_.text)} hints={has_m3u8} head={re.sub(r'\s+',' ',re_.text[:220])}")
+              except Exception as e:
+                  host_tests.append(f"{eu}=>ERR:{e}")
+          print("::notice::EMBED_PROBES=" + " || ".join(host_tests).replace("%", "%25")[:3500])
           PY
