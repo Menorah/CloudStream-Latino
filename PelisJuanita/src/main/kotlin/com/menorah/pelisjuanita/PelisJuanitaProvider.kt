@@ -82,6 +82,10 @@ class PelisJuanitaProvider(
     @Volatile
     internal var testWebResponse: ((android.webkit.WebResourceRequest) -> android.webkit.WebResourceResponse?)? = null
 
+    init {
+        PelisJuanitaAppContextHolder.register(appContext)
+    }
+
     fun clearCaches() {
         htmlCache.clear()
         publicCatalogCache.clear()
@@ -862,6 +866,7 @@ class PelisJuanitaProvider(
             "vidhide" to 2,
             "streamwish" to 3,
             "voe" to 4,
+            "vidsrc" to 4,
             "vidara" to 5,
             "lulustream" to 6,
             "savefiles" to 7,
@@ -944,6 +949,10 @@ class PelisJuanitaProvider(
                     lowerUrl.contains("dhtpre") ||
                     lowerUrl.contains("ryderjet") -> {
                     PelisJuanitaVidHideExtractor.extract(source.url, referer, "Earnvids", subtitleCallback, sink)
+                }
+                PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl(source.url) ||
+                    (lowerSrv == "vidsrc" && !lowerUrl.contains("vsembed.com")) -> {
+                    PelisJuanitaVidSrcSuExtractor.extract(source.url, referer, "Vidsrc", subtitleCallback, sink)
                 }
                 lowerSrv == "streamwish" ||
                     lowerUrl.contains("streamwish") ||

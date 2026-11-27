@@ -822,6 +822,7 @@ internal object PelisJuanitaMarkup {
     }
 
     private fun guessServerName(url: String): String {
+        if (PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl(url)) return "Vidsrc"
         val lower = url.lowercase()
         return when {
             lower.contains("vimeus.") -> "Vimeus"

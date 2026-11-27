@@ -1704,7 +1704,7 @@ internal object PelisJuanitaCrypto {
     }
 
     fun decodeBase64Flexible(input: String): ByteArray {
-        val normalized = input.trim().replace('-', '+').replace('_', '/')
+        val normalized = input.trim().replace(Regex("""\s+"""), "").replace('-', '+').replace('_', '/')
         val pad = (4 - normalized.length % 4) % 4
         val padded = normalized + "=".repeat(pad)
         return runCatching { Base64.decode(padded, Base64.DEFAULT) }
@@ -2198,7 +2198,8 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
         private val JS_ASSET_REGEX = Regex("""src=["']((?:https?://[^"']+|/?assets/[^"']+)\.js)["']""")
 
         private fun isVsembedUrl(url: String): Boolean =
-            runCatching { URI(url).host?.contains("vsembed", ignoreCase = true) == true }.getOrDefault(false)
+            !PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl(url) &&
+                runCatching { URI(url).host?.contains("vsembed", ignoreCase = true) == true }.getOrDefault(false)
 
         suspend fun extract(
             url: String,
@@ -2207,6 +2208,9 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
+            if (PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl(url)) {
+                return PelisJuanitaVidSrcSuExtractor.extract(url, referer, "Vidsrc", subtitleCallback, callback)
+            }
             val baseHeaders = mapOf(
                 "user-agent" to PelisJuanitaSessionHelper.DEFAULT_USER_AGENT,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -2214,6 +2218,9 @@ open class PelisJuanitaStreamWishExtractor : ExtractorApi() {
             )
             val effReferer = referer?.takeIf { it.isNotBlank() } ?: "${PelisJuanitaMarkup.MAIN_URL}/"
             var res = app.get(url, referer = effReferer, headers = baseHeaders, timeout = 8L)
+            if (PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl(res.url)) {
+                return PelisJuanitaVidSrcSuExtractor.extract(res.url, referer, "Vidsrc", subtitleCallback, callback)
+            }
 
             val unpacked = PelisJuanitaVidHideParser.parse(res.text, res.url)
             if (unpacked.streams.isNotEmpty() && emitParsedStreams(unpacked, sourceName, subtitleCallback, callback)) {

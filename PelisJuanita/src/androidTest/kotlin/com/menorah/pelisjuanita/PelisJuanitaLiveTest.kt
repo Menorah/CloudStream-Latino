@@ -120,6 +120,16 @@ class PelisJuanitaLiveTest {
         assertNotNull(PelisJuanitaBysePow.solveBlocking("5dd6af337978c416cc2cf9a6af73daad", 12))
         assertTrue(PelisJuanitaSessionHelper.looksLikeVerificationGate(302, "https://pelisjuanita.com/inicio.php", ""))
         assertTrue(PelisJuanitaSessionHelper.shouldTryWebTransport(403, "${PelisJuanitaMarkup.MAIN_URL}/movies/", "", null))
+
+        // vsembed.su parser + ChaCha20 roundtrip offline checks
+        assertTrue(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://vsembed.su/embed/movie?tmdb=1477963"))
+        assertFalse(PelisJuanitaVidSrcSuParser.isVidsrcEmbedUrl("https://vsembed.com/e/cjvk"))
+        val chachaKey = ByteArray(32) { (it + 3).toByte() }
+        val chachaNonce = ByteArray(12) { (it + 9).toByte() }
+        val chachaPlain = "https://birchandbay.space/pl/test".toByteArray()
+        val chachaEnc = PelisJuanitaWasmChaCha.decryptChaCha20(chachaKey, chachaNonce, chachaPlain)
+        val chachaDec = PelisJuanitaWasmChaCha.decryptChaCha20(chachaKey, chachaNonce, chachaEnc)
+        assertEquals("https://birchandbay.space/pl/test", String(chachaDec))
     }
 
     @Test
@@ -303,6 +313,18 @@ class PelisJuanitaLiveTest {
                 workingHosts++
             }
         }
+
+        // Verify live vsembed.su movie & subtitle endpoints (non-StreamWish path)
+        val vsembedSuUrl =
+            "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
+        val subCand = PelisJuanitaVidSrcSuParser.parseSubtitlesFromEmbedUrl(vsembedSuUrl).firstOrNull()
+        assertNotNull("Expected subtitle candidate on vsembed.su URL", subCand)
+        val directSubText = subCand!!.directUrl?.let { tryGetText(it) }
+        val proxySubText = tryGetText(subCand.rawUrl)
+        assertTrue(
+            "Expected live SRT subtitle on vsembed.su (direct=${directSubText?.length}, proxy=${proxySubText?.length})",
+            directSubText?.contains("-->") == true || proxySubText?.contains("-->") == true,
+        )
 
         assertTrue("Expected >= 4 live video host parsers succeeding, got $workingHosts", workingHosts >= 4)
     }
