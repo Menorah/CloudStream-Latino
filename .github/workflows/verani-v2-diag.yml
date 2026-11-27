@@ -7,82 +7,87 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_js_and_curl:
+  probe_final_details:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract Byse/Turboembed JS APIs and test curl on Zilla/Mp4/VOE
+      - name: Probe Turboembed API, Byse lazy chunk, VerAni /animes/ card DOM, and Zilla 403 reason
         run: |
           python3 - <<'PY'
-          import base64, json, re, subprocess, urllib.request, zlib
+          import base64, json, re, urllib.request, zlib
 
           UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
-          def fetch(url, referer='https://verani.me/', max_bytes=5000000):
+          def fetch(url, referer='https://verani.me/', max_bytes=3000000):
               hdrs = {'User-Agent': UA, 'Accept': '*/*', 'Referer': referer}
               req = urllib.request.Request(url, headers=hdrs)
-              with urllib.request.urlopen(req, timeout=25) as r:
-                  return r.read(max_bytes).decode('utf-8', 'replace')
+              try:
+                  with urllib.request.urlopen(req, timeout=25) as r:
+                      return {'code': r.status, 'final_url': r.geturl(), 'text': r.read(max_bytes).decode('utf-8', 'replace')}
+              except urllib.error.HTTPError as e:
+                  return {'code': e.code, 'final_url': e.geturl(), 'text': e.read(50000).decode('utf-8', 'replace')}
+              except Exception as e:
+                  return {'code': -1, 'error': str(e), 'text': ''}
 
           out = {}
 
-          # 1. FULL turboembed JS inspection around AES key/iv & API endpoint
-          te = fetch('https://turboembed.com/assets/index-CIV3m7-G.js', 'https://turboembed.com/9r03')
-          out['te_len'] = len(te)
-          m_aes = re.search(r'generateKey\s*\(', te)
-          if m_aes:
-              out['te_crypto_class'] = te[max(0, m_aes.start()-500):m_aes.start()+2500]
-          m_player = re.search(r'split\(["\']\/["\']\)\[t\(\d+\)\]\(\),!E\)', te)
-          if m_player:
-              out['te_player_flow'] = te[max(0, m_player.start()-800):m_player.start()+4500]
-          # Also dump Lr() string table function if needed!
-          m_lr = re.search(r'function Lr\(\)\{const e=\[.*?\];return \(Lr=function', te)
-          if m_lr:
-              out['te_lr_table'] = te[m_lr.start():min(len(te), m_lr.start()+6500)]
-          # Also find every "/api/" literal in turboembed JS
-          out['te_api_strings'] = re.findall(r'["\']([^"\']*(?:/api/|/stream|/video|/resolve|/embed)[^"\']*)["\']', te)[:40]
+          # 1. Turboembed live /api/stream?s=9r03
+          te_api = fetch('https://turboembed.com/api/stream?s=9r03', referer='https://turboembed.com/9r03')
+          out['turboembed_api_9r03'] = {'code': te_api['code'], 'text': te_api['text'][:3500]}
 
-          # 2. FULL byse JS inspection around playback & details & videos API
-          by = fetch('https://byselapuix.com/assets/index-DocunfmE.js', 'https://byselapuix.com/e/1t8mpxujis4x')
-          out['by_len'] = len(by)
-          out['by_playback_hits'] = [
-              by[max(0, m.start()-250):m.end()+450]
-              for m in re.finditer(r'/playback|embed/playback|embed/details|x-embed-parent|AES-GCM|key_parts', by)
-          ][:15]
-          out['by_api_paths'] = list(set(re.findall(r'["\']([^"\']*?/api/[^"\']*)["\']', by)))[:40]
-          # Also find fetch calls near embed/videos
-          out['by_videos_hits'] = [
-              by[max(0, m.start()-200):m.end()+400]
-              for m in re.finditer(r'api/videos|videos/\$\{|/embed/', by)
-          ][:15]
+          # 2. Byse lazy chunks in index-DocunfmE.js
+          by_js = fetch('https://n1mwq.org/assets/index-DocunfmE.js', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
+          chunks = sorted(set(re.findall(r'assets/[A-Za-z0-9_.-]+\.js', by_js)))
+          out['byse_lazy_chunks'] = chunks
+          for ch in chunks:
+              if any(w in ch.lower() for w in ['embed', 'video', 'play', 'watch', 'qre']):
+                  cjs = fetch(f'https://n1mwq.org/{ch}', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
+                  hits = [cjs[max(0, m.start()-200):m.end()+400] for m in re.finditer(r'playback|embed|x-embed-parent|AES-GCM|decrypt', cjs, re.I)]
+                  if hits:
+                      out[f'byse_chunk_{ch}'] = hits[:12]
+          # Fallback: if none matched name filter, check all chunks up to 25
+          if not any(k.startswith('byse_chunk_') for k in out):
+              for ch in chunks[:30]:
+                  cjs = fetch(f'https://n1mwq.org/{ch}', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
+                  if 'playback' in cjs or 'x-embed-parent' in cjs:
+                      out[f'byse_chunk_{ch}'] = [cjs[max(0, m.start()-250):m.end()+450] for m in re.finditer(r'playback|x-embed-parent|embed/details|AES-GCM', cjs)][:12]
 
-          # 3. curl tests for Zilla init.html (HTTP/2 TLS vs urllib) + Mp4upload MP4 + Verani filters
-          def run_curl(args):
-              p = subprocess.run(['curl', '-sS', '-D', '-', '-o', '/tmp/curl_body', '--max-time', '15'] + args, capture_output=True, text=True)
-              body = open('/tmp/curl_body', 'rb').read(512)
-              return {'rc': p.returncode, 'hdr': p.stdout[:800], 'err': p.stderr[:300], 'body_len': len(body), 'body_ascii': body.decode('utf-8', 'replace')[:250]}
+          # 3. VerAni /animes/?idioma=Espa%C3%B1ol%20Latino card structure around Fruits Basket
+          lat = fetch('https://verani.me/animes/?idioma=Espa%C3%B1ol%20Latino')['text']
+          idx = lat.find('Fruits Basket')
+          out['latino_card_context'] = re.sub(r'\s+', ' ', lat[max(0, idx-500):idx+600]) if idx != -1 else 'NOT FOUND'
+          # Pagination around nav or page/2
+          pidx = lat.find('/page/2')
+          out['latino_page2_context'] = re.sub(r'\s+', ' ', lat[max(0, pidx-300):pidx+400]) if pidx != -1 else 'NO PAGE2'
 
-          out['curl_zilla_no_ref'] = run_curl(['-A', UA, 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'])
-          out['curl_zilla_verani_ref'] = run_curl(['-A', UA, '-e', 'https://verani.me/', 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'])
-          out['curl_zilla_self_ref'] = run_curl(['-A', UA, '-e', 'https://player.zilla-networks.com/', 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'])
-          out['curl_mp4_head'] = run_curl(['-I', '-A', UA, '-e', 'https://www.mp4upload.com/', 'https://a3.mp4upload.com:183/d/xsx5stnuz3b4quuonssbsj2ndhepa5ikscmasiaz4x5c5zvkq72jz6hnhrl72mrq5ts5bw3h/video.mp4'])
+          # 4. Zilla 403 title/body inspection + check /m3u8/ vs /embed/
+          z403 = fetch('https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html', referer='https://verani.me/')
+          out['zilla_403_full'] = z403['text']
+          z_emb = fetch('https://player.zilla-networks.com/embed/63911a42e1f576444e2bd19d146a4455', referer='https://verani.me/')
+          out['zilla_embed'] = {'code': z_emb['code'], 'len': len(z_emb['text']), 'head': z_emb['text'][:800]}
 
-          # 4. Also inspect /animes/?idioma=Espa%C3%B1ol%20Latino HTML card markup & pagination
-          lat_html = fetch('https://verani.me/animes/?idioma=Espa%C3%B1ol%20Latino')
-          cards = re.findall(r'<article\b[^>]*class="[^"]*content-card[^"]*"[^>]*>.*?</article>', lat_html, re.S)
-          out['latino_card_count'] = len(cards)
-          out['latino_first_card'] = re.sub(r'\s+', ' ', cards[0])[:600] if cards else ''
-          out['latino_titles'] = re.findall(r'class="card-title"[^>]*>([^<]+)<', lat_html)[:8]
-          pag_m = re.search(r'<nav class="pagination"[^>]*>.*?</nav>', lat_html, re.S)
-          out['latino_pagination'] = re.sub(r'\s+', ' ', pag_m.group(0))[:600] if pag_m else ''
+          # 5. Also verify VOE full JSON decrypt on live caseyseemavoid
+          voe_html = fetch('https://caseyseemavoid.com/e/rjq75thphcvd', referer='https://voe.sx/')['text']
+          m_voe = re.search(r'<script type="application/json">\s*\["(.*?)"\]\s*</script>', voe_html, re.S)
+          if m_voe:
+              s = m_voe.group(1)
+              import codecs
+              v1 = codecs.encode(s, 'rot_13')
+              for pat in ['@$', '^^', '~@', '%?', '*~', '!!', '#&']:
+                  v1 = v1.replace(pat, '_')
+              v3 = v1.replace('_', '')
+              v4 = base64.b64decode(v3 + '=' * ((4 - len(v3) % 4) % 4)).decode('latin1')
+              v5 = ''.join(chr((ord(c) - 3) % 256) for c in v4)[::-1]
+              v6 = base64.b64decode(v5 + '=' * ((4 - len(v5) % 4) % 4)).decode('utf-8', 'replace')
+              out['voe_decrypted'] = v6[:1000]
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
-          chunks = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
-          print(f"JS2 raw={len(raw)} b64={len(b64)} chunks={len(chunks)}")
-          assert len(chunks) <= 10, f"Too many chunks: {len(chunks)}"
-          for idx, ch in enumerate(chunks):
-              print(f"::notice title=JS2_{idx}_{len(chunks)}::{ch}")
+          chunks_out = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
+          print(f"FIN raw={len(raw)} b64={len(b64)} chunks={len(chunks_out)}")
+          assert len(chunks_out) <= 10, f"Too many chunks: {len(chunks_out)}"
+          for idx, ch in enumerate(chunks_out):
+              print(f"::notice title=FIN_{idx}_{len(chunks_out)}::{ch}")
           PY
