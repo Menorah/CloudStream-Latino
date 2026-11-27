@@ -7,38 +7,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_byse_405:
+  probe_zt_and_routes:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Zt() and OPTIONS/POST/GET with curl on Byse
+      - name: Check Zt definition and all /:x/:code routes in Byse JS
         run: |
           python3 - <<'PY'
-          import base64, json, re, subprocess, urllib.request, zlib
+          import base64, json, re, urllib.request, zlib
           UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          vp = urllib.request.urlopen(urllib.request.Request('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js', headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
-          out = {'vp_top': vp[:1500]}
-          m = re.search(r'function Zt\b|Zt\s*=', vp)
-          if m:
-              out['zt_in_vp'] = vp[max(0, m.start()-100):m.start()+500]
-          idx = urllib.request.urlopen(urllib.request.Request('https://n1mwq.org/assets/index-DocunfmE.js', headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
-          m2 = re.search(r'export\{[^}]*as Z', idx)
-          if m2:
-              out['idx_exports'] = idx[max(0, m2.start()-500):m2.end()+100]
-
-          def run_curl(args):
-              p = subprocess.run(['curl', '-sS', '-i', '--max-time', '15'] + args, capture_output=True, text=True)
-              return p.stdout[:1200] + "\nERR:" + p.stderr[:200]
-
-          for mth in ['OPTIONS', 'GET', 'POST', 'PUT', 'PATCH']:
-              out[f'n1_embed_{mth}'] = run_curl(['-X', mth, '-A', UA, '-H', 'Origin: https://n1mwq.org', '-H', 'Referer: https://n1mwq.org/qre/1t8mpxujis4x', '-H', 'X-Embed-Parent: https://byselapuix.com/e/1t8mpxujis4x', '-H', 'Content-Type: application/json', 'https://n1mwq.org/api/videos/1t8mpxujis4x/embed/playback'] + (['-d', '{}'] if mth in ('POST','PUT','PATCH') else []))
-          out['byse_details_curl'] = run_curl(['-A', UA, '-H', 'Referer: https://byselapuix.com/e/1t8mpxujis4x', 'https://byselapuix.com/api/videos/1t8mpxujis4x/embed/details'])
+          def get(u):
+              return urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
+          idx = get('https://n1mwq.org/assets/index-DocunfmE.js')
+          vp = get('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js')
+          out = {}
+          m_exp = re.search(r'export\{[^}]+\}', idx)
+          if m_exp:
+              exp = m_exp.group(0)
+              out['export_tail'] = exp[-1200:]
+              mz = re.search(r'(\w+) as z\b', exp)
+              if mz:
+                  zname = mz.group(1)
+                  out['zname'] = zname
+                  out['z_defs'] = [idx[max(0, m.start()-80):m.end()+350] for m in re.finditer(rf'\b{re.escape(zname)}\s*=', idx)][:6]
+              # Also find router paths near end of idx!
+              out['idx_tail'] = idx[max(0, m_exp.start()-3000):m_exp.start()]
+          # Check Lt / en / Et usage in vp!
+          out['vp_calls'] = [vp[max(0, m.start()-120):m.end()+250] for m in re.finditer(r'\bEt\(', vp)]
+          # Also test HEAD and GET on settings/details on n1mwq.org!
+          for act in ['details', 'settings', 'embed/details', 'embed/settings', 'playback', 'embed/playback']:
+              for mth in ['GET', 'POST']:
+                  try:
+                      req = urllib.request.Request(f'https://n1mwq.org/api/videos/1t8mpxujis4x/{act}', headers={'User-Agent': UA, 'Referer': 'https://n1mwq.org/ily/1t8mpxujis4x', 'Origin': 'https://n1mwq.org', 'X-Embed-Parent': 'https://byselapuix.com/e/1t8mpxujis4x', 'Content-Type': 'application/json'}, data=(b'{}' if mth=='POST' else None), method=mth)
+                      with urllib.request.urlopen(req, timeout=15) as r:
+                          out[f'{mth}_{act}'] = f"{r.status}: {r.read(500).decode('utf-8','replace')}"
+                  except urllib.error.HTTPError as e:
+                      out[f'{mth}_{act}'] = f"{e.code}: {e.read(500).decode('utf-8','replace')}"
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
           chunks = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
-          for idx_i, ch in enumerate(chunks):
-              print(f"::notice title=B405_{idx_i}_{len(chunks)}::{ch}")
+          for i, ch in enumerate(chunks):
+              print(f"::notice title=ZT_{i}_{len(chunks)}::{ch}")
           PY
