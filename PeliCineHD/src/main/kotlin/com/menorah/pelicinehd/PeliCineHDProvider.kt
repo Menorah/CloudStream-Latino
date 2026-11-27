@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class PeliCineHDProvider(context: Context) : MainAPI() {
     override var mainUrl = PeliCineHDMarkup.BASE
     override var name = "PeliCineHD"
-    override var lang = "es"
+    override var lang = "es-419"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)

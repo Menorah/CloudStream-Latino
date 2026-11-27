@@ -41,7 +41,7 @@ class RePelisHDProvider : MainAPI() {
     override var mainUrl = RePelisHDMarkup.DEFAULT_MAIN_URL
     override var name = "RePelisHD"
     override val hasMainPage = true
-    override var lang = "es"
+    override var lang = "es-419"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     override val mainPage = mainPageOf(

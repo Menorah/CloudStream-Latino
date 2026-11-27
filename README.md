@@ -4,7 +4,7 @@ Extensiones no oficiales e independientes para [AnimeOnline](https://ww4.animeon
 
 ## Instalación
 
-El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `plugins.json` y los doce complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelis24Shop.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `CinecalidadOrg.cs3`, `PoseidonHD2.cs3`, `PeliCineHD.cs3`, `Cuevana3v.cs3`, `PelisJuanita.cs3`) en la release `cloudstream`. Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
+El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar estos cambios en `main`, el flujo **Compilar extensión** publica `repo.json`, `repo-icon.png`, `plugins.json` y los doce complementos (`AnimeOnlineNinja.cs3`, `VerAni.cs3`, `Repelis24CZ.cs3`, `RePelis24Shop.cs3`, `RePelisHD.cs3`, `CinecalidadAM.cs3`, `CinecalidadMY.cs3`, `CinecalidadOrg.cs3`, `PoseidonHD2.cs3`, `PeliCineHD.cs3`, `Cuevana3v.cs3`, `PelisJuanita.cs3`) en la release `cloudstream` (todos configurados con el código de idioma IETF BCP 47 `es-419` de Español Latinoamérica y el ícono correspondiente a cada sitio web). Para que CloudStream pueda descargarlos sin autenticación, el repositorio y la release deben ser **públicos**, o los archivos deben alojarse en un servidor público (actualizando las URL en `repo.json` y `build.gradle.kts`). 
 
 1. Comprueba que la ejecución de Actions en `main` terminó correctamente y que la release contiene el índice, el repositorio y los doce complementos.
 2. En CloudStream abre **Ajustes → Extensiones → Repositorios → Añadir repositorio**.
@@ -12,7 +12,7 @@ El índice y el archivo `.cs3` se compilan con GitHub Actions. Tras integrar est
 
    `https://github.com/Menorah/CloudStream-Latino/releases/download/cloudstream/repo.json`
 
-4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelis24.shop**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **Cinecalidad.org**, **PoseidonHD2**, **PeliCineHD**, **Cuevana3v**, **PelisJuanita** o los que desees y activa los proveedores en español si es necesario.
+4. Abre el repositorio agregado, instala **AnimeOnlineNinja**, **VerAni**, **Repelis24CZ**, **RePelis24.shop**, **RePelisHD**, **CinecalidadAM**, **CinecalidadMY**, **Cinecalidad.org**, **PoseidonHD2**, **PeliCineHD**, **Cuevana3v**, **PelisJuanita** o los que desees y activa los proveedores en español latino (`es-419`) si es necesario.
 
 Como alternativa para pruebas privadas, descarga el artefacto `AnimeOnlineNinja` desde la ejecución de Actions, extrae el `.cs3` deseado e impórtalo localmente en CloudStream si tu versión admite instalación de archivos locales. La descarga del artefacto requiere iniciar sesión en GitHub.
 

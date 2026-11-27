@@ -32,7 +32,7 @@ class VerAniProvider : MainAPI() {
     override var mainUrl = VerAniMarkup.DEFAULT_MAIN_URL
     override var name = "VerAni.me"
     override val hasMainPage = true
-    override var lang = "es"
+    override var lang = "es-419"
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,

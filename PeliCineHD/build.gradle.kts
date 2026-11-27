@@ -1,4 +1,4 @@
-version = 3
+version = 4
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -8,11 +8,12 @@ dependencies {
 }
 
 cloudstream {
-    description = "Películas y series de PeliCineHD en español."
+    description = "Películas y series de PeliCineHD en español latino, castellano y subtitulado."
     authors = listOf("Menorah")
     status = 3
     tvTypes = listOf("Movie", "TvSeries")
-    language = "es"
+    language = "es-419"
+    iconUrl = "https://www.google.com/s2/favicons?domain=pelicinehd.com&sz=%size%"
 }
 
 android {

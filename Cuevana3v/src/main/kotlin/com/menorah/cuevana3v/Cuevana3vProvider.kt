@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference
 class Cuevana3vProvider : MainAPI() {
     override var mainUrl = Cuevana3vMarkup.MAIN_URL
     override var name = "Cuevana3v"
-    override var lang = "es"
+    override var lang = "es-419"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)

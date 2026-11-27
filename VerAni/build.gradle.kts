@@ -1,4 +1,4 @@
-version = 4
+version = 5
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -10,6 +10,6 @@ cloudstream {
     authors = listOf("Menorah")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
-    language = "es"
-    iconUrl = "https://verani.me/wp-content/uploads/2026/01/Gemini_Generated_Image_y27f1qy27f1qy27f-1-e1767498152326.png"
+    language = "es-419"
+    iconUrl = "https://verani.me/wp-content/uploads/2026/01/3cbecfeb-f59b-459d-ab8e-7dff9eecbce9_removalai_preview-300x300.png"
 }

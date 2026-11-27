@@ -58,6 +58,7 @@ jobs:
           cp CinecalidadOrg/build/CinecalidadOrg.cs3 output/
           cp Cuevana3v/build/Cuevana3v.cs3 output/
           cp PelisJuanita/build/PelisJuanita.cs3 output/
+          cp assets/repo-icon.png output/repo-icon.png
           python3 - <<'PY'
           import json, pathlib
           plugins = json.loads(pathlib.Path('build/plugins.json').read_text())
@@ -66,6 +67,7 @@ jobs:
           pathlib.Path('output/plugins.json').write_text(json.dumps(plugins, ensure_ascii=False))
           repo = json.loads(pathlib.Path('repo.json').read_text())
           repo['name'] = 'CloudStream Latino (beta)'
+          repo['iconUrl'] = 'https://github.com/Menorah/CloudStream-Latino/releases/download/beta/repo-icon.png'
           repo['description'] = 'Canal beta de las extensiones CloudStream Latino'
           repo['pluginLists'] = ['https://github.com/Menorah/CloudStream-Latino/releases/download/beta/plugins.json']
           pathlib.Path('output/repo.json').write_text(json.dumps(repo, ensure_ascii=False))
@@ -78,6 +80,11 @@ jobs:
           assert names == expected, (sorted(names), sorted(expected))
           for name in expected:
               assert (pathlib.Path('output') / name).stat().st_size > 0
+          assert (pathlib.Path('output') / 'repo-icon.png').stat().st_size > 0
+          for p in plugins:
+              assert p.get('language') == 'es-419', p
+              icon = p.get('iconUrl') or ''
+              assert icon.startswith('https://') and not icon.lower().endswith('.svg'), p
           print('beta:', sorted(names))
           PY
       - name: Publicar en la release beta
