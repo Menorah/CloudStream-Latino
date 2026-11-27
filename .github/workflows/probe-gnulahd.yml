@@ -1,4 +1,4 @@
-name: Probe GnulaHD Ultra Deep
+name: Probe GnulaHD Player and APIs
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  dissect_movie_and_series_zip:
+  inspect_zip_player_scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q beautifulsoup4 requests
-      - name: Diseccionar Pelicula y Serie del zip (DOM, reproductor, episodios, scripts)
+      - name: Extraer scripts de reproductor, tabs, reparto, trailer, detalles, filtros del zip
         run: |
           python3 - <<'PY'
           import os, re, zipfile, requests
@@ -39,54 +39,38 @@ jobs:
                           return p
               return None
 
+          # 1. Inspect ALL scripts containing gnrdOpenPlayer, gnrdTab, mirror, gnDev, wp-json, admin-ajax in MOVIE and SERIES!
           for tag, sub in [("MOVIE", "pelicula ejemplo"), ("SERIES", "serie ejemplo")]:
-              p = find_file(sub)
-              html = open(p, errors="replace").read()
+              html = open(find_file(sub), errors="replace").read()
               soup = BeautifulSoup(html, "html.parser")
-              # Strip darkreader & svgs for clean inspection
-              for el in soup.select("svg, style, link"):
-                  el.decompose()
-              # Inspect main container structure
-              main = soup.select_one("main, .gnrd-main, .gnrd-fwrap, body")
-              # Print all unique gnrd-* classes and their sample HTML snippets
-              gnrd_blocks = []
-              seen_cls = set()
-              for el in soup.select("[class*='gnrd-']"):
-                  c = " ".join(x for x in el.get("class", []) if x.startswith("gnrd-"))
-                  if c not in seen_cls:
-                      seen_cls.add(c)
-                      attrs = {k: v for k, v in el.attrs.items() if not k.startswith("data-darkreader") and k != "class"}
-                      txt = re.sub(r"\s+", " ", el.get_text(" ", strip=True))[:100]
-                      gnrd_blocks.append(f"<{el.name}.{c} {attrs}>{txt}")
-              # Dump player/mirror/episode/trailer/actor DOM verbatim (first 3200 chars of key sections)
-              player_html = ""
-              for sel in [".gnrd-player", "#player", ".gnrd-watch", ".gnrd-eps", ".gnrd-seasons", ".gnrd-tabs", "[id*='play']", "[class*='play']", "[class*='srv']", "[class*='mir']", "[class*='ep']", "[class*='temp']", "[class*='fi-']", ".gnrd-fi", ".gnrd-info"]:
-                  found = soup.select_one(sel)
-                  if found:
-                      s_str = re.sub(r"\s+", " ", str(found))
-                      if len(s_str) > 30:
-                          player_html += f"[{sel}]=>{s_str[:900]} || "
-              print(f"::notice::{tag}_CLASSES=" + " | ".join(gnrd_blocks).replace("%", "%25")[:3500])
-              print(f"::notice::{tag}_DOM=" + player_html.replace("%", "%25")[:3500])
+              for el in soup.select("svg, style"): el.decompose()
 
-              # Dump ALL inline scripts that aren't gtag/histats/telegram/ads!
-              real_scripts = []
-              for idx, s in enumerate(soup.select("script:not([src])")):
+              # Find scripts mentioning player/gnrdOpenPlayer/admin-ajax/wp-json/embed/gnDev
+              hits = []
+              for i, s in enumerate(soup.select("script:not([src])")):
                   t = s.get_text().strip()
-                  if not t or any(skip in t for skip in ["gntgp-fab", "gtag", "Histats", "matomo", "_paq", "eval(function(p,a,c,k,e,d)"]):
-                      if "eval(function" in t:
-                          real_scripts.append(f"S{idx}[PACKED len={len(t)}]: {t[:250]}")
-                      continue
-                  if "ts_config" in t and len(t) < 700:
-                      continue
-                  real_scripts.append(f"S{idx}[len={len(t)}]: {re.sub(r'\s+', ' ', t)[:1500]}")
-              joined = " === ".join(real_scripts)
-              print(f"::notice::{tag}_SCRIPTS_A=" + joined[:3500].replace("%", "%25"))
-              if len(joined) > 3500:
-                  print(f"::notice::{tag}_SCRIPTS_B=" + joined[3500:7000].replace("%", "%25"))
+                  if any(k in t for k in ["gnrdOpenPlayer", "gnrdTab", "gnDev", "admin-ajax", "wp-json/gnrd", "mirror", "embed", "player", "gnrd-epc"]):
+                      hits.append(f"S{i}({len(t)}): " + re.sub(r"\s+", " ", t))
+              joined = "\n".join(hits)
+              for ci in range(0, min(len(joined), 12000), 3400):
+                  print(f"::notice::{tag}_PLAYER_JS_{ci//3400}=" + joined[ci:ci+3400].replace("%", "%25").replace("\n", " || "))
+
+              # Dump Reparto, Trailer, Detalles, Relacionados, and Player modal/overlay DOM
+              sections = []
+              for sel in [".gnrd-tabpanels", "[data-k='reparto']", "[data-k='trailer']", "[data-k='detalles']", "#gnrd-player", ".gnrd-player", ".gnrd-modal", ".gnrd-pm", "[id*='gnrd-p']", ".gnrd-rel", ".gnrd-related", ".gnrd-fi-side", ".gnrd-fi-poster"]:
+                  el = soup.select_one(sel)
+                  if el:
+                      sections.append(f"[{sel}]=>" + re.sub(r"\s+", " ", str(el))[:900])
+              # Also check elements near end of body (modals/overlays)
+              for el in soup.select("body > div, body > section"):
+                  eid = el.get("id", "")
+                  cls = ".".join(el.get("class", []))
+                  if any(k in (eid + cls).lower() for k in ["play", "modal", "ov", "player", "srv", "mir"]):
+                      sections.append(f"[BODY_EL #{eid}.{cls}]=>" + re.sub(r"\s+", " ", str(el))[:1200])
+              print(f"::notice::{tag}_SECTIONS=" + " || ".join(sections)[:3500].replace("%", "%25"))
           PY
 
-  dissect_listings_filters_js:
+  inspect_live_episode_and_player:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -94,73 +78,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -q beautifulsoup4 requests
-      - name: Diseccionar filtros, generos, tarjetas, paginacion, busqueda y tsfn.js
-        run: |
-          python3 - <<'PY'
-          import os, re, zipfile, requests
-          from bs4 import BeautifulSoup
-
-          r = requests.get("https://tmpfiles.org/wrAmvgh4G7Qr/ww3.gnulahd.nu.zip", timeout=20)
-          m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+\.zip', r.text)
-          dl_url = m.group(0) if m else "https://tmpfiles.org/dl/1795823170.36156a77def5f426/wrAmvgh4G7Qr/ww3.gnulahd.nu.zip"
-          rz = requests.get(dl_url, timeout=60, stream=True)
-          with open("/tmp/gnula.zip", "wb") as f:
-              for c in rz.iter_content(65536): f.write(c)
-          os.makedirs("/tmp/gnula", exist_ok=True)
-          with zipfile.ZipFile("/tmp/gnula.zip") as zf:
-              zf.extractall("/tmp/gnula")
-
-          def find_file(sub):
-              for root, _, fns in os.walk("/tmp/gnula"):
-                  for fn in fns:
-                      p = os.path.join(root, fn)
-                      if p.lower().endswith(".html") and sub in p.lower():
-                          return p
-              return None
-
-          # 1. Card HTML verbatim from Home + Search + Peliculas
-          for tag, sub in [("HOME", "/home/"), ("PELIS", "/peliculas/pel"), ("SEARCH", "busqueda ejemplo"), ("GENEROS", "/generos/")]:
-              p = find_file(sub)
-              soup = BeautifulSoup(open(p, errors="replace").read(), "html.parser")
-              for el in soup.select("svg"): el.decompose()
-              if tag == "GENEROS":
-                  links = [(a.get_text(" ", strip=True), a.get("href")) for a in soup.select(".gnrd-glist a, .gnrd-sg a")]
-                  print(f"::notice::GENEROS_ALL({len(links)})=" + str(links).replace("%", "%25")[:3500])
-                  continue
-              toolbar = soup.select_one(".gnrd-toolbar")
-              tb_html = re.sub(r"\s+", " ", str(toolbar))[:1800] if toolbar else ""
-              card = soup.select_one("a.gnrd-card")
-              card_html = re.sub(r"\s+", " ", str(card))[:1000] if card else ""
-              pag = soup.select_one(".gnrd-pag, .pagination, nav.navigation")
-              pag_html = re.sub(r"\s+", " ", str(pag))[:600] if pag else ""
-              print(f"::notice::{tag}_STRUCT=CARD:{card_html} || PAG:{pag_html} || TOOLBAR:{tb_html}".replace("%", "%25")[:3500])
-
-          # 2. Check Home rows & headings & exact links!
-          p_home = find_file("/home/")
-          soup_h = BeautifulSoup(open(p_home, errors="replace").read(), "html.parser")
-          rows = []
-          for sec in soup_h.select("section.gnrd-row, .gnrd-row"):
-              hd = sec.select_one(".gnrd-row-head")
-              cards = sec.select("a.gnrd-card")
-              rows.append(f"{hd.get_text(' ', strip=True) if hd else '?'}({len(cards)})")
-          print("::notice::HOME_ROWS=" + " | ".join(rows).replace("%", "%25")[:3500])
-
-          # 3. Check ALL scripts inside Peliculas & Home
-          p_pel = find_file("/peliculas/pel")
-          soup_p = BeautifulSoup(open(p_pel, errors="replace").read(), "html.parser")
-          scr = [re.sub(r"\s+", " ", s.get_text().strip())[:800] for s in soup_p.select("script:not([src])") if any(k in s.get_text() for k in ["gnrd-dd", "gnrd-tab", "filter", "page", "genre", "year", "ajax"])]
-          print("::notice::PELIS_SCRIPTS=" + " || ".join(scr).replace("%", "%25")[:3500])
-          PY
-
-  probe_live_players_and_endpoints:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install -q beautifulsoup4 requests
-      - name: Inspeccionar HTML en vivo de Movie, Serie, Anime, Genero y Player AJAX
+      - name: Inspeccionar pagina de episodio, AJAX del reproductor, search JSON y poster headers
         run: |
           python3 - <<'PY'
           import re, json, requests
@@ -170,39 +88,55 @@ jobs:
           S = requests.Session()
           S.headers.update({"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"})
 
-          # 1. Inspect live movie, series, anime pages & scripts!
-          pages = [
-              ("MOVIE", "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/"),
-              ("SERIES", "https://ww3.gnulahd.nu/ver/the-crown/"),
-              ("ANIME", "https://ww3.gnulahd.nu/ver/bleach-2004/"),
-              ("ANIME2", "https://ww3.gnulahd.nu/ver/cyberpunk-edgerunners/"),
-              ("GENRE", "https://ww3.gnulahd.nu/genres/terror/"),
-              ("LATINO", "https://ww3.gnulahd.nu/ver/peliculas/latino/"),
-          ]
-          for lbl, u in pages:
+          # 1. Inspect live Movie & Episode pages for EXACT player JS/HTML & all data attributes
+          for lbl, u in [
+              ("LIVE_MOV", "https://ww3.gnulahd.nu/ver/los-juegos-del-hambre-amanecer-en-la-cosecha/"),
+              ("LIVE_EP", "https://ww3.gnulahd.nu/the-crown-1x01/"),
+              ("LIVE_ANIME_EP", "https://ww3.gnulahd.nu/bleach-2x50/"),
+              ("LIVE_PROXIMOS", "https://ww3.gnulahd.nu/proximos-estrenos/"),
+          ]:
               r = S.get(u, timeout=20)
               soup = BeautifulSoup(r.text, "html.parser")
               for el in soup.select("svg, style"): el.decompose()
-              # Find links, iframes, data-* attributes, player sections
-              title = soup.title.get_text(strip=True) if soup.title else ""
-              cards = len(soup.select("a.gnrd-card"))
-              eps = [(el.get_text(" ", strip=True)[:50], el.get("href", ""), {k:v for k,v in el.attrs.items() if k.startswith("data-")}) for el in soup.select("[class*='ep'], .gnrd-ep, [data-ep], [data-episode], [data-season], [data-post], [data-id]")][:15]
-              scripts = [re.sub(r"\s+", " ", s.get_text().strip()) for s in soup.select("script:not([src])") if any(k in s.get_text().lower() for k in ["mirror", "player", "server", "episod", "season", "embed", "ajax", "gnrd", "src", "video", "stream"])]
-              # Filter out gntgp
-              scripts = [x for x in scripts if "gntgp" not in x and "ts_config" not in x[:80]]
-              msg = f"[{lbl} {r.status_code} {r.url}] title={title!r} cards={cards} eps={eps[:8]} scripts_len={[len(x) for x in scripts]} s0={scripts[0][:1200] if scripts else ''}"
-              print(f"::notice::LIVE_{lbl}=" + msg.replace("%", "%25")[:3500])
+              scripts = []
+              for i, s in enumerate(soup.select("script:not([src])")):
+                  t = s.get_text().strip()
+                  if any(k in t for k in ["gnrdOpenPlayer", "gnrd", "admin-ajax", "wp-json", "embed", "iframe", "video", "player", "source", "mirror"]):
+                      if "gntgp" not in t and "llvpn" not in t and "ts_config" not in t[:60]:
+                          scripts.append(f"S{i}({len(t)}): " + re.sub(r"\s+", " ", t)[:1500])
+              iframes = [dict(f.attrs) for f in soup.select("iframe")]
+              data_btns = [(b.name, b.get("class"), {k:v for k,v in b.attrs.items() if k.startswith("data-") or k in ("id","onclick","href")}, b.get_text(" ", strip=True)[:50]) for b in soup.select("button, a, div, li") if any(k in str(b.attrs).lower() for k in ["player","mirror","srv","video","embed","play","lang","lat","sub","cast","gnrd-p"]) and not b.has_attr("data-darkreader-inline-stroke")][:25]
+              print(f"::notice::{lbl}=status={r.status_code} iframes={iframes[:4]} btns={data_btns[:14]} scripts={' || '.join(scripts)[:2200]}".replace("%", "%25")[:3500])
 
-          # 2. Probe JSON endpoints / sitemap / wp-json wp/v2
-          eps_url = []
+          # 2. Test /wp-json/gnrd/v1/search?q=matrix & filters on Peliculas/Series/Anime
+          api_checks = []
           for u in [
-              "https://ww3.gnulahd.nu/wp-json/wp/v2/posts?per_page=1",
-              "https://ww3.gnulahd.nu/sitemap_index.xml",
-              "https://ww3.gnulahd.nu/ver/peliculas/?genre=terror&year=2025",
-              "https://ww3.gnulahd.nu/?s=matrix&page=2",
-              "https://ww3.gnulahd.nu/page/2/?s=matrix",
+              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=matrix",
+              "https://ww3.gnulahd.nu/wp-json/gnrd/v1/search?q=the+crown",
+              "https://ww3.gnulahd.nu/ver/peliculas/?genero=terror",
+              "https://ww3.gnulahd.nu/ver/peliculas/?genero=terror&anio=2025",
+              "https://ww3.gnulahd.nu/ver/peliculas/latino/?page=2",
+              "https://ww3.gnulahd.nu/genres/terror/page/2/",
+              "https://ww3.gnulahd.nu/genres/terror/?page=2",
           ]:
               r = S.get(u, timeout=20)
-              eps_url.append(f"{u}=>{r.status_code} final={r.url} len={len(r.text)} head={re.sub(r'\s+',' ',r.text[:160])}")
-          print("::notice::LIVE_ENDPOINTS=" + " || ".join(eps_url).replace("%", "%25")[:3500])
+              if "json" in r.headers.get("Content-Type", ""):
+                  api_checks.append(f"{u}=>{r.status_code} JSON:{r.text[:600]}")
+              else:
+                  sp = BeautifulSoup(r.text, "html.parser")
+                  c = len(sp.select("a.gnrd-card"))
+                  t = sp.title.get_text(strip=True) if sp.title else ""
+                  pag = [(a.get_text(strip=True), a.get("href")) for a in sp.select(".gnrd-pag a, .pagination a, a[href*='page']")[:5]]
+                  api_checks.append(f"{u}=>{r.status_code} final={r.url} title={t!r} cards={c} pag={pag}")
+          print("::notice::API_AND_FILTERS=" + " || ".join(api_checks).replace("%", "%25")[:3500])
+
+          # 3. Test poster image from ww3.gnulahd.nu/wp-content/uploads/ under bare OkHttp vs CS_UA!
+          r_h = S.get("https://ww3.gnulahd.nu/", timeout=20)
+          m_img = re.findall(r'https://ww3\.gnulahd\.nu/wp-content/uploads/[^\s"\'<>]+\.(?:webp|jpg|png)', r_h.text)
+          poster_tests = []
+          for u in list(dict.fromkeys(m_img))[:3]:
+              rb = requests.get(u, headers={"User-Agent": "okhttp/4.12.0"}, timeout=15)
+              rc = requests.get(u, headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
+              poster_tests.append(f"{u} => bare={rb.status_code}({rb.headers.get('Content-Type','')}) cs={rc.status_code}({rc.headers.get('Content-Type','')})")
+          print("::notice::POSTER_HEADERS_CHECK=" + " || ".join(poster_tests).replace("%", "%25")[:3500])
           PY
