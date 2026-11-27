@@ -1,4 +1,4 @@
-version = 10
+version = 11
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -13,7 +13,7 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     language = "es-419"
-    iconUrl = "https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png"
+    iconUrl = "https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/assets/icons/animeonlineninja.png"
 }
 
 android {

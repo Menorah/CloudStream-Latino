@@ -1,4 +1,4 @@
-version = 6
+version = 7
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -13,7 +13,7 @@ cloudstream {
     status = 1
     tvTypes = listOf("Movie", "TvSeries")
     language = "es-419"
-    iconUrl = "https://pelisjuanita.com/favicon.png"
+    iconUrl = "https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/assets/icons/pelisjuanita.png"
 }
 
 android {
