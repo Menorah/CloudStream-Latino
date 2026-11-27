@@ -1,4 +1,4 @@
-name: Probe AnimeOnline Icon
+name: Verify New Icons OkHttp
 on:
   workflow_dispatch:
   push:
@@ -7,80 +7,66 @@ on:
 permissions:
   contents: read
 jobs:
-  fetch_aon:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
         with:
-          python-version: '3.12'
-      - run: pip install -q requests curl_cffi pillow
-      - name: Descargar AnimeOnline icon original o Yandex/Google
+          distribution: temurin
+          java-version: '17'
+      - name: Verificar los 4 nuevos íconos vía OkHttp en raw.githubusercontent.com
         run: |
-          python3 - <<'PY'
-          import base64, io, time, requests
-          from PIL import Image
-          from curl_cffi import requests as cfreq
+          mkdir -p /tmp/okhttp
+          curl -fsSL -o /tmp/okhttp/okhttp.jar https://repo1.maven.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar
+          curl -fsSL -o /tmp/okhttp/okio.jar https://repo1.maven.org/maven2/com/squareup/okio/okio/3.6.0/okio-3.6.0.jar
+          curl -fsSL -o /tmp/okhttp/okio-jvm.jar https://repo1.maven.org/maven2/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
+          curl -fsSL -o /tmp/okhttp/kotlin-stdlib.jar https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.22/kotlin-stdlib-1.9.22.jar
+          cat > /tmp/okhttp/VerifyOkHttp.java <<'JAVA'
+          import okhttp3.*;
+          import javax.imageio.ImageIO;
+          import java.awt.image.BufferedImage;
+          import java.io.*;
+          import java.util.concurrent.TimeUnit;
 
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-          raw = None
-          src = None
-          for attempt in range(4):
-              for label, fn in [
-                  ("ver2_cf", lambda: cfreq.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", impersonate="chrome131", timeout=12)),
-                  ("ver2_req", lambda: requests.get("https://ver2.animeonline.ninja/fh_assets/apple-touch-icon.png", headers={"User-Agent": UA}, timeout=12)),
-              ]:
-                  try:
-                      r = fn()
-                      if r.status_code == 200 and r.content.startswith(b"\x89PNG"):
-                          raw = r.content
-                          src = label
-                          break
-                  except Exception:
-                      pass
-              if raw:
-                  break
-              time.sleep(2)
-          if not raw:
-              r = requests.get("https://favicon.yandex.net/favicon/animeonline.ninja?size=120", timeout=12)
-              if r.status_code == 200 and r.content.startswith(b"\x89PNG"):
-                  raw = r.content
-                  src = "yandex_120"
-          assert raw is not None
-          im = Image.open(io.BytesIO(raw))
-          print(f"::notice::AON_SRC={src} size={im.size} len={len(raw)}")
-          b64 = base64.b64encode(raw).decode()
-          open("/tmp/AON.b64", "w").write(b64)
-          PY
-      - name: Emitir p1
-        run: |
-          python3 - <<'PY'
-          b64 = open("/tmp/AON.b64").read()
-          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-          for i in range(0, min(8, len(parts))):
-              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
-          PY
-      - name: Emitir p2
-        run: |
-          python3 - <<'PY'
-          b64 = open("/tmp/AON.b64").read()
-          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-          for i in range(8, min(16, len(parts))):
-              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
-          PY
-      - name: Emitir p3
-        run: |
-          python3 - <<'PY'
-          b64 = open("/tmp/AON.b64").read()
-          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-          for i in range(16, min(24, len(parts))):
-              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
-          PY
-      - name: Emitir p4
-        run: |
-          python3 - <<'PY'
-          b64 = open("/tmp/AON.b64").read()
-          parts = [b64[i:i+3500] for i in range(0, len(b64), 3500)]
-          for i in range(24, min(32, len(parts))):
-              print(f"::notice::AON_{i:02d}_{len(parts):02d}:{parts[i]}")
-          PY
+          public class VerifyOkHttp {
+              static final String CS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+
+              static void check(OkHttpClient client, String name, String url, String ua) throws Exception {
+                  Request.Builder rb = new Request.Builder().url(url);
+                  if (ua != null) rb.header("User-Agent", ua);
+                  try (Response resp = client.newCall(rb.build()).execute()) {
+                      int code = resp.code();
+                      String ct = resp.header("Content-Type", "");
+                      byte[] body = resp.body() != null ? resp.body().bytes() : new byte[0];
+                      BufferedImage img = ImageIO.read(new ByteArrayInputStream(body));
+                      if (code != 200 || !ct.startsWith("image/") || img == null) {
+                          throw new AssertionError("Failed " + name + " ua=" + ua + " code=" + code + " ct=" + ct + " len=" + body.length);
+                      }
+                      System.out.println("::notice::OK[" + name + "|" + (ua == null ? "BARE" : "CS_UA") + "] code=" + code + " ct=" + ct + " len=" + body.length + " " + img.getWidth() + "x" + img.getHeight());
+                  }
+              }
+
+              public static void main(String[] args) throws Exception {
+                  OkHttpClient client = new OkHttpClient.Builder()
+                      .connectTimeout(15, TimeUnit.SECONDS)
+                      .readTimeout(15, TimeUnit.SECONDS)
+                      .build();
+                  for (String line : args) {
+                      int idx = line.indexOf('|');
+                      String name = line.substring(0, idx);
+                      String url = line.substring(idx + 1);
+                      check(client, name, url, null);
+                      check(client, name, url, CS_UA);
+                  }
+              }
+          }
+          JAVA
+          javac -cp "/tmp/okhttp/*" /tmp/okhttp/VerifyOkHttp.java
+          BRANCH="arena/5ed72362-cloudstream-latino"
+          java -cp "/tmp/okhttp:/tmp/okhttp/*" VerifyOkHttp \
+            "Latanime|https://raw.githubusercontent.com/Menorah/CloudStream-Latino/$BRANCH/assets/icons/latanime.png" \
+            "PelisJuanita|https://raw.githubusercontent.com/Menorah/CloudStream-Latino/$BRANCH/assets/icons/pelisjuanita.png" \
+            "RePelisHD|https://raw.githubusercontent.com/Menorah/CloudStream-Latino/$BRANCH/assets/icons/repelishd.png" \
+            "AnimeOnlineNinja|https://raw.githubusercontent.com/Menorah/CloudStream-Latino/$BRANCH/assets/icons/animeonlineninja.png"

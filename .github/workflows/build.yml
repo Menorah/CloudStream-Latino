@@ -82,6 +82,10 @@ jobs:
               assert p.get('language') == 'es-419', p
               icon = p.get('iconUrl') or ''
               assert icon.startswith('https://') and not icon.lower().endswith('.svg'), p
+              prefix = 'https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/'
+              if icon.startswith(prefix):
+                  asset = pathlib.Path(icon[len(prefix):])
+                  assert asset.is_file() and asset.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'), (p, asset)
           repo = json.loads((output / 'repo.json').read_text())
           assert repo.get('iconUrl', '').endswith('/releases/download/cloudstream/repo-icon.png'), repo
           print('cloudstream:', sorted(names))

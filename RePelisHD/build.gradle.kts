@@ -1,4 +1,4 @@
-version = 5
+version = 6
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -11,5 +11,5 @@ cloudstream {
     status = 1
     tvTypes = listOf("Movie", "TvSeries")
     language = "es-419"
-    iconUrl = "https://www.google.com/s2/favicons?domain=repelishd.hair&sz=%size%"
+    iconUrl = "https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/assets/icons/repelishd.png"
 }

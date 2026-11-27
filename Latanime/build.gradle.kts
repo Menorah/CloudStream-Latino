@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
@@ -11,5 +11,5 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     language = "es-419"
-    iconUrl = "https://latanime.org/img/logito.png"
+    iconUrl = "https://raw.githubusercontent.com/Menorah/CloudStream-Latino/main/assets/icons/latanime.png"
 }
