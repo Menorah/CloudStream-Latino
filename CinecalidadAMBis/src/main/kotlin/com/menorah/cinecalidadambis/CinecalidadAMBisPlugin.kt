@@ -10,5 +10,6 @@ class CinecalidadAMBisPlugin : Plugin() {
         registerMainAPI(CinecalidadAMBisProvider())
         registerExtractorAPI(CinecalidadAMVimeosExtractor())
         registerExtractorAPI(CinecalidadAMVideoappExtractor())
+        registerExtractorAPI(CinecalidadAMVoeExtractor())
     }
 }

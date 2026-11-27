@@ -96,4 +96,32 @@ class CinecalidadMYBisMarkupTest {
         assertEquals("https://doodstream.com/d/sp7dxlerdkej", opts[2].embedUrls[0])
         assertEquals("https://mega.nz/file/UONA3BoC#DZBoOMu", opts[3].embedUrls[0])
     }
+
+    @Test
+    fun decodesVoeMkgMaPayload() {
+        val expectedJson = """{"source":"https://voe-cdn.example.com/hls/master.m3u8","fallback":"https://voe-cdn.example.com/v.mp4"}"""
+        val b2 = java.util.Base64.getEncoder().encodeToString(expectedJson.toByteArray(Charsets.UTF_8))
+        val rev = b2.reversed()
+        val unshifted = ByteArray(rev.length) { i -> ((rev[i].code + 3) and 0xFF).toByte() }
+        val b1 = java.util.Base64.getEncoder().encodeToString(unshifted)
+        val withJunk = b1.take(4) + "@$" + b1.drop(4) + "^^"
+        val rot = withJunk.map { c ->
+            when (c) {
+                in 'a'..'m', in 'A'..'M' -> (c.code + 13).toChar()
+                in 'n'..'z', in 'N'..'Z' -> (c.code - 13).toChar()
+                else -> c
+            }
+        }.joinToString("")
+        val html = """
+            <html><body>
+              <script>var source='https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/1080/Big_Buck_Bunny_1080_10s_5MB.mp4';</script>
+              <script type="application/json">["$rot"]</script>
+            </body></html>
+        """.trimIndent()
+        val decoded = CinecalidadMYVoeDecoder.parseEmbedHtml(html)
+        assertNotNull(decoded)
+        assertEquals("https://voe-cdn.example.com/hls/master.m3u8", decoded!!.streamUrl)
+        assertTrue(decoded.streamUrl.contains("/hls/"))
+        assertTrue(decoded.streamUrl.endsWith("/master.m3u8"))
+    }
 }

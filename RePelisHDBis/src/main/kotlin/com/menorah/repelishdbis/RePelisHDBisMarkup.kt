@@ -77,10 +77,25 @@ object RePelisHDBisMarkup {
     private val DURATION_HM_REGEX = Regex("""(\d+)\s*h(?:\s*(\d+)\s*m)?""", RegexOption.IGNORE_CASE)
     private val DURATION_M_REGEX = Regex("""(\d+)\s*min\b|\b(\d+)\s*m\b""", RegexOption.IGNORE_CASE)
     private val IMDB_REGEX = Regex("""\b(tt\d{5,10})\b""")
+    private val SLUG_TMDB_ID_REGEX = Regex("""/ver-(?:pelicula|serie)/(\d+)(?:-|/|${'$'})""")
     private val PAGE_PARAM_REGEX = Regex("""[?&]page=(\d+)""")
     private val NEXT_F_PUSH_REGEX = Regex("""self\.__next_f\.push\(\[\s*\d+\s*,\s*"((?:[^"\\]|\\.)*)"\s*]\)""", RegexOption.DOT_MATCHES_ALL)
     private val YOUTUBE_URL_REGEX = Regex("""https?://(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/)|youtu\.be/)[A-Za-z0-9_-]{6,}""")
     private val CSS_BG_URL_REGEX = Regex("""url\(\s*['"]?([^'")\s]+)['"]?\s*\)""", RegexOption.IGNORE_CASE)
+
+    fun extractSlugTmdbId(url: String): String? =
+        SLUG_TMDB_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
+
+    fun normalizePlayLatinUrl(url: String): String {
+        val m = Regex("""^(https?://[^/]+/serial/[^/?#]+)/(\d+)/(\d+)(.*)$""").find(url.trim())
+            ?: return url.trim()
+        val base = m.groupValues[1]
+        val s = m.groupValues[2]
+        val e = m.groupValues[3]
+        val tail = m.groupValues[4].trimStart('?', '&')
+        val sep = if (tail.isNotEmpty()) "&$tail" else ""
+        return "$base?season=$s&episode=$e$sep"
+    }
 
     fun resolveUrl(baseUrl: String, href: String?): String? {
         val raw = href?.trim().orEmpty()
@@ -253,13 +268,16 @@ object RePelisHDBisMarkup {
         return sb.toString()
     }
 
-    fun parseIniziale(doc: Document, mainUrl: String = DEFAULT_MAIN_URL): RePelisHDIniziale? {
+    fun parseIniziale(doc: Document, mainUrl: String = DEFAULT_MAIN_URL, pageUrl: String = ""): RePelisHDIniziale? {
         val decoded = extractNextFlightText(doc)
         val jsonStr = extractJsonObjectAfterKey(decoded, "\"iniziale\":") ?: return null
         val root: JsonNode = runCatching { mapper.readTree(jsonStr) }.getOrNull() ?: return null
 
         val imdbId = root.path("imdb").asText("").takeIf { it.startsWith("tt") }
         val basePath = root.path("base").asText("").takeIf { it.isNotEmpty() }
+        val seriesPlayerId = imdbId
+            ?: extractSlugTmdbId(basePath.orEmpty())
+            ?: extractSlugTmdbId(pageUrl)
         val titolo = root.path("titolo").asText("").takeIf { it.isNotEmpty() }
         val activeSeason = root.get("stagione")?.takeIf { it.isNumber }?.asInt()
         val activeEpisode = root.get("episodio")?.takeIf { it.isNumber }?.asInt()
@@ -285,13 +303,14 @@ object RePelisHDBisMarkup {
                 val sNum = e.path("season_number").asInt(activeSeason ?: 1)
                 val eNum = e.path("episode_number").asInt(-1)
                 if (eNum <= 0) continue
+                if (e.has("stream_available") && e.path("stream_available").asInt(1) == 0) continue
                 val epName = e.path("name").asText("").trim().ifEmpty { "Episodio $eNum" }
                 val overview = e.path("overview").asText("").trim().takeIf { it.isNotEmpty() }
                 val epPoster = e.path("sfondo").asText("").ifEmpty { e.path("foto").asText("") }
                     .trim().takeIf { it.startsWith("http") }
 
                 val playDataUrl = when {
-                    imdbId != null -> "$PLAYLATIN_BASE/serial/$imdbId/$sNum/$eNum?lang=latino"
+                    seriesPlayerId != null -> "$PLAYLATIN_BASE/serial/$seriesPlayerId?season=$sNum&episode=$eNum&lang=latino"
                     basePath != null -> resolveUrl(mainUrl, "$basePath/temporada-$sNum/episodio-$eNum") ?: ""
                     else -> ""
                 }
@@ -321,7 +340,7 @@ object RePelisHDBisMarkup {
 
     fun parseDetail(doc: Document, url: String, mainUrl: String = DEFAULT_MAIN_URL): RePelisHDDetail? {
         val resolvedUrl = resolveUrl(mainUrl, url) ?: url
-        val iniziale = parseIniziale(doc, mainUrl)
+        val iniziale = parseIniziale(doc, mainUrl, resolvedUrl)
         val isSeries = resolvedUrl.contains("/ver-serie/") || iniziale != null
 
         val h1El = doc.selectFirst("h1")
@@ -380,7 +399,8 @@ object RePelisHDBisMarkup {
             "Subtitulado" -> "subtitulado"
             else -> "latino"
         }
-        val resolvedPlayerUrl = playerIframeSrc ?: imdbId?.takeIf { !isSeries }?.let {
+        val movieLookupId = imdbId ?: extractSlugTmdbId(resolvedUrl)
+        val resolvedPlayerUrl = playerIframeSrc ?: movieLookupId?.takeIf { !isSeries }?.let {
             "$PLAYLATIN_BASE/movie/$it?lang=$defaultLangParam"
         }
 

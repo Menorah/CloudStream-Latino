@@ -204,10 +204,14 @@ class Repelis24CZBisProvider : MainAPI() {
             val langTag = opt.language ?: "Idioma no indicado"
             val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
             runCatching {
-                if (embed.contains("vimeos.net", ignoreCase = true)) {
-                    Repelis24CZVimeosExtractor().getUrl(embed, refererUrl, subtitleCallback) { found.add(it) }
-                } else {
-                    loadExtractor(embed, refererUrl, subtitleCallback) { found.add(it) }
+                when {
+                    embed.contains("vimeos.net", ignoreCase = true) ->
+                        Repelis24CZVimeosExtractor().getUrl(embed, refererUrl, subtitleCallback) { found.add(it) }
+                    embed.contains("voe.", ignoreCase = true) ||
+                        embed.contains("caseyseemavoid.", ignoreCase = true) ->
+                        Repelis24CZVoeExtractor().getUrl(embed, refererUrl, subtitleCallback) { found.add(it) }
+                    else ->
+                        loadExtractor(embed, refererUrl, subtitleCallback) { found.add(it) }
                 }
             }
             for (link in synchronized(found) { found.toList() }) {

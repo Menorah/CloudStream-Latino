@@ -9,5 +9,6 @@ class RePelis24ShopBisPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(RePelis24ShopBisProvider())
         registerExtractorAPI(NuploadMyExtractor())
+        registerExtractorAPI(RePelis24ShopVoeExtractor())
     }
 }

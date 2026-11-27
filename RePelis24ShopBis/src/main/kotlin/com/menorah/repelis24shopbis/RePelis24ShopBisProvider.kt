@@ -216,10 +216,14 @@ class RePelis24ShopBisProvider : MainAPI() {
         options.amap { opt ->
             val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
             runCatching {
-                if (opt.url.contains("nupload.my", ignoreCase = true)) {
-                    NuploadMyExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
-                } else {
-                    loadExtractor(opt.url, targetUrl, subtitleCallback) { found.add(it) }
+                when {
+                    opt.url.contains("nupload.my", ignoreCase = true) ->
+                        NuploadMyExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
+                    opt.url.contains("voe.", ignoreCase = true) ||
+                        opt.url.contains("caseyseemavoid.", ignoreCase = true) ->
+                        RePelis24ShopVoeExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
+                    else ->
+                        loadExtractor(opt.url, targetUrl, subtitleCallback) { found.add(it) }
                 }
             }
             for (link in synchronized(found) { found.toList() }) {

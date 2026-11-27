@@ -12,5 +12,7 @@ class RePelisHDBisPlugin : Plugin() {
         registerExtractorAPI(RePelisHDDroploadIoExtractor())
         registerExtractorAPI(RePelisHDSuperplayerExtractor())
         registerExtractorAPI(RePelisHDSupervideoExtractor())
+        registerExtractorAPI(RePelisHDUnlimPlayExtractor())
+        registerExtractorAPI(RePelisHDVoeExtractor())
     }
 }

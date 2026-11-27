@@ -183,5 +183,11 @@ class Repelis24CZBisMarkupTest {
         """.trimIndent()
         val parsed = Repelis24CZVimeosParser.parse(packed, "https://vimeos.net/embed-xyz.html")
         assertEquals(listOf("https://p9.vimeos.zip/hls2/master.m3u8"), parsed.m3u8Urls)
+
+        val srvCandidates = Repelis24CZVimeosParser.buildSrvFallbackCandidates(
+            "https://p8.vimeos.zip/hls2/01/00015/xyz_,n,h,.urlset/master.m3u8?t=abc&srv=s1",
+        )
+        assertTrue(srvCandidates.contains("https://s1.vimeos.zip/hls2/01/00015/xyz_,n,h,.urlset/master.m3u8?t=abc&srv=s1"))
+        assertTrue(srvCandidates.contains("https://s1.vimeos.net/hls2/01/00015/xyz_,n,h,.urlset/master.m3u8?t=abc&srv=s1"))
     }
 }

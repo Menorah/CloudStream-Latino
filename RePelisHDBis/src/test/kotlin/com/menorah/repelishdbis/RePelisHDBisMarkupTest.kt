@@ -102,7 +102,7 @@ class RePelisHDBisMarkupTest {
         assertEquals(8, ini.activeSeason)
         assertEquals(15, ini.activeEpisode)
         assertEquals(2, ini.seasons.size)
-        assertEquals("https://playlatinsrc.co/serial/tt1405406/8/15?lang=latino", ini.episodes[0].playDataUrl)
+        assertEquals("https://playlatinsrc.co/serial/tt1405406?season=8&episode=15&lang=latino", ini.episodes[0].playDataUrl)
     }
 
     @Test
@@ -116,10 +116,67 @@ class RePelisHDBisMarkupTest {
         assertTrue(movieSpecs[0].payloadJson.contains("tt22084616"))
         assertEquals("https://unlimplay.com/f/embed/xyz", PlayLatinSrcParser.extractAltUrl(movieNewHtml))
 
+        // Live 2026 PlayLatinSRC movie/tv fetch('/api/embed-links') + escaped var ALT_URL
+        val liveMovieHtml = """
+            <script>
+              var ALT_URL = "https:\/\/unlimplay.com\/f\/embed\/movie\/tt32558705";
+              fetch('/api/embed-links', {
+                  method: 'POST',
+                  credentials: 'same-origin',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ type: 'movie', id: "tt32558705", token: "tok_live_1" })
+              });
+            </script>
+        """.trimIndent()
+        val liveMovieSpecs = PlayLatinSrcParser.extractResolveSpecs(liveMovieHtml, "https://playlatinsrc.co/movie/1300968?lang=latino")
+        assertEquals(1, liveMovieSpecs.size)
+        assertEquals("/api/embed-links", liveMovieSpecs[0].endpoint)
+        assertTrue(liveMovieSpecs[0].payloadJson.contains("tt32558705"))
+        assertEquals("https://unlimplay.com/f/embed/movie/tt32558705", PlayLatinSrcParser.extractAltUrl(liveMovieHtml))
+
+        val liveTvHtml = """
+            <script>
+              fetch('/api/embed-links', {
+                  method: 'POST',
+                  body: JSON.stringify({ type: 'tv', id: "tt0944947", token: "tok_tv_1" })
+              });
+            </script>
+        """.trimIndent()
+        val liveTvSpecs = PlayLatinSrcParser.extractResolveSpecs(liveTvHtml, "https://playlatinsrc.co/serial/tt0944947?season=1&episode=2&lang=latino")
+        assertEquals(1, liveTvSpecs.size)
+        assertEquals("/api/embed-links", liveTvSpecs[0].endpoint)
+        assertTrue(liveTvSpecs[0].payloadJson.contains("\"type\":\"tv\""))
+
+        val tvApiJson = """
+            {"ok":true,"type":"tv","tv":{"title":"Juego de tronos","version":"latino","seasons":[{"season_number":1,"episodes":[{"episode_number":1,"sources":[{"name":"dropload.io","url":"https://dr0pstream.com/e/ep1"}]},{"episode_number":2,"sources":[{"name":"supervideo.tv","url":"https://superplayer.ws/e/ep2"}]}]}]}}
+        """.trimIndent()
+        val tvParsed = PlayLatinSrcParser.parseApiResponse(tvApiJson, targetSeason = 1, targetEpisode = 2)
+        assertEquals(1, tvParsed.sources.size)
+        assertEquals("https://superplayer.ws/e/ep2", tvParsed.sources[0].url)
+        assertEquals("latino", tvParsed.sources[0].version)
+
+        // Slug fallback for movies without inline tt... in SSR
+        assertEquals("1300968", RePelisHDBisMarkup.extractSlugTmdbId("https://repelishd.hair/ver-pelicula/1300968-los-juegos-del-hambre-amanecer-en-la-cosecha-online-espanol"))
+        val slugOnlyDetail = RePelisHDBisMarkup.parseDetail(
+            Jsoup.parse("<html><body><h1>Amanecer en la cosecha</h1></body></html>", "https://repelishd.hair/ver-pelicula/1300968-amanecer"),
+            "https://repelishd.hair/ver-pelicula/1300968-amanecer",
+        )!!
+        assertEquals("https://playlatinsrc.co/movie/1300968?lang=latino", slugOnlyDetail.playerUrl)
+
+        // UnlimPlay parser
+        val unlimHtml = """
+            <script>if(typeof finalizePlayer==="function"){finalizePlayer({"latino":{"streamwish":"https://unlimplay.com/cps.php?t=abc&x=.m3u8","voe":"https://voe.sx/e/xyz123"},"subtitulado":{"vidhide":"https://unlimplay.com/cps.php?t=def&x=.m3u8"}});}</script>
+        """.trimIndent()
+        val unlimEntries = UnlimPlayParser.parseEntries(unlimHtml)
+        assertEquals(3, unlimEntries.size)
+        assertEquals("Latino", unlimEntries[0].language)
+        assertEquals("https://unlimplay.com/cps.php?t=abc&x=.m3u8", unlimEntries[0].url)
+        assertEquals("Subtitulado", unlimEntries[2].language)
+
         val serialHtml = """
             <div data-resolve-endpoint="/api/resolve" data-resolve-token="tok_serial_2"></div>
         """.trimIndent()
-        val serialSpec = PlayLatinSrcParser.extractSerialRequest(serialHtml, "https://playlatinsrc.co/serial/tt1405406/8/15?lang=latino")!!
+        val serialSpec = PlayLatinSrcParser.extractSerialRequest(serialHtml, "https://playlatinsrc.co/serial/tt1405406?season=8&episode=15&lang=latino")!!
         assertEquals("/api/resolve", serialSpec.endpoint)
         assertTrue(serialSpec.payloadJson.contains("\"season\":8"))
 

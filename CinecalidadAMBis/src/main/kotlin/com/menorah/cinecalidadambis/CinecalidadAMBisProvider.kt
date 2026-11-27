@@ -186,6 +186,9 @@ class CinecalidadAMBisProvider : MainAPI() {
                         CinecalidadAMVimeosExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
                     opt.url.contains("videoapp.zip", ignoreCase = true) ->
                         CinecalidadAMVideoappExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
+                    opt.url.contains("voe.", ignoreCase = true) ||
+                        opt.url.contains("caseyseemavoid.", ignoreCase = true) ->
+                        CinecalidadAMVoeExtractor().getUrl(opt.url, targetUrl, subtitleCallback) { found.add(it) }
                     else ->
                         loadExtractor(opt.url, targetUrl, subtitleCallback) { found.add(it) }
                 }

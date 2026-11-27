@@ -9,5 +9,6 @@ class CinecalidadMYBisPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(CinecalidadMYBisProvider())
         registerExtractorAPI(CinecalidadMYBysedikamoumExtractor())
+        registerExtractorAPI(CinecalidadMYVoeExtractor())
     }
 }

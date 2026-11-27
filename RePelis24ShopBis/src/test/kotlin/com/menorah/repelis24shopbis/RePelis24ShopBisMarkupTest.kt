@@ -177,5 +177,57 @@ class RePelis24ShopBisMarkupTest {
             "https://sv3.ibra.lat/?s=WjoEzUbOdYUgSQFKPrQGsHlzla3yjrLg",
             NuploadMyDecoder.parseStreamUrl(html),
         )
+
+        val dynamicTokenHtml = """
+            <script>
+              var arr1 = ["dW1XeDc1NDM2MjFETVdBb2E=","RGJLRTc1NDM2MzNHaFFoSkY=","YnFTVTc1NDM2MzNnUkNPckc=","aWJ3TTc1NDM2MjlXQVR4a0o=","eWJ5VTc1NDM2MzJrY3hjcmI=","eGhVWDc1NDM1NzVFRVhKY1M=","RFBqaDc1NDM1NjRQQ25Da0U=","VVB4Vjc1NDM1NjRXdVJNaXg=","a3JuZzc1NDM2MzJSVVdCWWc=","bWNmbzc1NDM2MzVTQUFVSXk=","QmdacDc1NDM1NjhYeUN3WGk=","SmV4dzc1NDM1NjNvbldhREo=","bWN6Yjc1NDM2MjJYWkRxQms=","Q2FlSzc1NDM2MTVBWnNYbk8=","Q0tBUzc1NDM2MzFST2VGRG8=","dkdhVjc1NDM2MTRISE5HTUI=","RnlGZjc1NDM1NjNWdkxibkw=","RVBFbjc1NDM2MjVLdUl6Rmk=","RGxrSDc1NDM2MTRGbnV6d3E=","SmRwdDc1NDM2MzNTV21PeGQ=","cWhNbTc1NDM1NjRzeUpMSEw="];
+            </script>
+            <script>
+              var s = ""; arr1.forEach(function (value) { s += String.fromCharCode(parseInt(atob(value).replace(/\D/g,'')) - 7543517); });
+              var tok99="ABC123XYZ";
+              player.setup({ file: s + "?s=" + tok99 });
+            </script>
+        """.trimIndent()
+        assertEquals(
+            "https://sv3.ibra.lat/?s=ABC123XYZ",
+            NuploadMyDecoder.parseStreamUrl(dynamicTokenHtml),
+        )
+    }
+
+    @Test
+    fun decodesVoeMkgMaJsonScriptIgnoringFakeBigBuckBunny() {
+        val voeHtml = """
+            <html><body>
+              <script>var source='https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/1080/Big_Buck_Bunny_1080_10s_5MB.mp4';</script>
+              <script type="application/json">["nJImnKWtC1A1ZROtG293o1S6pP94oT8lGRkwoK1aDGRiZGLuLJShL18cYz1fozSlCGHjqJ8cMGVjYQRkMGVjZQtlZQZ4nT4mYPO0MGLmZJHlZPHhYP81Y2N2ZzW6MGEwoaImLJ8cMzHjnG9joJIc"]</script>
+            </body></html>
+        """.trimIndent()
+        // Build a valid MKGMa token dynamically using inverse steps for deterministic unit test verification
+        val expectedJson = """{"source":"https://ugc-cdn.example.com/hls/master.m3u8","fallback":"https://ugc-cdn.example.com/v.mp4"}"""
+        val b2 = java.util.Base64.getEncoder().encodeToString(expectedJson.toByteArray(Charsets.UTF_8))
+        val rev = b2.reversed()
+        val unshifted = ByteArray(rev.length) { i -> ((rev[i].code + 3) and 0xFF).toByte() }
+        val b1 = java.util.Base64.getEncoder().encodeToString(unshifted)
+        val withJunk = b1.take(4) + "@$" + b1.drop(4) + "^^"
+        val rot = withJunk.map { c ->
+            when (c) {
+                in 'a'..'m', in 'A'..'M' -> (c.code + 13).toChar()
+                in 'n'..'z', in 'N'..'Z' -> (c.code - 13).toChar()
+                else -> c
+            }
+        }.joinToString("")
+        val realHtml = """
+            <html><body>
+              <script>var source='https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/1080/Big_Buck_Bunny_1080_10s_5MB.mp4';</script>
+              <script type="application/json">["$rot"]</script>
+            </body></html>
+        """.trimIndent()
+        val parsed = ShopVoeDecoder.parseEmbedHtml(realHtml)
+        assertNotNull(parsed)
+        assertEquals("https://ugc-cdn.example.com/hls/master.m3u8", parsed!!.streamUrl)
+        assertEquals("https://ugc-cdn.example.com/v.mp4", parsed.fallbackUrl)
+        assertTrue(parsed.isHls)
+        // Verify dummy invalid json doesn't crash
+        ShopVoeDecoder.parseEmbedHtml(voeHtml)
     }
 }

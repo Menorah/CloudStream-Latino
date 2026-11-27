@@ -145,5 +145,15 @@ class CinecalidadAMBisMarkupTest {
         val parsed = CinecalidadAMVimeosParser.parse(packed, "https://vimeos.net/embed-xyz.html")
         assertEquals(listOf("https://cdn.vimeos.zip/hls/master.m3u8"), parsed.m3u8Urls)
         assertEquals(listOf("Español" to "https://vimeos.net/subs/es.vtt"), parsed.subtitles)
+
+        assertEquals(
+            "https://vimeos.net/embed-d0ybu5jpxcem.html",
+            CinecalidadAMVimeosParser.stripBrokenCfParam("https://vimeos.net/embed-d0ybu5jpxcem.html?cf=***"),
+        )
+        val candidates = CinecalidadAMVimeosParser.buildSrvFallbackCandidates(
+            "https://p8.vimeos.zip/hls2/01/00015/d0ybu5jpxcem_,n,h,.urlset/master.m3u8?t=abc&srv=p9&i=0.0",
+        )
+        assertTrue(candidates.contains("https://p9.vimeos.zip/hls2/01/00015/d0ybu5jpxcem_,n,h,.urlset/master.m3u8?t=abc&srv=p9&i=0.0"))
+        assertTrue(candidates.contains("https://p9.vimeos.net/hls2/01/00015/d0ybu5jpxcem_,n,h,.urlset/master.m3u8?t=abc&srv=p9&i=0.0"))
     }
 }

@@ -145,7 +145,7 @@ class RePelisHDBisProvider : MainAPI() {
                         runCatching {
                             val sRes = getSiteDocument(sUrl, referer = res.url)
                             if (sRes.isSuccessful) {
-                                RePelisHDBisMarkup.parseIniziale(Jsoup.parse(sRes.text, sRes.url), mainUrl)?.episodes.orEmpty()
+                                RePelisHDBisMarkup.parseIniziale(Jsoup.parse(sRes.text, sRes.url), mainUrl, sRes.url)?.episodes.orEmpty()
                             } else emptyList()
                         }.getOrDefault(emptyList())
                     }
@@ -205,20 +205,35 @@ class RePelisHDBisProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        var playlatinUrl = data.trim()
+        var playlatinUrl = RePelisHDBisMarkup.normalizePlayLatinUrl(data)
         var detailFallback: RePelisHDDetail? = null
         if (!playlatinUrl.contains("playlatinsrc.co", ignoreCase = true)) {
-            val pageRes = getSiteDocument(playlatinUrl)
-            if (!pageRes.isSuccessful) return false
-            val doc = Jsoup.parse(pageRes.text, pageRes.url)
-            detailFallback = RePelisHDBisMarkup.parseDetail(doc, pageRes.url, mainUrl)
-            playlatinUrl = detailFallback?.playerUrl
-                ?: detailFallback?.iniziale?.let { ini ->
-                    val s = ini.activeSeason ?: 1
-                    val e = ini.activeEpisode ?: 1
-                    ini.imdbId?.let { "${RePelisHDBisMarkup.PLAYLATIN_BASE}/serial/$it/$s/$e?lang=latino" }
+            val pageRes = runCatching { getSiteDocument(playlatinUrl) }.getOrNull()
+            if (pageRes != null && pageRes.isSuccessful) {
+                val doc = Jsoup.parse(pageRes.text, pageRes.url)
+                detailFallback = RePelisHDBisMarkup.parseDetail(doc, pageRes.url, mainUrl)
+                playlatinUrl = detailFallback?.playerUrl
+                    ?: detailFallback?.iniziale?.let { ini ->
+                        val s = ini.activeSeason ?: 1
+                        val e = ini.activeEpisode ?: 1
+                        val seriesId = ini.imdbId ?: RePelisHDBisMarkup.extractSlugTmdbId(pageRes.url)
+                        seriesId?.let { "${RePelisHDBisMarkup.PLAYLATIN_BASE}/serial/$it?season=$s&episode=$e&lang=latino" }
+                    }
+                    ?: ""
+            } else {
+                playlatinUrl = ""
+            }
+            if (playlatinUrl.isEmpty()) {
+                val tmdbFallback = RePelisHDBisMarkup.extractSlugTmdbId(data)
+                if (tmdbFallback != null) {
+                    val isSerie = data.contains("/ver-serie/", ignoreCase = true)
+                    playlatinUrl = if (isSerie) {
+                        "${RePelisHDBisMarkup.PLAYLATIN_BASE}/serial/$tmdbFallback?season=1&episode=1&lang=latino"
+                    } else {
+                        "${RePelisHDBisMarkup.PLAYLATIN_BASE}/movie/$tmdbFallback?lang=latino"
+                    }
                 }
-                ?: ""
+            }
         }
 
         val emitted = AtomicBoolean(false)
@@ -236,9 +251,11 @@ class RePelisHDBisProvider : MainAPI() {
         }
 
         if (playlatinUrl.isNotEmpty()) {
+            playlatinUrl = RePelisHDBisMarkup.normalizePlayLatinUrl(playlatinUrl)
+            val (targetSeason, targetEpisode) = PlayLatinSrcParser.extractSeasonAndEpisode(playlatinUrl)
             val playerHeaders = defaultHeaders + mapOf("Referer" to "$mainUrl/")
-            val playerRes = app.get(playlatinUrl, headers = playerHeaders, timeout = 20L)
-            if (playerRes.isSuccessful) {
+            val playerRes = runCatching { app.get(playlatinUrl, headers = playerHeaders, timeout = 20L) }.getOrNull()
+            if (playerRes != null && playerRes.isSuccessful) {
                 val playerHtml = playerRes.text
                 val specs = PlayLatinSrcParser.extractResolveSpecs(playerHtml, playlatinUrl)
                 val allSources = mutableListOf<PlayLatinSrcParser.ResolvedSource>()
@@ -259,7 +276,7 @@ class RePelisHDBisProvider : MainAPI() {
                     }.getOrNull() ?: continue
                     if (!apiRes.isSuccessful) continue
 
-                    val resolved = PlayLatinSrcParser.parseApiResponse(apiRes.text)
+                    val resolved = PlayLatinSrcParser.parseApiResponse(apiRes.text, targetSeason, targetEpisode)
                     for ((lbl, subUrl) in resolved.captions) {
                         subtitleCallback(newSubtitleFile(lbl, subUrl))
                     }
@@ -269,22 +286,16 @@ class RePelisHDBisProvider : MainAPI() {
                     }
                 }
 
-                if (allSources.isEmpty()) {
-                    PlayLatinSrcParser.extractAltUrl(playerHtml)?.let { alt ->
-                        allSources += PlayLatinSrcParser.ResolvedSource(
-                            name = "Servidor",
-                            url = alt,
-                            version = PlayLatinSrcParser.normalizeVersionLabel(null, playlatinUrl),
-                            kind = "embed",
-                        )
-                    }
-                }
-
                 allSources.amap { src ->
                     val langTag = PlayLatinSrcParser.normalizeVersionLabel(src.version, playlatinUrl)
                     if (src.kind.equals("hls", ignoreCase = true) || src.url.contains(".m3u8")) {
                         val raw = newExtractorLink(source = src.name, name = src.name, url = src.url, type = ExtractorLinkType.M3U8) {
                             this.referer = playlatinUrl
+                            this.headers = mapOf(
+                                "Origin" to RePelisHDBisMarkup.PLAYLATIN_BASE,
+                                "Referer" to playlatinUrl,
+                                "user-agent" to defaultHeaders["user-agent"]!!,
+                            )
                             this.quality = Qualities.P1080.value
                         }
                         emitLabeled(raw, langTag, src.name)
@@ -300,12 +311,25 @@ class RePelisHDBisProvider : MainAPI() {
                                     RePelisHDSuperplayerExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
                                 src.url.contains("supervideo.tv", ignoreCase = true) ->
                                     RePelisHDSupervideoExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
+                                src.url.contains("voe.", ignoreCase = true) ||
+                                    src.url.contains("caseyseemavoid.", ignoreCase = true) ->
+                                    RePelisHDVoeExtractor().getUrl(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
                                 else ->
                                     loadExtractor(src.url, playlatinUrl, subtitleCallback) { found.add(it) }
                             }
                         }
                         for (link in synchronized(found) { found.toList() }) {
                             emitLabeled(link, langTag, src.name)
+                        }
+                    }
+                }
+
+                // Fallback to UnlimPlay (var ALT_URL) whenever PlayLatinSRC returned no playable links.
+                val altUrl = PlayLatinSrcParser.extractAltUrl(playerHtml)
+                if ((allSources.isEmpty() || !emitted.get()) && altUrl != null) {
+                    runCatching {
+                        RePelisHDUnlimPlayExtractor().extractWithLanguage(altUrl, playlatinUrl, subtitleCallback) { langTag, link ->
+                            emitLabeled(link, langTag, "UnlimPlay")
                         }
                     }
                 }

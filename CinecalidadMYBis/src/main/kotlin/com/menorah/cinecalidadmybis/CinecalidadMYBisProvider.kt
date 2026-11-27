@@ -129,10 +129,14 @@ class CinecalidadMYBisProvider : MainAPI() {
             for (embedUrl in option.embedUrls) {
                 val found = Collections.synchronizedList(mutableListOf<ExtractorLink>())
                 runCatching {
-                    if (embedUrl.contains("bysedikamoum.com", ignoreCase = true)) {
-                        CinecalidadMYBysedikamoumExtractor().getUrl(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
-                    } else {
-                        loadExtractor(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
+                    when {
+                        embedUrl.contains("bysedikamoum.com", ignoreCase = true) ->
+                            CinecalidadMYBysedikamoumExtractor().getUrl(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
+                        embedUrl.contains("voe.", ignoreCase = true) ||
+                            embedUrl.contains("caseyseemavoid.", ignoreCase = true) ->
+                            CinecalidadMYVoeExtractor().getUrl(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
+                        else ->
+                            loadExtractor(embedUrl, targetUrl, subtitleCallback) { found.add(it) }
                     }
                 }
                 val links = synchronized(found) { found.toList() }
