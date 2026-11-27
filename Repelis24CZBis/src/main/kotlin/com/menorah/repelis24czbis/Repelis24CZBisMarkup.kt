@@ -2,6 +2,7 @@ package com.menorah.repelis24czbis
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
 
@@ -168,7 +169,8 @@ object Repelis24CZBisMarkup {
             val key = Triple(type, postId, nume)
             if (!seen.add(key)) continue
 
-            val lang = li.closest(".dpu-dropdown")?.attr("data-lang")?.trim()?.takeIf { it.isNotEmpty() }
+            val dropdown: Element? = li.parents().firstOrNull { it.hasClass("dpu-dropdown") }
+            val lang = dropdown?.attr("data-lang")?.trim()?.takeIf { it.isNotEmpty() }
             val spans = li.select("> span")
             val serverName = spans.lastOrNull()?.text()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: li.text().trim().ifEmpty { "Servidor $nume" }
@@ -191,7 +193,8 @@ object Repelis24CZBisMarkup {
             val epId = card.attr("data-episode").trim()
             if (epId.isEmpty() || !seen.add(epId)) continue
 
-            val paneSeason = card.closest(".dpu-season-pane")?.id()?.let {
+            val seasonPane: Element? = card.parents().firstOrNull { it.hasClass("dpu-season-pane") }
+            val paneSeason = seasonPane?.id()?.let {
                 SEASON_PANE_NUM_REGEX.find(it)?.groupValues?.getOrNull(1)?.toIntOrNull()
             }
             val sNum = card.attr("data-season-number").toIntOrNull() ?: paneSeason ?: 1
@@ -224,14 +227,17 @@ object Repelis24CZBisMarkup {
         val resolvedUrl = resolveUrl(mainUrl, url) ?: url
         val isSeries = resolvedUrl.contains("/series/") || doc.selectFirst(".dpu-episode-card, #seasons") != null
 
-        val h1 = doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        val h1El: Element? = doc.selectFirst("h1")
+        val h1 = h1El?.text()?.trim()?.takeIf { it.isNotEmpty() }
         val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content")
             ?.replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
             ?.replace(Regex("""\s+Online\s+Gratis.*$""", RegexOption.IGNORE_CASE), "")
             ?.trim()
         val title = h1 ?: ogTitle?.takeIf { it.isNotEmpty() } ?: return null
 
-        val hero = h1?.closest(".dpu-hero-section, .dpu-hero-content, div") ?: doc.body()
+        val hero: Element? = h1El?.parents()?.firstOrNull {
+            it.hasClass("dpu-hero-section") || it.hasClass("dpu-hero-content") || it.tagName() == "div"
+        } ?: doc.body()
         val posterImg = doc.selectFirst(".dpu-hero-poster img, img[src*='image.tmdb.org/t/p/w185'], img[src*='image.tmdb.org/t/p/w342'], img[src*='image.tmdb.org/t/p/w500']")
         val posterUrl = resolveUrl(
             mainUrl,
@@ -257,11 +263,13 @@ object Repelis24CZBisMarkup {
             ?.replace(',', '.')
             ?.toDoubleOrNull()
 
+        val navTags = setOf("nav", "header", "footer")
         val genres = doc.select("a[href*=/genero/][rel=tag], .dpu-hero-genres a[href*=/genero/]")
             .map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
             .ifEmpty {
-                doc.select("a[href*=/genero/]").filter { it.closest("nav, header, footer") == null }
-                    .map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
+                doc.select("a[href*=/genero/]").filter { el ->
+                    el.parents().none { it.tagName() in navTags }
+                }.map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
             }
 
         val actors = doc.select("#cast .person .name a, a[href*=/reparto/]")
@@ -275,7 +283,7 @@ object Repelis24CZBisMarkup {
         val recs = mutableListOf<Repelis24CZCard>()
         val seenRec = linkedSetOf<String>()
         for (a in doc.select("a[href*=/peliculas/], a[href*=/series/]")) {
-            if (a.closest("header, nav, footer, .dpu-hero-actions") != null) continue
+            if (a.parents().any { it.tagName() in navTags || it.hasClass("dpu-hero-actions") }) continue
             if (a.hasClass("dpu-archive-card")) continue
             val rUrl = resolveUrl(mainUrl, a.attr("href")) ?: continue
             if (rUrl == resolvedUrl || !seenRec.add(rUrl)) continue

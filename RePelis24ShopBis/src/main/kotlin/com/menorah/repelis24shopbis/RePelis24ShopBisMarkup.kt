@@ -1,6 +1,7 @@
 package com.menorah.repelis24shopbis
 
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -252,10 +253,15 @@ object RePelis24ShopBisMarkup {
                 ?: doc.selectFirst("img[src*='/cdn/b/']")?.attr("src"),
         )
 
-        val plot = headingDesc?.nextElementSibling()?.takeIf { it.tagName() == "p" }?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        val nextSibling: Element? = headingDesc?.parent()?.children()?.let { kids ->
+            val idx = kids.indexOf(headingDesc)
+            if (idx >= 0 && idx + 1 < kids.size) kids[idx + 1] else null
+        }
+        val plot = nextSibling?.takeIf { it.tagName() == "p" }?.text()?.trim()?.takeIf { it.isNotEmpty() }
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
 
-        val topBlockText = headingDesc?.parent()?.text().orEmpty() + " " + doc.select(".movie-info, .info, .details").text()
+        val headingParent: Element? = headingDesc?.parent()
+        val topBlockText = headingParent?.text().orEmpty() + " " + doc.select(".movie-info, .info, .details").text()
         val year = YEAR_REGEX.find(topBlockText)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val duration = DURATION_HM_REGEX.find(topBlockText)?.let { m ->
             val h = m.groupValues[1].toIntOrNull() ?: 0
@@ -263,8 +269,9 @@ object RePelis24ShopBisMarkup {
             h * 60 + min
         } ?: DURATION_M_REGEX.find(topBlockText)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
+        val excludedContainers = setOf("nav", "header", "aside")
         val genres = doc.select("a[href*=/genero/]").filter { a ->
-            a.closest("nav, header, aside, .showcase-sidebar") == null
+            a.parents().none { p -> p.tagName() in excludedContainers || p.hasClass("showcase-sidebar") }
         }.map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
 
         val seasonLinks = if (isSeries) parseSeasonLinks(doc, mainUrl) else emptyList()
@@ -273,7 +280,7 @@ object RePelis24ShopBisMarkup {
         // Recommendations sit inside .movie-item cards or a[href*=/pelicula/] under "Sugerencias"
         val recs = parseCards(doc, mainUrl).filter { it.url != resolvedUrl }.ifEmpty {
             val sugHeading = doc.select("h2").firstOrNull { it.text().contains("Sugerencias", ignoreCase = true) }
-            val container = sugHeading?.parent()
+            val container: Element? = sugHeading?.parent()
             val out = mutableListOf<RePelis24ShopCard>()
             val seen = linkedSetOf<String>()
             container?.select("a[href*=/pelicula/], a[href*=/serie/]")?.forEach { a ->
