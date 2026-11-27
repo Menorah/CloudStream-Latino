@@ -1,12 +1,6 @@
 name: Pruebas Android de RePelis24.shop
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths:
-      - 'RePelis24Shop/**'
-      - 'scripts/run_repelis24shop_android.sh'
-      - '.github/workflows/repelis24shop-android-test.yml'
 permissions:
   contents: read
 jobs:

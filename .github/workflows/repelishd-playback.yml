@@ -1,9 +1,6 @@
 name: Reproducción real RePelisHD
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths: ['RePelisHD/**', 'scripts/playback_probe/RePelisHDProbe.kt', 'scripts/playback_probe/run_repelishd_app.sh', '.github/workflows/repelishd-playback.yml']
 permissions:
   contents: read
 jobs:

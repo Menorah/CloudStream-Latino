@@ -8,5 +8,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class RePelis24ShopPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(RePelis24ShopProvider())
+        registerExtractorAPI(NuploadMyExtractor())
+        registerExtractorAPI(RePelis24ShopVoeExtractor())
     }
 }

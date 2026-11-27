@@ -1,9 +1,6 @@
 name: Reproducción real Cinecalidad.am
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths: ['CinecalidadAM/**', 'scripts/playback_probe/CinecalidadAMProbe.kt', 'scripts/playback_probe/run_cinecalidad_app.sh', '.github/workflows/cinecalidad-am-playback.yml']
 permissions:
   contents: read
 jobs:

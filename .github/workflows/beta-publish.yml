@@ -87,5 +87,7 @@ jobs:
         run: |
           gh release create beta --title "Extensiones CloudStream beta" --notes "Canal beta de las extensiones CloudStream Latino." --prerelease || true
           gh release upload beta output/* --clobber
-          gh release delete-asset beta VerAniV2.cs3 -y || true
+          for old in VerAniV2.cs3 Repelis24CZBis.cs3 RePelis24ShopBis.cs3 RePelisHDBis.cs3 CinecalidadAMBis.cs3 CinecalidadMYBis.cs3; do
+            gh release delete-asset beta "$old" -y || true
+          done
           gh release view beta --json assets --jq '.assets[].name'
