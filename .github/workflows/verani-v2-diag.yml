@@ -7,54 +7,96 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_te_byse_exact:
+  probe_te_test_and_byse_req:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Inspect Turboembed Lr() + C() and Byse embed playback endpoint
+      - name: Test Turboembed decrypt live and inspect Byse playback/pow request
         run: |
+          pip install -q cryptography || true
           python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
+          import base64, json, re, time, urllib.request, zlib
+          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+          from cryptography.hazmat.primitives import padding
 
           UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
-          def fetch(url, referer='https://verani.me/', max_bytes=3000000):
+          def fetch(url, referer='https://verani.me/', headers=None, max_bytes=3000000):
               hdrs = {'User-Agent': UA, 'Accept': '*/*', 'Referer': referer}
+              if headers:
+                  hdrs.update(headers)
               req = urllib.request.Request(url, headers=hdrs)
-              with urllib.request.urlopen(req, timeout=25) as r:
-                  return r.read(max_bytes).decode('utf-8', 'replace')
+              try:
+                  with urllib.request.urlopen(req, timeout=25) as r:
+                      return {'code': r.status, 'headers': dict(r.headers), 'text': r.read(max_bytes).decode('utf-8', 'replace')}
+              except urllib.error.HTTPError as e:
+                  return {'code': e.code, 'headers': dict(e.headers), 'text': e.read(50000).decode('utf-8', 'replace')}
 
           out = {}
 
-          # 1. Turboembed Lr() and full C()/jr()
-          te = fetch('https://turboembed.com/assets/index-CIV3m7-G.js', 'https://turboembed.com/9r03')
-          m_lr = re.search(r'function Lr\(\)\{', te)
-          if m_lr:
-              out['te_lr'] = te[m_lr.start():m_lr.start()+7500]
-          m_jr = re.search(r'function jr\(|jr\s*=|const jr\s*=|var jr\s*=', te)
-          if m_jr:
-              out['te_jr'] = te[max(0, m_jr.start()-300):m_jr.start()+2500]
-          # Also find decoder function `function e(t,n)` right near Lr
-          m_e = re.search(r'function (?:e|t)\([^)]*\)\{const [a-z]=Lr\(\)', te)
-          if m_e:
-              out['te_decoder'] = te[max(0, m_e.start()-100):m_e.start()+600]
+          # 1. LIVE TEST of Turboembed AES-CBC tracking endpoint!
+          key_chars = ["𝕊","𝔼","𝕮","𝚁","𝔼","𝚃","𝓚","𝓔","𝓨","𝟙","𝟚","𝟛"]
+          salt_chars = ["🔐","🗝️","🔑","🚪","🛡️","⚡"]
+          k_hex = "".join(format(ord(s[0]), "x") for s in key_chars) + format(int(time.time() * 1000 // 86400000), "x")
+          k_hex = k_hex[:32].ljust(32, "0")
+          host = "turboembed.com"
+          iv_hex = "".join(format(ord(s[0]), "x") for s in salt_chars) + host.encode("utf-8").hex()
+          iv_hex = iv_hex[:32].ljust(32, "0")
+          out['te_key_iv'] = {'k': k_hex, 'iv': iv_hex}
 
-          # 2. Byse: search ALL chunks for embed/details, embed/playback, key_parts, pow, x-embed-parent, n1mwq
-          for ch in ['assets/videoPagesBundle-Bgi0QmPo.js', 'assets/frontPagesBundle-C5WdTgs_.js', 'assets/pow-DEJGtdh2.js']:
-              cjs = fetch(f'https://n1mwq.org/{ch}', 'https://n1mwq.org/qre/1t8mpxujis4x')
-              hits = []
-              for pat in [r'embed/details', r'embed/playback', r'key_parts', r'x-embed-parent', r'embed_frame_url', r'decrypt', r'/api/videos']:
-                  for m in re.finditer(pat, cjs):
-                      hits.append((pat, cjs[max(0, m.start()-180):m.end()+280]))
-              out[f'byse_{ch}'] = hits[:20]
+          def te_encrypt(plain):
+              padder = padding.PKCS7(128).padder()
+              padded = padder.update(plain.encode('utf-8')) + padder.finalize()
+              cipher = Cipher(algorithms.AES(bytes.fromhex(k_hex)), modes.CBC(bytes.fromhex(iv_hex)))
+              enc = cipher.encryptor()
+              return (enc.update(padded) + enc.finalize()).hex()
+
+          def te_decrypt(ct_hex):
+              cipher = Cipher(algorithms.AES(bytes.fromhex(k_hex)), modes.CBC(bytes.fromhex(iv_hex)))
+              dec = cipher.decryptor()
+              padded = dec.update(bytes.fromhex(ct_hex)) + dec.finalize()
+              unpadder = padding.PKCS7(128).unpadder()
+              return (unpadder.update(padded) + unpadder.finalize()).decode('utf-8')
+
+          c_param = te_encrypt("9r03")
+          tr_res = fetch(f"https://turboembed.com/api/stream/tracking?c={c_param}", referer="https://turboembed.com/9r03")
+          xhdr = None
+          for hk, hv in tr_res['headers'].items():
+              if hk.lower() == 'x-tracking':
+                  xhdr = hv
+          out['te_tracking_res'] = {'code': tr_res['code'], 'has_x_tracking': bool(xhdr), 'body': tr_res['text'][:300]}
+          if xhdr:
+              try:
+                  dec_json = te_decrypt(xhdr)
+                  out['te_decrypted_stream'] = dec_json[:1500]
+                  # Also test if decoded hls URL returns 200!
+                  obj = json.loads(dec_json).get('stream', {})
+                  first_u = obj.get('tiktok') or obj.get('hls') or obj.get('direct')
+                  if first_u:
+                      m3 = fetch(first_u, referer="https://turboembed.com/", max_bytes=2000)
+                      out['te_m3u8_test'] = {'url': first_u[:120], 'code': m3['code'], 'head': m3['text'][:400]}
+              except Exception as e:
+                  out['te_decrypt_err'] = str(e)
+
+          # 2. Byse: exact playback request builder & Ea() & pow-DEJGtdh2.js
+          vp = fetch('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
+          # Find ALL occurrences of "playback" in vp (e.g. Te(.., "playback") or "embed/playback")
+          out['vp_playback_all'] = [vp[max(0, m.start()-150):m.end()+350] for m in re.finditer(r'Te\([^)]*\)|"[^"]*playback[^"]*"|`[^`]*playback[^`]*`|Ea\s*=\s*', vp)][:20]
+          m_ea = re.search(r'Qa=\(\)=>|Ea=\(', vp)
+          if m_ea:
+              out['vp_ea_block'] = vp[max(0, m_ea.start()-400):m_ea.start()+1200]
+          pow_js = fetch('https://n1mwq.org/assets/pow-DEJGtdh2.js', referer='https://n1mwq.org/qre/1t8mpxujis4x')['text']
+          out['pow_js_len'] = len(pow_js)
+          out['pow_js_head'] = pow_js[:2500]
+          out['pow_js_tail'] = pow_js[-2500:] if len(pow_js) > 2500 else ''
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
           chunks_out = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
-          print(f"TB raw={len(raw)} b64={len(b64)} chunks={len(chunks_out)}")
+          print(f"TB2 raw={len(raw)} b64={len(b64)} chunks={len(chunks_out)}")
           assert len(chunks_out) <= 10, f"Too many chunks: {len(chunks_out)}"
           for idx, ch in enumerate(chunks_out):
-              print(f"::notice title=TB_{idx}_{len(chunks_out)}::{ch}")
+              print(f"::notice title=TB2_{idx}_{len(chunks_out)}::{ch}")
           PY
