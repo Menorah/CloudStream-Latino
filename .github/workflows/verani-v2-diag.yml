@@ -7,132 +7,82 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_deep_hosts:
+  probe_js_and_curl:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Probe zilla, turboembed, byse, voe and filter pages
+      - name: Extract Byse/Turboembed JS APIs and test curl on Zilla/Mp4/VOE
         run: |
           python3 - <<'PY'
-          import base64, json, re, urllib.parse, urllib.request, zlib
+          import base64, json, re, subprocess, urllib.request, zlib
 
           UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
-          def fetch(url, referer=None, data=None, headers=None, max_bytes=300000):
-              hdrs = {'User-Agent': UA, 'Accept': '*/*'}
-              if referer is not None:
-                  hdrs['Referer'] = referer
-              if headers:
-                  hdrs.update(headers)
-              req = urllib.request.Request(url, data=data, headers=hdrs)
-              try:
-                  with urllib.request.urlopen(req, timeout=25) as r:
-                      body = r.read(max_bytes)
-                      return {
-                          'code': r.status,
-                          'final_url': r.geturl(),
-                          'headers': dict(r.headers),
-                          'len': len(body),
-                          'text': body.decode('utf-8', 'replace'),
-                      }
-              except urllib.error.HTTPError as e:
-                  body = e.read(50000)
-                  return {
-                      'code': e.code,
-                      'final_url': e.geturl(),
-                      'headers': dict(e.headers),
-                      'len': len(body),
-                      'text': body.decode('utf-8', 'replace'),
-                  }
-              except Exception as e:
-                  return {'code': -1, 'error': str(e), 'text': ''}
+          def fetch(url, referer='https://verani.me/', max_bytes=5000000):
+              hdrs = {'User-Agent': UA, 'Accept': '*/*', 'Referer': referer}
+              req = urllib.request.Request(url, headers=hdrs)
+              with urllib.request.urlopen(req, timeout=25) as r:
+                  return r.read(max_bytes).decode('utf-8', 'replace')
 
           out = {}
 
-          # 1. Verify /animes/ filtered URLs and paginations + boruto second section + kimetsu search
-          for u in [
-              'https://verani.me/animes/?idioma=Espa%C3%B1ol%20Latino',
-              'https://verani.me/animes/page/2/?idioma=Espa%C3%B1ol%20Latino',
-              'https://verani.me/animes/?estado=en-emision',
-              'https://verani.me/animes/?orderby=popular',
-              'https://verani.me/animes/accion/',
-              'https://verani.me/?s=kimetsu',
-          ]:
-              r = fetch(u, referer='https://verani.me/')
-              titles = re.findall(r'<span class="card-title">([^<]+)</span>', r['text'])
-              hrefs = re.findall(r'<a href="(https://verani\.me/[^"]+)" class="card-link"', r['text'])
-              out[f'f_{u}'] = {'code': r['code'], 'count': len(titles), 'first4': list(zip(titles[:4], hrefs[:4]))}
+          # 1. FULL turboembed JS inspection around AES key/iv & API endpoint
+          te = fetch('https://turboembed.com/assets/index-CIV3m7-G.js', 'https://turboembed.com/9r03')
+          out['te_len'] = len(te)
+          m_aes = re.search(r'generateKey\s*\(', te)
+          if m_aes:
+              out['te_crypto_class'] = te[max(0, m_aes.start()-500):m_aes.start()+2500]
+          m_player = re.search(r'split\(["\']\/["\']\)\[t\(\d+\)\]\(\),!E\)', te)
+          if m_player:
+              out['te_player_flow'] = te[max(0, m_player.start()-800):m_player.start()+4500]
+          # Also dump Lr() string table function if needed!
+          m_lr = re.search(r'function Lr\(\)\{const e=\[.*?\];return \(Lr=function', te)
+          if m_lr:
+              out['te_lr_table'] = te[m_lr.start():min(len(te), m_lr.start()+6500)]
+          # Also find every "/api/" literal in turboembed JS
+          out['te_api_strings'] = re.findall(r'["\']([^"\']*(?:/api/|/stream|/video|/resolve|/embed)[^"\']*)["\']', te)[:40]
 
-          # Boruto second section
-          bor = fetch('https://verani.me/boruto-naruto-next-generations/', referer='https://verani.me/', max_bytes=800000)['text']
-          secs = re.findall(r'<section\b[^>]*class="anime-capitulos-section"[^>]*>.*?</section>', bor, re.S)
-          out['boruto_sec_count'] = len(secs)
-          out['boruto_sec2'] = re.sub(r'\s+', ' ', re.sub(r'<svg.*?</svg>', '<svg/>', secs[1], flags=re.S))[:4000] if len(secs) > 1 else ''
-          # Check Kimetsu hero
-          kim = fetch('https://verani.me/kimetsu-no-yaiba/', referer='https://verani.me/')['text']
-          km = re.search(r'<main\b.*?</main>', kim, re.S)
-          out['kimetsu_head'] = re.sub(r'\s+', ' ', re.sub(r'<svg.*?</svg>', '<svg/>', km.group(0), flags=re.S))[:3000] if km else ''
+          # 2. FULL byse JS inspection around playback & details & videos API
+          by = fetch('https://byselapuix.com/assets/index-DocunfmE.js', 'https://byselapuix.com/e/1t8mpxujis4x')
+          out['by_len'] = len(by)
+          out['by_playback_hits'] = [
+              by[max(0, m.start()-250):m.end()+450]
+              for m in re.finditer(r'/playback|embed/playback|embed/details|x-embed-parent|AES-GCM|key_parts', by)
+          ][:15]
+          out['by_api_paths'] = list(set(re.findall(r'["\']([^"\']*?/api/[^"\']*)["\']', by)))[:40]
+          # Also find fetch calls near embed/videos
+          out['by_videos_hits'] = [
+              by[max(0, m.start()-200):m.end()+400]
+              for m in re.finditer(r'api/videos|videos/\$\{|/embed/', by)
+          ][:15]
 
-          # 2. player.zilla-networks.com init.html / 000.html header matrix
-          zilla_seg = 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'
-          out['zilla_tests'] = {}
-          for name, hdrs in [
-              ('zilla_ref_self', {'Referer': 'https://player.zilla-networks.com/'}),
-              ('zilla_ref_m3u8', {'Referer': 'https://player.zilla-networks.com/m3u8/63911a42e1f576444e2bd19d146a4455'}),
-              ('zilla_origin_verani', {'Referer': 'https://verani.me/', 'Origin': 'https://verani.me'}),
-              ('zilla_range', {'Referer': 'https://player.zilla-networks.com/', 'Range': 'bytes=0-63'}),
-              ('zilla_exo_ua', {'User-Agent': 'ExoPlayerLib/2.18.1', 'Referer': 'https://verani.me/'}),
-              ('zilla_no_ua', {'User-Agent': ''}),
-          ]:
-              r = fetch(zilla_seg, headers=hdrs, max_bytes=2048)
-              out['zilla_tests'][name] = {'code': r.get('code'), 'ctype': r.get('headers', {}).get('content-type') or r.get('headers', {}).get('Content-Type'), 'len': r.get('len'), 'err_head': r.get('text', '')[:300] if r.get('code') != 200 else 'BINARY_OK'}
+          # 3. curl tests for Zilla init.html (HTTP/2 TLS vs urllib) + Mp4upload MP4 + Verani filters
+          def run_curl(args):
+              p = subprocess.run(['curl', '-sS', '-D', '-', '-o', '/tmp/curl_body', '--max-time', '15'] + args, capture_output=True, text=True)
+              body = open('/tmp/curl_body', 'rb').read(512)
+              return {'rc': p.returncode, 'hdr': p.stdout[:800], 'err': p.stderr[:300], 'body_len': len(body), 'body_ascii': body.decode('utf-8', 'replace')[:250]}
 
-          # Also test zilla root or html page
-          zr = fetch('https://player.zilla-networks.com/', referer='https://verani.me/')
-          out['zilla_root'] = {'code': zr.get('code'), 'len': zr.get('len'), 'head': zr.get('text', '')[:1000]}
+          out['curl_zilla_no_ref'] = run_curl(['-A', UA, 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'])
+          out['curl_zilla_verani_ref'] = run_curl(['-A', UA, '-e', 'https://verani.me/', 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'])
+          out['curl_zilla_self_ref'] = run_curl(['-A', UA, '-e', 'https://player.zilla-networks.com/', 'https://player.zilla-networks.com/segs/63911a42e1f576444e2bd19d146a4455/init.html'])
+          out['curl_mp4_head'] = run_curl(['-I', '-A', UA, '-e', 'https://www.mp4upload.com/', 'https://a3.mp4upload.com:183/d/xsx5stnuz3b4quuonssbsj2ndhepa5ikscmasiaz4x5c5zvkq72jz6hnhrl72mrq5ts5bw3h/video.mp4'])
 
-          # 3. Turboembed JS (/assets/index-CIV3m7-G.js)
-          te_js = fetch('https://turboembed.com/assets/index-CIV3m7-G.js', referer='https://turboembed.com/9r03', max_bytes=500000)['text']
-          out['turboembed_api_snippets'] = [te_js[max(0, m.start()-200):m.end()+350] for m in re.finditer(r'/api/|fetch\(|decrypt|aes|m3u8|sources|9r03', te_js, re.I)][:15]
-
-          # 4. Byse JS (/assets/index-DocunfmE.js + n1mwq.org/qre/1t8mpxujis4x)
-          byse_js = fetch('https://byselapuix.com/assets/index-DocunfmE.js', referer='https://byselapuix.com/e/1t8mpxujis4x', max_bytes=500000)['text']
-          out['byse_api_snippets'] = [byse_js[max(0, m.start()-150):m.end()+350] for m in re.finditer(r'embed/playback|embed/details|x-embed-parent|method:', byse_js, re.I)][:12]
-          n1_html = fetch('https://n1mwq.org/qre/1t8mpxujis4x', referer='https://byselapuix.com/e/1t8mpxujis4x')['text']
-          out['n1mwq_html'] = n1_html[:2500]
-          # Also check POST to n1mwq playback!
-          post_pb = fetch(
-              'https://n1mwq.org/api/videos/1t8mpxujis4x/embed/playback',
-              referer='https://n1mwq.org/qre/1t8mpxujis4x',
-              data=b'',
-              headers={'x-embed-parent': 'https://byselapuix.com/e/1t8mpxujis4x', 'Origin': 'https://n1mwq.org'},
-          )
-          out['byse_post_playback'] = {'code': post_pb.get('code'), 'len': post_pb.get('len'), 'text': post_pb.get('text', '')[:1200]}
-
-          # 5. VOE target (caseyseemavoid.com/e/rjq75thphcvd) full script inspection
-          voe_html = fetch('https://caseyseemavoid.com/e/rjq75thphcvd', referer='https://voe.sx/')['text']
-          voe_scripts = re.findall(r'<script[^>]*>.*?</script>', voe_html, re.S)
-          out['voe_scripts'] = [s[:1200] for s in voe_scripts if any(k in s for k in ['sources', 'm3u8', 'mp4', 'atob', 'json', 'rjq75thphcvd', 'MKG', 'prompt', 'wc', 'var '])][:8]
-          out['voe_script_srcs'] = re.findall(r'<script[^>]+src="([^"]+)"', voe_html)[:15]
-          out['voe_body_tail'] = voe_html[-2500:]
-
-          # 6. Check vidara m3u8 + mp4upload mp4 reachability with range
-          m3u8_vidara = ''
-          vid_res = fetch('https://vidara.so/api/stream', referer='https://vidara.so/e/gIqQfR6c37PJ6', data=json.dumps({'filecode': 'gIqQfR6c37PJ6', 'device': 'android', 'codecs': []}).encode(), headers={'Content-Type': 'application/json', 'Origin': 'https://vidara.so'})
-          try:
-              vurl = json.loads(vid_res['text'])['streaming_url']
-              vr = fetch(vurl, referer='https://vidara.so/')
-              out['vidara_m3u8_test'] = {'code': vr.get('code'), 'head': vr.get('text', '')[:500]}
-          except Exception as e:
-              out['vidara_m3u8_test'] = str(e)
+          # 4. Also inspect /animes/?idioma=Espa%C3%B1ol%20Latino HTML card markup & pagination
+          lat_html = fetch('https://verani.me/animes/?idioma=Espa%C3%B1ol%20Latino')
+          cards = re.findall(r'<article\b[^>]*class="[^"]*content-card[^"]*"[^>]*>.*?</article>', lat_html, re.S)
+          out['latino_card_count'] = len(cards)
+          out['latino_first_card'] = re.sub(r'\s+', ' ', cards[0])[:600] if cards else ''
+          out['latino_titles'] = re.findall(r'class="card-title"[^>]*>([^<]+)<', lat_html)[:8]
+          pag_m = re.search(r'<nav class="pagination"[^>]*>.*?</nav>', lat_html, re.S)
+          out['latino_pagination'] = re.sub(r'\s+', ' ', pag_m.group(0))[:600] if pag_m else ''
 
           raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
           b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
           chunks = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
-          print(f"DEEP raw={len(raw)} b64={len(b64)} chunks={len(chunks)}")
-          assert len(chunks) <= 10, f"Too many DEEP chunks: {len(chunks)}"
+          print(f"JS2 raw={len(raw)} b64={len(b64)} chunks={len(chunks)}")
+          assert len(chunks) <= 10, f"Too many chunks: {len(chunks)}"
           for idx, ch in enumerate(chunks):
-              print(f"::notice title=DEEP_{idx}_{len(chunks)}::{ch}")
+              print(f"::notice title=JS2_{idx}_{len(chunks)}::{ch}")
           PY
