@@ -40,7 +40,7 @@ class LatanimeLiveTest {
         client.newCall(req).execute().use { res ->
             assertTrue("HTTP ${res.code} for $url", res.isSuccessful)
             val finalUrl = res.request.url.toString()
-            return finalUrl to Jsoup.parse(res.body?.string().orEmpty(), finalUrl)
+            return finalUrl to Jsoup.parse(res.body.string(), finalUrl)
         }
     }
 
@@ -130,7 +130,7 @@ class LatanimeLiveTest {
                 .build()
         ).execute().use { r ->
             assertTrue("Byse details ${r.code}", r.isSuccessful)
-            r.body!!.string()
+            r.body.string()
         }
         val frameUrl = LatanimeHttpDefaults.JSON.readTree(detailsTxt).path("embed_frame_url").asText()
         assertTrue("Byse frameUrl present: $frameUrl", frameUrl.startsWith("http"))
@@ -147,7 +147,7 @@ class LatanimeLiveTest {
                     .build()
             ).execute().use { r ->
                 assertTrue("Byse challenge ${r.code}", r.isSuccessful)
-                r.body!!.string()
+                r.body.string()
             }
         )
         val kp = LatanimeByseCrypto.ecKeyPairP256()
@@ -176,7 +176,7 @@ class LatanimeLiveTest {
                     .build()
             ).execute().use { r ->
                 assertTrue("Byse attest ${r.code}", r.isSuccessful)
-                r.body!!.string()
+                r.body.string()
             }
         )
         val fp = mapOf(
@@ -193,7 +193,7 @@ class LatanimeLiveTest {
                 .header("Referer", frameUrl)
                 .build()
         ).execute()
-        val pbBody = pbRes.body!!.string()
+        val pbBody = pbRes.body.string()
         val pbCode = pbRes.code
         pbRes.close()
         val finalPbJson = if (pbCode == 428 || pbBody.contains("captcha_required")) {
@@ -205,7 +205,7 @@ class LatanimeLiveTest {
                         .header("Origin", frameBase)
                         .header("Referer", frameUrl)
                         .build()
-                ).execute().use { it.body!!.string() }
+                ).execute().use { it.body.string() }
             )
             val sol = LatanimeBysePow.solveBlocking(capNode.path("pow_nonce").asText(), capNode.path("pow_difficulty").asInt(12))!!
             val verNode = LatanimeHttpDefaults.JSON.readTree(
@@ -220,7 +220,7 @@ class LatanimeLiveTest {
                         .header("Origin", frameBase)
                         .header("Referer", frameUrl)
                         .build()
-                ).execute().use { it.body!!.string() }
+                ).execute().use { it.body.string() }
             )
             LatanimeHttpDefaults.JSON.readTree(
                 client.newCall(
@@ -233,7 +233,7 @@ class LatanimeLiveTest {
                         .build()
                 ).execute().use { r ->
                     assertTrue("Byse playback after captcha ${r.code}", r.isSuccessful)
-                    r.body!!.string()
+                    r.body.string()
                 }
             )
         } else {
@@ -268,7 +268,7 @@ class LatanimeLiveTest {
                 .header("User-Agent", LatanimeHttpDefaults.UA)
                 .header("Referer", "https://savefiles.com/e/$sfCode")
                 .build()
-        ).execute().use { it.body!!.string() }
+        ).execute().use { it.body.string() }
         val sfStream = LatanimeHostParsers.extractSavefilesStream(sfHtml)
         assertNotNull("Savefiles stream extracted", sfStream)
         println("LIVE_SAVEFILES_OK: $sfStream")
@@ -277,7 +277,7 @@ class LatanimeLiveTest {
         val hex = ep.players.firstOrNull { it.url.contains("hexload") }
         assertNotNull(hex)
         val hexHtml = client.newCall(Request.Builder().url(hex!!.url).header("User-Agent", LatanimeHttpDefaults.UA).build())
-            .execute().use { it.body!!.string() }
+            .execute().use { it.body.string() }
         val hexArgs = LatanimeHostParsers.extractHexloadArgs(hexHtml, LatanimeHttpDefaults.fileCodeFromPath(hex.url))
         val hexForm = FormBody.Builder().apply { hexArgs.forEach { (k, v) -> add(k, v) } }.build()
         val hexJson = client.newCall(
@@ -287,7 +287,7 @@ class LatanimeLiveTest {
                 .header("Origin", "https://hexload.com")
                 .header("X-Requested-With", "XMLHttpRequest")
                 .build()
-        ).execute().use { it.body!!.string() }
+        ).execute().use { it.body.string() }
         val hexUrl = LatanimeHostParsers.extractHexloadResultUrl(hexJson)
         assertNotNull("Hexload URL extracted: $hexJson", hexUrl)
         println("LIVE_HEXLOAD_OK: $hexUrl")
@@ -300,7 +300,7 @@ class LatanimeLiveTest {
         repeat(3) {
             val res = client.newCall(Request.Builder().url(curVoeUrl).header("User-Agent", LatanimeHttpDefaults.UA).build()).execute()
             curVoeUrl = res.request.url.toString()
-            voeHtml = res.body!!.string()
+            voeHtml = res.body.string()
             res.close()
             val redir = LatanimeVoeDecoder.findRedirectUrl(voeHtml)
             if (!redir.isNullOrBlank() && redir != curVoeUrl) curVoeUrl = redir else return@repeat
@@ -314,7 +314,7 @@ class LatanimeLiveTest {
         val mx = ep.players.firstOrNull { it.url.contains("mixdrop") || it.url.contains("mxdrop") }
         assertNotNull(mx)
         val mxHtml = client.newCall(Request.Builder().url(mx!!.url).header("User-Agent", LatanimeHttpDefaults.UA).build())
-            .execute().use { it.body!!.string() }
+            .execute().use { it.body.string() }
         val mxStream = LatanimeHostParsers.extractMixDropStream(mxHtml)
         assertNotNull("MixDrop stream extracted", mxStream)
         println("LIVE_MIXDROP_OK: $mxStream")
@@ -323,7 +323,7 @@ class LatanimeLiveTest {
         val mp4 = ep.players.firstOrNull { it.url.contains("mp4upload") }
         assertNotNull(mp4)
         val mp4Html = client.newCall(Request.Builder().url(mp4!!.url).header("User-Agent", LatanimeHttpDefaults.UA).build())
-            .execute().use { it.body!!.string() }
+            .execute().use { it.body.string() }
         val mp4Stream = LatanimeHostParsers.extractMp4UploadStream(mp4Html)
         assertNotNull("Mp4Upload stream extracted", mp4Stream)
         println("LIVE_MP4UPLOAD_OK: $mp4Stream")
@@ -333,7 +333,7 @@ class LatanimeLiveTest {
         assertNotNull(mf)
         val mfDoc = Jsoup.parse(
             client.newCall(Request.Builder().url(mf!!.url).header("User-Agent", LatanimeHttpDefaults.UA).build())
-                .execute().use { it.body!!.string() },
+                .execute().use { it.body.string() },
             mf.url,
         )
         val mfHref = mfDoc.selectFirst("a#downloadButton[href]")?.attr("href")?.trim()
@@ -346,7 +346,7 @@ class LatanimeLiveTest {
         val uq = opEp.players.firstOrNull { it.url.contains("uqload") }
         if (uq != null) {
             val uqHtml = client.newCall(Request.Builder().url(uq.url).header("User-Agent", LatanimeHttpDefaults.UA).build())
-                .execute().use { it.body!!.string() }
+                .execute().use { it.body.string() }
             val uqStream = LatanimeHostParsers.extractUqloadStream(uqHtml)
             assertNotNull("Uqload stream unpacked and extracted", uqStream)
             println("LIVE_UQLOAD_OK: $uqStream")
@@ -360,7 +360,7 @@ class LatanimeLiveTest {
                     .header("User-Agent", LatanimeHttpDefaults.MOBILE_UA)
                     .header("Referer", fm.url)
                     .build()
-            ).execute().use { it.body!!.string() }
+            ).execute().use { it.body.string() }
             assertTrue("Filemoon uses Byse embed_frame_url", fmRes.contains("embed_frame_url"))
             println("LIVE_FILEMOON_BYSE_OK: $fmRes")
         }
