@@ -1,112 +1,195 @@
 name: Sonda VerAni.me v2
+
 on:
   push:
-    paths:
-      - '.github/workflows/verani-v2-diag.yml'
+    branches:
+      - 'arena/**'
+  workflow_dispatch:
+
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Recopilar y emitir parte 1
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deep probe verani.me structure, filters and video hosts
         run: |
           python3 - <<'PY'
           import base64, json, re, urllib.parse, urllib.request, zlib
+          from html.parser import HTMLParser
 
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
-          def fetch(url):
-              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9,en;q=0.8"})
+          def fetch(url, referer='https://verani.me/', max_bytes=600000):
+              req = urllib.request.Request(url, headers={
+                  'User-Agent': UA,
+                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+                  'Referer': referer,
+              })
               try:
-                  with urllib.request.urlopen(req, timeout=20) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
+                  with urllib.request.urlopen(req, timeout=25) as r:
+                      body = r.read(max_bytes).decode('utf-8', 'replace')
+                      return {'code': r.status, 'final_url': r.geturl(), 'len': len(body), 'text': body}
               except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), e.read().decode("utf-8", "replace")
-              except Exception as ex:
-                  return -1, url, repr(ex)
+                  body = e.read(50000).decode('utf-8', 'replace')
+                  return {'code': e.code, 'final_url': e.geturl(), 'len': len(body), 'text': body}
+              except Exception as e:
+                  return {'code': -1, 'error': str(e), 'text': ''}
+
+          def strip_noise(html):
+              # Strip svg inner paths and comments to make raw DOM super compact
+              h = re.sub(r'<!--.*?-->', '', html, flags=re.S)
+              h = re.sub(r'<svg\b[^>]*>.*?</svg>', '<svg/>', h, flags=re.S)
+              h = re.sub(r'<style\b[^>]*>.*?</style>', '', h, flags=re.S)
+              return re.sub(r'\s+', ' ', h)
 
           out = {}
-          urls = {
-              "home": "https://verani.me/",
-              "animes": "https://verani.me/animes/",
-              "animes_p2": "https://verani.me/animes/page/2/",
-              "peliculas": "https://verani.me/peliculas/",
-              "search": "https://verani.me/?s=naruto",
-              "anime_single": "https://verani.me/kiniro-no-corda-primo-passo/",
-              "anime_multi": "https://verani.me/tensei-shitara-ken-deshita/",
-              "movie1": "https://verani.me/pelicula/el-nino-y-la-bestia/",
-              "movie2": "https://verani.me/xxxholic/pelicula/xxxholic-el-sueno-de-una-noche-de-verano/",
-              "ep1": "https://verani.me/kikansha-no-mahou-wa-tokubetsu-desu/capitulo-8-episodio-8-629/",
-              "ep2": "https://verani.me/tensei-shitara-ken-deshita/capitulo-9-episodio-9-600/",
-          }
 
-          scripts_found = set()
-          for k, u in urls.items():
-              code, final_u, txt = fetch(u)
-              out[k] = {
-                  "code": code,
-                  "final_url": final_u,
-                  "len": len(txt),
-                  "title": re.findall(r"<title>(.*?)</title>", txt, re.S)[:1],
+          # 1. Home page sections
+          home = fetch('https://verani.me/')
+          home_main = re.search(r'<main\b.*?</main>', home['text'], re.S)
+          home_compact = strip_noise(home_main.group(0) if home_main else home['text'])
+          out['home_sections'] = re.findall(r'<section\b[^>]*>.*?</section>', home_compact, re.S)
+          out['home_header_nav'] = strip_noise(re.search(r'<header\b.*?</header>', home['text'], re.S).group(0)) if re.search(r'<header\b.*?</header>', home['text'], re.S) else ''
+          # Collect links from Estrenos Semanales and Ultimas Peliculas to test servers broadly
+          ep_links = re.findall(r'href="(https://verani\.me/[^"]+/capitulo-[^"]+/)"', home['text'])
+          mov_links = re.findall(r'href="(https://verani\.me/(?:[^/]+/)?pelicula/[^"]+/)"', home['text'])
+          out['home_ep_links'] = list(dict.fromkeys(ep_links))[:12]
+          out['home_mov_links'] = list(dict.fromkeys(mov_links))[:12]
+
+          # 2. /animes/ filters and scripts
+          animes = fetch('https://verani.me/animes/')
+          animes_main = re.search(r'<main\b.*?</main>', animes['text'], re.S)
+          animes_compact = strip_noise(animes_main.group(0) if animes_main else animes['text'])
+          af_m = re.search(r'<div class="af-wrapper" id="af-wrapper">.*?<div class="animes-archive-grid', animes_compact, re.S)
+          out['animes_filters_html'] = af_m.group(0) if af_m else animes_compact[:15000]
+          out['animes_inline_scripts'] = [s.strip() for s in re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', animes['text'], re.S) if 'af' in s.lower() or 'verani' in s.lower() or 'ajax' in s.lower()]
+          animes_ext_scripts = list(dict.fromkeys(re.findall(r'<script[^>]+src="([^"]+verani[^"]*|[^"]+autoptimize[^"]*)"', animes['text'])))
+          home_ext_scripts = list(dict.fromkeys(re.findall(r'<script[^>]+src="([^"]+verani[^"]*|[^"]+autoptimize[^"]*)"', home['text'])))
+          extra_scripts = [s for s in animes_ext_scripts if s not in home_ext_scripts]
+          out['animes_extra_scripts'] = {u: fetch(u)['text'] for u in extra_scripts}
+          # Find whichever script mentions af-genre-cb or af-wrapper across all scripts
+          out['filter_js_hits'] = {}
+          for u in animes_ext_scripts:
+              t = fetch(u)['text']
+              if any(k in t for k in ['af-genre-cb', 'af-wrapper', 'af-dd-', 'veranimeFilter', 'idioma', 'estado', 'orden']):
+                  out['filter_js_hits'][u] = t
+
+          # 3. Search variants and /peliculas/
+          s1 = fetch('https://verani.me/?s=naruto')
+          s2 = fetch('https://verani.me/?s=a')
+          s2_p2 = fetch('https://verani.me/page/2/?s=a')
+          out['search_a_nav'] = re.findall(r'<a\b[^>]*class="[^"]*page-numbers[^"]*"[^>]*>.*?</a>', s2['text'], re.S)
+          out['search_a_p2_code'] = s2_p2['code']
+          out['search_a_p2_cards'] = len(re.findall(r'class="content-card\b', s2_p2['text']))
+          out['search_types'] = re.findall(r'class="content-card ([^"]+)"', s1['text'])
+          out['search_links'] = re.findall(r'<a href="(https://verani\.me/[^"]+)" class="card-link"', s1['text'])
+
+          # Check if live search exists in any script
+          out['live_search_hits'] = {}
+          for u in home_ext_scripts:
+              t = fetch(u)['text']
+              if 'search-input' in t or 'live_search' in t or 'veranime_search' in t or 'ajax_search' in t:
+                  out['live_search_hits'][u] = t
+
+          # 4. Peliculas archive structure
+          pel = fetch('https://verani.me/peliculas/')
+          pel_main = re.search(r'<main\b.*?</main>', pel['text'], re.S)
+          out['peliculas_head'] = strip_noise(pel_main.group(0))[:8000] if pel_main else ''
+          out['peliculas_nav'] = re.findall(r'<a\b[^>]*class="[^"]*page-numbers[^"]*"[^>]*>.*?</a>', pel['text'], re.S)
+
+          # 5. Anime detail pages: single, multi, shingeki-no-kyojin, naruto-shippuden, kimetsu-no-yaiba
+          anime_details = {}
+          for slug in ['kiniro-no-corda-primo-passo', 'tensei-shitara-ken-deshita', 'shingeki-no-kyojin', 'naruto-shippuden', 'kimetsu-no-yaiba', 'one-piece']:
+              r = fetch(f'https://verani.me/{slug}/')
+              main_m = re.search(r'<main\b.*?</main>', r['text'], re.S)
+              mc = strip_noise(main_m.group(0)) if main_m else ''
+              # Split before capitulos grid so we see hero + trailers + generos + peliculas + temporada headers
+              caps_idx = mc.find('id="capitulos"')
+              hero_part = mc[:caps_idx + 1200] if caps_idx > 0 else mc[:12000]
+              temp_headers = re.findall(r'<h3 class="temporada-title">.*?</h3>', mc)
+              after_caps_idx = mc.rfind('class="capitulos-grid"')
+              after_caps = mc[after_caps_idx:after_caps_idx+8000] if after_caps_idx > 0 else ''
+              # Find links to /pelicula/ or other sections inside main
+              pel_rels = re.findall(r'<section[^>]*>.*?</section>', mc)
+              section_classes = re.findall(r'<section\b[^>]*class="([^"]+)"', mc)
+              anime_details[slug] = {
+                  'code': r['code'],
+                  'final_url': r['final_url'],
+                  'section_classes': section_classes,
+                  'hero_and_meta': hero_part[:12000],
+                  'temporada_headers': temp_headers,
+                  'ep_count': len(re.findall(r'class="capitulo-card"', mc)),
+                  'tail_sections': [strip_noise(s)[:3000] for s in pel_rels if 'anime-hero' not in s and 'anime-capitulos-section' not in s],
               }
-              for m in re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', txt, re.I):
-                  if "verani.me" in m or m.startswith("/"):
-                      scripts_found.add(urllib.parse.urljoin(final_u, m))
-              if code == 200:
-                  m_main = re.search(r"<main[^>]*>.*</main>|<main[^>]*>.*", txt, re.S)
-                  body = m_main.group(0) if m_main else txt
-                  if k == "home":
-                      out[k]["sample"] = body[:20000]
-                      out[k]["forms"] = re.findall(r"<form[^>]*>.*?</form>", txt, re.S)[:5]
-                  elif k in ("animes", "animes_p2", "peliculas", "search"):
-                      out[k]["sample"] = body[:18000]
-                      out[k]["forms"] = re.findall(r"<form[^>]*>.*?</form>", txt, re.S)[:5]
-                      out[k]["nav_links"] = re.findall(r'<a[^>]+class=["\'][^"\']*(?:page|next|prev)[^"\']*["\'][^>]*>.*?</a>', txt, re.S)[:15]
-                  elif k in ("anime_single", "anime_multi"):
-                      out[k]["sample"] = body[:20000]
-                  elif k in ("movie1", "movie2", "ep1", "ep2"):
-                      out[k]["sample"] = body[:22000]
-                      out[k]["inline_scripts"] = [s for s in re.findall(r"<script(?![^>]*src)[^>]*>(.*?)</script>", txt, re.S) if len(s.strip()) > 10]
-                      out[k]["iframes"] = re.findall(r"<iframe[^>]*>", txt, re.I)
-                      out[k]["data_attrs"] = re.findall(r"<(?:button|div|li|a|span)[^>]+data-[^>]+>", txt, re.I)[:60]
-              else:
-                  out[k]["head"] = txt[:1000]
+          out['anime_details'] = anime_details
 
-          out["theme_scripts"] = {}
-          for su in sorted(scripts_found):
-              if any(x in su for x in ("wp-includes", "jquery", "da-reactions", "wp-embed", "emoji", "onesignal")):
-                  continue
-              c, fu, stxt = fetch(su)
-              out["theme_scripts"][su] = {"code": c, "len": len(stxt), "text": stxt[:25000]}
+          # 6. Movie detail structure & extra tabs/recommendations
+          mov1 = fetch('https://verani.me/pelicula/el-nino-y-la-bestia/')
+          m1_main = re.search(r'<main\b.*?</main>', mov1['text'], re.S)
+          m1c = strip_noise(m1_main.group(0)) if m1_main else ''
+          out['movie1_sections'] = re.findall(r'<section\b[^>]*class="([^"]+)"', m1c)
+          out['movie1_tail'] = m1c[-8000:]
 
-          raw = json.dumps(out, ensure_ascii=False).encode("utf-8")
-          comp = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
-          open("/tmp/verani_comp.txt", "w").write(comp)
-          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
-          print("TOTAL PARTS:", len(parts), "RAW:", len(raw), "COMP:", len(comp))
-          for idx, p in enumerate(parts[:9]):
-              print(f"::notice title=VERANI_{idx}_{len(parts)}::{p}")
-          PY
-      - name: Emitir parte 2
-        run: |
-          python3 - <<'PY'
-          comp = open("/tmp/verani_comp.txt").read()
-          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
-          for idx in range(9, min(18, len(parts))):
-              print(f"::notice title=VERANI_{idx}_{len(parts)}::{parts[idx]}")
-          PY
-      - name: Emitir parte 3
-        run: |
-          python3 - <<'PY'
-          comp = open("/tmp/verani_comp.txt").read()
-          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
-          for idx in range(18, min(27, len(parts))):
-              print(f"::notice title=VERANI_{idx}_{len(parts)}::{parts[idx]}")
-          PY
-      - name: Emitir parte 4
-        run: |
-          python3 - <<'PY'
-          comp = open("/tmp/verani_comp.txt").read()
-          parts = [comp[i:i+3500] for i in range(0, len(comp), 3500)]
-          for idx in range(27, min(36, len(parts))):
-              print(f"::notice title=VERANI_{idx}_{len(parts)}::{parts[idx]}")
+          # 7. Survey ALL server hosts across recent episodes & movies
+          server_tabs = []
+          for u in (out['home_ep_links'][:8] + out['home_mov_links'][:6]):
+              r = fetch(u)
+              tabs = re.findall(r'<button\b[^>]*class="servidor-tab[^"]*"([^>]*)>', r['text'])
+              dls = re.findall(r'href="(https?://[^"]+)"[^>]*class="[^"]*descarga[^"]*"', r['text'])
+              server_tabs.append({'page': u, 'tabs': tabs, 'dls': dls[:10]})
+          out['server_survey'] = server_tabs
+
+          # Check ep1 download section HTML
+          ep1 = fetch('https://verani.me/kikansha-no-mahou-wa-tokubetsu-desu/capitulo-8-episodio-8-629/')
+          ep1_main = re.search(r'<main\b.*?</main>', ep1['text'], re.S)
+          ep1c = strip_noise(ep1_main.group(0)) if ep1_main else ''
+          out['ep1_sections'] = re.findall(r'<section\b[^>]*class="([^"]+)"', ep1c)
+          out['ep1_tail'] = ep1c[-6000:]
+
+          # 8. Probe actual video embed hosts!
+          embed_probes = {}
+          test_embeds = [
+              ('zilla_mov', 'https://player.zilla-networks.com/m3u8/bb1a55d612f0745ed319cc69abc4c029'),
+              ('zilla_ep', 'https://player.zilla-networks.com/m3u8/63911a42e1f576444e2bd19d146a4455'),
+              ('animeav1_root', 'https://animeav1.uns.bio/'),
+              ('voe_ep', 'https://voe.sx/e/rjq75thphcvd'),
+              ('byse_ep', 'https://byselapuix.com/e/1t8mpxujis4x'),
+              ('byse_api_details', 'https://byselapuix.com/api/videos/1t8mpxujis4x/embed/details'),
+              ('mp4upload_ep', 'https://www.mp4upload.com/embed-cum8yyprw4ie.html'),
+          ]
+          # Also add first URL of any OTHER distinct host found in server_survey!
+          seen_hosts = {'player.zilla-networks.com', 'animeav1.uns.bio', 'voe.sx', 'byselapuix.com', 'www.mp4upload.com'}
+          for item in server_tabs:
+              for tab in item['tabs']:
+                  m = re.search(r'data-url="([^"]+)"', tab)
+                  if m:
+                      eu = m.group(1)
+                      h = urllib.parse.urlparse(eu).netloc
+                      if h and h not in seen_hosts:
+                          seen_hosts.add(h)
+                          test_embeds.append((f'other_{h}', eu))
+
+          for label, eu in test_embeds:
+              res = fetch(eu, referer='https://verani.me/', max_bytes=120000)
+              embed_probes[label] = {
+                  'url': eu,
+                  'code': res.get('code'),
+                  'final_url': res.get('final_url'),
+                  'len': res.get('len'),
+                  'text': res.get('text', '')[:12000],
+              }
+          out['embed_probes'] = embed_probes
+
+          raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
+          b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
+          chunk_size = 7500
+          chunks = [b64[i:i+chunk_size] for i in range(0, len(b64), chunk_size)]
+          print(f"Total raw={len(raw)} b64={len(b64)} chunks={len(chunks)}")
+          print("<<<V2_B64_START>>>")
+          for i in range(0, len(b64), 4000):
+              print(b64[i:i+4000])
+          print("<<<V2_B64_END>>>")
           PY
