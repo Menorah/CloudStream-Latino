@@ -1,6 +1,5 @@
 package com.menorah.latanime
 
-import com.lagradost.cloudstream3.ShowStatus
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -77,7 +76,7 @@ class LatanimeLiveTest {
     fun `live details handle series movies collection and ovas`() {
         val (opUrl, opDoc) = fetchDoc("https://latanime.org/anime/one-piece-latino")
         val op = LatanimeMarkup.parseAnimeDetail(opDoc, opUrl)!!
-        assertEquals(ShowStatus.Ongoing, op.status)
+        assertEquals(LatanimeShowStatus.ONGOING, op.status)
         assertTrue("One Piece has 800+ episodes, got ${op.episodes.size}", op.episodes.size >= 800)
         assertTrue(op.isDub)
         println("LIVE_DETAIL[OnePiece]: eps=${op.episodes.size}, status=${op.status}, poster=${op.posterUrl}")

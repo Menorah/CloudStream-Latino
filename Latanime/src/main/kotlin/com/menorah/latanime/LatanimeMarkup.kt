@@ -1,7 +1,5 @@
 package com.menorah.latanime
 
-import com.lagradost.cloudstream3.ShowStatus
-import com.lagradost.cloudstream3.TvType
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -14,6 +12,11 @@ enum class LatanimeCardKind {
     ANIME,
     MOVIE,
     OVA,
+}
+
+enum class LatanimeShowStatus {
+    ONGOING,
+    COMPLETED,
 }
 
 data class LatanimeCard(
@@ -44,7 +47,7 @@ data class LatanimeAnimeDetail(
     val altTitle: String?,
     val url: String,
     val posterUrl: String?,
-    val status: ShowStatus?,
+    val status: LatanimeShowStatus?,
     val year: Int?,
     val tags: List<String>,
     val plot: String?,
@@ -237,17 +240,7 @@ object LatanimeMarkup {
         return LatanimeCardKind.ANIME
     }
 
-    fun TvType.fromCardKind(kind: LatanimeCardKind): TvType = when (kind) {
-        LatanimeCardKind.MOVIE -> TvType.AnimeMovie
-        LatanimeCardKind.OVA -> TvType.OVA
-        LatanimeCardKind.ANIME -> TvType.Anime
-    }
-
-    fun kindToTvType(kind: LatanimeCardKind): TvType = when (kind) {
-        LatanimeCardKind.MOVIE -> TvType.AnimeMovie
-        LatanimeCardKind.OVA -> TvType.OVA
-        LatanimeCardKind.ANIME -> TvType.Anime
-    }
+    fun isMovieOrOvaFromBadge(kind: LatanimeCardKind): String = kind.name
 
     fun parseEpisodeNumber(url: String, text: String?): Int? {
         URL_EPISODE_REGEX.find(url)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.toInt()?.let { return it }
@@ -429,8 +422,8 @@ object LatanimeMarkup {
 
         val statusText = doc.selectFirst(".btn-estado")?.text()?.trim()?.lowercase().orEmpty()
         val status = when {
-            statusText.contains("estreno") || statusText.contains("emision") || statusText.contains("emisión") -> ShowStatus.Ongoing
-            statusText.contains("finalizado") -> ShowStatus.Completed
+            statusText.contains("estreno") || statusText.contains("emision") || statusText.contains("emisión") -> LatanimeShowStatus.ONGOING
+            statusText.contains("finalizado") -> LatanimeShowStatus.COMPLETED
             else -> null
         }
 
@@ -479,7 +472,7 @@ object LatanimeMarkup {
         val rawKind = cachedKind ?: inferCardKind(null, "$title ${altTitle.orEmpty()}", pageUrl)
         val resolvedKind = when {
             episodes.size > 1 && rawKind == LatanimeCardKind.MOVIE -> LatanimeCardKind.ANIME
-            episodes.size == 1 && rawKind == LatanimeCardKind.MOVIE && status == ShowStatus.Ongoing -> LatanimeCardKind.ANIME
+            episodes.size == 1 && rawKind == LatanimeCardKind.MOVIE && status == LatanimeShowStatus.ONGOING -> LatanimeCardKind.ANIME
             else -> rawKind
         }
 

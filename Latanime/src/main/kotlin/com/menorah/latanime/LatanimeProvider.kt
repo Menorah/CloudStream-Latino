@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SearchResponseList
+import com.lagradost.cloudstream3.ShowStatus
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.addDubStatus
@@ -84,8 +85,14 @@ class LatanimeProvider : MainAPI() {
         }
     }
 
+    private fun mapCardTvType(kind: LatanimeCardKind): TvType = when (kind) {
+        LatanimeCardKind.MOVIE -> TvType.AnimeMovie
+        LatanimeCardKind.OVA -> TvType.OVA
+        LatanimeCardKind.ANIME -> TvType.Anime
+    }
+
     private fun LatanimeCard.toSearchResponse(): SearchResponse {
-        val tvType = LatanimeMarkup.kindToTvType(kind)
+        val tvType = mapCardTvType(kind)
         return if (tvType == TvType.AnimeMovie) {
             newMovieSearchResponse(title, url, TvType.AnimeMovie) {
                 this.posterUrl = this@toSearchResponse.posterUrl
@@ -343,7 +350,7 @@ class LatanimeProvider : MainAPI() {
                 this.posterUrl = ep.posterUrl ?: detail.posterUrl
             }
         }
-        val tvType = LatanimeMarkup.kindToTvType(detail.kind)
+        val tvType = mapCardTvType(detail.kind)
         val dubStatus = if (detail.isDub) DubStatus.Dubbed else DubStatus.Subbed
 
         return newAnimeLoadResponse(detail.title, finalUrl, tvType) {
@@ -352,7 +359,11 @@ class LatanimeProvider : MainAPI() {
             this.year = detail.year
             this.plot = detail.plot
             this.tags = detail.tags
-            this.showStatus = detail.status
+            this.showStatus = when (detail.status) {
+                LatanimeShowStatus.ONGOING -> ShowStatus.Ongoing
+                LatanimeShowStatus.COMPLETED -> ShowStatus.Completed
+                null -> null
+            }
             addEpisodes(dubStatus, episodes)
         }
     }

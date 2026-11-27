@@ -1,7 +1,5 @@
 package com.menorah.latanime
 
-import com.lagradost.cloudstream3.ShowStatus
-import com.lagradost.cloudstream3.TvType
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -118,7 +116,6 @@ class LatanimeMarkupTest {
 
         assertEquals(LatanimeCardKind.MOVIE, page.items[0].kind)
         assertTrue(page.items[0].isDub)
-        assertEquals(TvType.AnimeMovie, LatanimeMarkup.kindToTvType(page.items[0].kind))
         assertEquals("https://latanime.org/thumbs/imagen/overlord.jpg", page.items[0].posterUrl)
 
         assertEquals(LatanimeCardKind.OVA, page.items[1].kind)
@@ -214,7 +211,7 @@ class LatanimeMarkupTest {
         )
         assertNotNull(detail)
         assertEquals(2019, detail!!.year)
-        assertEquals(ShowStatus.Completed, detail.status)
+        assertEquals(LatanimeShowStatus.COMPLETED, detail.status)
         assertEquals(listOf("Drama", "Romance"), detail.tags)
         assertEquals(LatanimeCardKind.ANIME, detail.kind) // 2+ episodes should expose episode list
         assertEquals(listOf(1, 3), detail.episodes.map { it.episode })
