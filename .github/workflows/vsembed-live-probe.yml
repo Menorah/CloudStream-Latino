@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  android_api33_webview_live:
+  android_api33_webview_attached:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -22,7 +22,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Preparar sonda limpia de WebView API 33 (Method A + Method B) + Media3
+      - name: Preparar sonda de WebView adjunto a Dialog/Activity (API 33) + Media3
         run: |
           cat > /tmp/run_vsembed_probe.sh <<'SH'
           #!/usr/bin/env bash
@@ -30,12 +30,20 @@ jobs:
           cat > PelisJuanita/src/main/kotlin/com/menorah/pelisjuanita/PlaybackProbe.kt <<'KT'
           package com.menorah.pelisjuanita
 
+          import android.app.Activity
+          import android.app.Application
+          import android.app.Dialog
           import android.content.Context
           import android.graphics.SurfaceTexture
           import android.net.http.SslError
+          import android.os.Bundle
           import android.util.Log
           import android.view.Surface
+          import android.view.ViewGroup
+          import android.view.Window
+          import android.view.WindowManager
           import android.webkit.*
+          import android.widget.FrameLayout
           import androidx.media3.common.MediaItem
           import androidx.media3.common.MimeTypes
           import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -47,8 +55,8 @@ jobs:
           import okhttp3.Request
           import org.json.JSONObject
           import java.io.BufferedReader
-          import java.io.ByteArrayInputStream
           import java.io.InputStreamReader
+          import java.lang.ref.WeakReference
           import java.net.InetAddress
           import java.net.ServerSocket
           import java.net.URI
@@ -58,50 +66,80 @@ jobs:
 
           object PlaybackProbe {
               private const val TAG = "VsembedProbe"
+              @Volatile private var currentAct: WeakReference<Activity>? = null
 
               private const val BIG_GIRLS_URL =
                   "https://vsembed.su/embed/movie?tmdb=1477963&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FBig.Girls.Dont.Cry.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-es-419.srt&sub_label=Espa%C3%B1ol&sub_lang=es&utm_source=pelisjuanita.com"
               private const val SKIN_CRAWLER_URL =
                   "https://vsembed.su/embed/movie?tmdb=1843139&ds_lang=es&sub_url=https%3A%2F%2Fpelisjuanita.com%2Fvidsrc%2Fcorsproxy.php%3Furl%3Dhttps%253A%252F%252Fwww.subtitlecat.com%252Fsubs%252F1812%252FThe.Skin.Crawler.Murders.2026.1080p.WEBRip.x264.AAC-%255BYTS.GG%2520-%2520YTS.BZ%255D-2-es.srt&sub_label=Espa%C3%B1ol&sub_lang=es"
 
+              private fun findActivityViaReflection(): Activity? = runCatching {
+                  val atClass = Class.forName("android.app.ActivityThread")
+                  val at = atClass.getMethod("currentActivityThread").invoke(null)
+                  val f = atClass.getDeclaredField("mActivities")
+                  f.isAccessible = true
+                  val map = f.get(at) as? Map<*, *> ?: return@runCatching null
+                  for (rec in map.values) {
+                      if (rec == null) continue
+                      val rc = rec.javaClass
+                      val paused = rc.getDeclaredField("paused").apply { isAccessible = true }.getBoolean(rec)
+                      val act = rc.getDeclaredField("activity").apply { isAccessible = true }.get(rec) as? Activity
+                      if (act != null && !act.isFinishing && !act.isDestroyed) {
+                          if (!paused) return@runCatching act
+                          return@runCatching act
+                      }
+                  }
+                  null
+              }.getOrNull()
+
               fun start(context: Context) {
                   Log.i(TAG, "START_PROBE called")
+                  (context.applicationContext as? Application)?.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+                      override fun onActivityResumed(a: Activity) { currentAct = WeakReference(a) }
+                      override fun onActivityCreated(a: Activity, b: Bundle?) { currentAct = WeakReference(a) }
+                      override fun onActivityStarted(a: Activity) { currentAct = WeakReference(a) }
+                      override fun onActivityPaused(a: Activity) {}
+                      override fun onActivityStopped(a: Activity) {}
+                      override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
+                      override fun onActivityDestroyed(a: Activity) {}
+                  })
+
                   CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
                       try {
                           delay(3000)
+                          val act = currentAct?.get() ?: findActivityViaReflection()
                           val defaultWvUa = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull().orEmpty()
-                          Log.i(TAG, "ANDROID_WV_DEFAULT_UA=$defaultWvUa")
+                          Log.i(TAG, "ACTIVITY=${act?.javaClass?.simpleName} ANDROID_WV_DEFAULT_UA=$defaultWvUa")
                           withTimeout(240_000) {
-                              // Method A: vsembed.su -> cancel iframe & promote landing to top-level WebView
+                              // 1) Attached visible Dialog WebView with DefaultUA opening landing directly -> clicks #bigPlay -> #player_frame
+                              val landing1 = resolveLandingViaHttp(BIG_GIRLS_URL, defaultWvUa)
+                              Log.i(TAG, "HTTP_LANDING_1=$landing1")
                               val r1 = captureWithWebView(
-                                  context, "A_BigGirls_DefaultUA", BIG_GIRLS_URL,
-                                  referer = "https://pelisjuanita.com/", customUa = null, promoteLanding = true
+                                  context, act, "ATTACHED_DefaultUA_Landing", landing1,
+                                  referer = "https://vsembed.su/", customUa = null
                               )
                               Log.i(TAG, "WV_RES ${r1.label} stream=${r1.streamUrl} verify=${r1.verifyHits} hops=${r1.hops} err=${r1.errs} state=${r1.domState}")
                               tryPlay(context, r1, defaultWvUa)
 
-                              // Method B: OkHttp fetches vsembed -> vs_src -> landing -> playerUrl, then load playerUrl directly in WebView (DefaultUA & DesktopUA)
-                              val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                              val hopB = runCatching { resolvePlayerUrlViaHttp(SKIN_CRAWLER_URL, desktopUa) }
-                              Log.i(TAG, "HTTP_PREFETCH SkinCrawler ok=${hopB.isSuccess} player=${hopB.getOrNull()?.first} err=${hopB.exceptionOrNull()?.message}")
-                              hopB.getOrNull()?.let { (playerUrl, landingRef) ->
-                                  val r2 = captureWithWebView(
-                                      context, "B_SkinCrawler_DefaultUA", playerUrl,
-                                      referer = landingRef, customUa = null, promoteLanding = false
-                                  )
-                                  Log.i(TAG, "WV_RES ${r2.label} stream=${r2.streamUrl} verify=${r2.verifyHits} hops=${r2.hops} err=${r2.errs} state=${r2.domState}")
-                                  tryPlay(context, r2, defaultWvUa)
-                              }
+                              // 2) Attached visible Dialog WebView with DefaultUA opening playerUrl directly (matching UA)
+                              val (player2, ref2) = resolvePlayerUrlViaHttp(SKIN_CRAWLER_URL, defaultWvUa)
+                              Log.i(TAG, "HTTP_PLAYER_2=$player2")
+                              val r2 = captureWithWebView(
+                                  context, act, "ATTACHED_DefaultUA_Player", player2,
+                                  referer = ref2, customUa = null
+                              )
+                              Log.i(TAG, "WV_RES ${r2.label} stream=${r2.streamUrl} verify=${r2.verifyHits} hops=${r2.hops} err=${r2.errs} state=${r2.domState}")
+                              tryPlay(context, r2, defaultWvUa)
 
-                              val hopA = runCatching { resolvePlayerUrlViaHttp(BIG_GIRLS_URL, desktopUa) }
-                              hopA.getOrNull()?.let { (playerUrl, landingRef) ->
-                                  val r3 = captureWithWebView(
-                                      context, "B_BigGirls_DesktopUA", playerUrl,
-                                      referer = landingRef, customUa = desktopUa, promoteLanding = false
-                                  )
-                                  Log.i(TAG, "WV_RES ${r3.label} stream=${r3.streamUrl} verify=${r3.verifyHits} hops=${r3.hops} err=${r3.errs} state=${r3.domState}")
-                                  tryPlay(context, r3, desktopUa)
-                              }
+                              // 3) Attached visible Dialog WebView with DesktopUA opening landing directly
+                              val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                              val landing3 = resolveLandingViaHttp(BIG_GIRLS_URL, desktopUa)
+                              val r3 = captureWithWebView(
+                                  context, act, "ATTACHED_DesktopUA_Landing", landing3,
+                                  referer = "https://vsembed.su/", customUa = desktopUa
+                              )
+                              Log.i(TAG, "WV_RES ${r3.label} stream=${r3.streamUrl} verify=${r3.verifyHits} hops=${r3.hops} err=${r3.errs} state=${r3.domState}")
+                              tryPlay(context, r3, desktopUa)
 
                               Log.i(TAG, "PASS_VSEMBED_PROBE")
                           }
@@ -121,21 +159,22 @@ jobs:
                   Log.i(TAG, "WV_MEDIA3 ${r.label} mode=local_proxy ok=${proxyRes.isSuccess} err=${proxyRes.exceptionOrNull()?.message}")
               }
 
-              private suspend fun resolvePlayerUrlViaHttp(vsembedUrl: String, ua: String): Pair<String, String> = withContext(Dispatchers.IO) {
-                  val h1 = mapOf("User-Agent" to ua, "Referer" to "https://pelisjuanita.com/")
-                  val r1 = app.get(vsembedUrl, headers = h1)
-                  val html1 = r1.text
-                  val apiRel = Regex("""data-api="([^"]+)"""").find(html1)?.groupValues?.get(1)?.replace("&amp;", "&")
-                      ?: error("no data-api in vsembed")
+              private suspend fun resolveLandingViaHttp(vsembedUrl: String, ua: String): String = withContext(Dispatchers.IO) {
+                  val r1 = app.get(vsembedUrl, headers = mapOf("User-Agent" to ua, "Referer" to "https://pelisjuanita.com/"))
+                  val apiRel = Regex("""data-api="([^"]+)"""").find(r1.text)?.groupValues?.get(1)?.replace("&amp;", "&")
+                      ?: error("no data-api in vsembed (${r1.code})")
                   val apiUrl = URI(r1.url).resolve(apiRel).toString()
                   val r2 = app.get(apiUrl, headers = mapOf("User-Agent" to ua, "Referer" to r1.url))
-                  val landing = JSONObject(r2.text).getString("src")
+                  JSONObject(r2.text).getString("src")
+              }
+
+              private suspend fun resolvePlayerUrlViaHttp(vsembedUrl: String, ua: String): Pair<String, String> = withContext(Dispatchers.IO) {
+                  val landing = resolveLandingViaHttp(vsembedUrl, ua)
                   val r3 = app.get(landing, headers = mapOf("User-Agent" to ua, "Referer" to "https://vsembed.su/"))
                   val cfgJson = Regex("""window\.CFG\s*=\s*(\{.*?\});""").find(r3.text)?.groupValues?.get(1)
                       ?: error("no window.CFG in landing (${r3.code})")
                   val playerRel = JSONObject(cfgJson).getString("playerUrl")
-                  val playerUrl = URI(r3.url).resolve(playerRel).toString()
-                  playerUrl to r3.url
+                  URI(r3.url).resolve(playerRel).toString() to r3.url
               }
 
               data class WvResult(
@@ -151,11 +190,11 @@ jobs:
 
               private suspend fun captureWithWebView(
                   context: Context,
+                  act: Activity?,
                   label: String,
                   startUrl: String,
                   referer: String,
-                  customUa: String?,
-                  promoteLanding: Boolean
+                  customUa: String?
               ): WvResult {
                   val hops = CopyOnWriteArrayList<String>()
                   val errs = CopyOnWriteArrayList<String>()
@@ -164,7 +203,28 @@ jobs:
                   var verifyHits = ""
                   var done = false
 
-                  val wv = WebView(context)
+                  val wv = WebView(act ?: context)
+                  val dlg = if (act != null && !act.isFinishing && !act.isDestroyed) {
+                      Dialog(act, android.R.style.Theme_Translucent_NoTitleBar).apply {
+                          requestWindowFeature(Window.FEATURE_NO_TITLE)
+                          setCancelable(false)
+                          window?.addFlags(
+                              WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                  WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                          )
+                          setContentView(FrameLayout(act).apply {
+                              addView(wv, FrameLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT
+                              ))
+                          })
+                          show()
+                      }
+                  } else {
+                      wv.layout(0, 0, 1080, 1920)
+                      null
+                  }
+
                   val cm = CookieManager.getInstance()
                   cm.setAcceptCookie(true)
                   cm.setAcceptThirdPartyCookies(wv, true)
@@ -178,9 +238,7 @@ jobs:
                       mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                       if (customUa != null) userAgentString = customUa
                   }
-                  wv.layout(0, 0, 1080, 1920)
                   val activeUa = wv.settings.userAgentString
-                  var promoted = false
 
                   wv.webChromeClient = object : WebChromeClient() {
                       override fun onConsoleMessage(cmMsg: ConsoleMessage): Boolean {
@@ -204,16 +262,9 @@ jobs:
                                   hops.add("STREAM:${u.take(90)}")
                               }
                           }
-                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("wasm.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh") || low.contains("disable-devtool")) {
+                          if (low.contains("verify.php") || low.contains("generate.php") || low.contains("wasm.php") || low.contains("challenges.cloudflare") || low.contains("data.vidsrc.sh") || low.contains("disable-devtool") || low.contains("/embed/player/")) {
                               if (hops.size < 25) hops.add("REQ:${u.take(70)}")
                               if (low.contains("verify.php")) verifyHits = "called"
-                          }
-                          if (promoteLanding && low.contains("stellarconductornexus.com/embed/movie/") && !promoted && !request.isForMainFrame) {
-                              promoted = true
-                              hops.add("HOP_LANDING:${u.take(65)}")
-                              view.post { view.loadUrl(u, mapOf("Referer" to "https://vsembed.su/")) }
-                              // Cancel iframe fetch so ?vs= isn't consumed before top-level loadUrl
-                              return WebResourceResponse("text/html", "utf-8", ByteArrayInputStream(ByteArray(0)))
                           }
                           return super.shouldInterceptRequest(view, request)
                       }
@@ -240,13 +291,14 @@ jobs:
                         var c = window.CONFIG || {};
                         var g = document.getElementById('tsGate');
                         return JSON.stringify({
-                          url: u.slice(0, 75),
-                          pf: pf ? (pf.src || 'present').slice(0, 55) : '',
+                          vis: document.visibilityState,
+                          url: u.slice(0, 70),
+                          pf: pf ? (pf.src || 'present').slice(0, 50) : '',
                           clicked: clicked,
                           ts: !!c.turnstile,
                           apiTok: !!(c.apiToken && c.apiToken.length > 0),
                           gateClass: g ? g.className : '',
-                          gateText: g ? (g.innerText || '').slice(0, 60) : ''
+                          gateText: g ? (g.innerText || '').slice(0, 50) : ''
                         });
                       })()
                   """.trimIndent()
@@ -260,10 +312,11 @@ jobs:
                           }
                       }
                       if (step == 12 || step == 24 || step == 40) {
-                          Log.i(TAG, "WV_POLL $label step=$step state=$domState")
+                          Log.i(TAG, "WV_POLL $label step=$step attached=${wv.isAttachedToWindow} state=$domState")
                       }
                   }
 
+                  runCatching { dlg?.dismiss() }
                   runCatching {
                       wv.stopLoading()
                       wv.loadUrl("about:blank")
@@ -437,7 +490,7 @@ jobs:
           SH
           chmod +x /tmp/run_vsembed_probe.sh
 
-      - name: Probar WebView API 33 + Media3 en CloudStream APK
+      - name: Probar WebView adjunto API 33 + Media3 en CloudStream APK
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
