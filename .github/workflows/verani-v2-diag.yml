@@ -7,48 +7,53 @@ on:
   workflow_dispatch:
 
 jobs:
-  probe_zt_and_routes:
+  verani_v2_live_test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Check Zt definition and all /:x/:code routes in Byse JS
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run VerAniV2 tests with live network checks
+        env:
+          VERANI_LIVE: 'true'
         run: |
+          set +e
+          ./gradlew :VerAniV2:testDebugUnitTest --rerun-tasks --info > live-test-log.txt 2>&1
+          status=$?
           python3 - <<'PY'
-          import base64, json, re, urllib.request, zlib
-          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          def get(u):
-              return urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': UA})).read().decode('utf-8', 'replace')
-          idx = get('https://n1mwq.org/assets/index-DocunfmE.js')
-          vp = get('https://n1mwq.org/assets/videoPagesBundle-Bgi0QmPo.js')
-          out = {}
-          m_exp = re.search(r'export\{[^}]+\}', idx)
-          if m_exp:
-              exp = m_exp.group(0)
-              out['export_tail'] = exp[-1200:]
-              mz = re.search(r'(\w+) as z\b', exp)
-              if mz:
-                  zname = mz.group(1)
-                  out['zname'] = zname
-                  out['z_defs'] = [idx[max(0, m.start()-80):m.end()+350] for m in re.finditer(rf'\b{re.escape(zname)}\s*=', idx)][:6]
-              # Also find router paths near end of idx!
-              out['idx_tail'] = idx[max(0, m_exp.start()-3000):m_exp.start()]
-          # Check Lt / en / Et usage in vp!
-          out['vp_calls'] = [vp[max(0, m.start()-120):m.end()+250] for m in re.finditer(r'\bEt\(', vp)]
-          # Also test HEAD and GET on settings/details on n1mwq.org!
-          for act in ['details', 'settings', 'embed/details', 'embed/settings', 'playback', 'embed/playback']:
-              for mth in ['GET', 'POST']:
-                  try:
-                      req = urllib.request.Request(f'https://n1mwq.org/api/videos/1t8mpxujis4x/{act}', headers={'User-Agent': UA, 'Referer': 'https://n1mwq.org/ily/1t8mpxujis4x', 'Origin': 'https://n1mwq.org', 'X-Embed-Parent': 'https://byselapuix.com/e/1t8mpxujis4x', 'Content-Type': 'application/json'}, data=(b'{}' if mth=='POST' else None), method=mth)
-                      with urllib.request.urlopen(req, timeout=15) as r:
-                          out[f'{mth}_{act}'] = f"{r.status}: {r.read(500).decode('utf-8','replace')}"
-                  except urllib.error.HTTPError as e:
-                      out[f'{mth}_{act}'] = f"{e.code}: {e.read(500).decode('utf-8','replace')}"
-
-          raw = json.dumps(out, ensure_ascii=False).encode('utf-8')
-          b64 = base64.b64encode(zlib.compress(raw, 9)).decode('ascii')
-          chunks = [b64[i:i+3900] for i in range(0, len(b64), 3900)]
-          for i, ch in enumerate(chunks):
-              print(f"::notice title=ZT_{i}_{len(chunks)}::{ch}")
+          import base64, json, pathlib, xml.etree.ElementTree as ET, zlib
+          out = {'reports': [], 'live_lines': [], 'errors': []}
+          for p in sorted(pathlib.Path('VerAniV2/build/test-results/testDebugUnitTest').glob('TEST-*.xml')):
+              root = ET.parse(p).getroot()
+              cases = []
+              for c in root.findall('.//testcase'):
+                  st = 'ok'
+                  msg = ''
+                  if c.find('skipped') is not None:
+                      st = 'skipped'
+                  for fe in c.findall('failure') + c.findall('error'):
+                      st = 'fail'
+                      msg = (fe.get('message') or fe.text or '')[:800]
+                  sys_out = (c.findtext('system-out') or '')
+                  for ln in sys_out.splitlines():
+                      if any(k in ln for k in ('LIVE_', 'PROBE_STREAM:')):
+                          out['live_lines'].append(ln)
+                  cases.append({'name': c.get('name'), 'status': st, 'msg': msg})
+              out['reports'].append({'suite': root.get('name'), 'tests': root.get('tests'), 'failures': root.get('failures'), 'errors': root.get('errors'), 'skipped': root.get('skipped'), 'cases': cases})
+          log = pathlib.Path('live-test-log.txt').read_text(errors='replace')
+          for ln in log.splitlines():
+              if any(k in ln for k in ('LIVE_', 'PROBE_STREAM:', 'e: ', 'FAILED')):
+                  if ln not in out['live_lines']:
+                      out['live_lines'].append(ln[:300])
+          if not out['reports']:
+              out['errors'].append(log[-4000:])
+          blob = base64.b64encode(zlib.compress(json.dumps(out, ensure_ascii=False).encode(), 9)).decode()
+          step = 3400
+          chunks = [blob[i:i+step] for i in range(0, len(blob), step)]
+          for idx, ch in enumerate(chunks[:9]):
+              print(f"::notice title=LIVE_{idx+1}_{len(chunks)}::{ch}")
           PY
+          exit "$status"
