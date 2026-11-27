@@ -313,8 +313,7 @@ object RePelisHDBisMarkup {
                 ?: doc.selectFirst("meta[property=og:image]")?.attr("content"),
         )
         val flightText = extractNextFlightText(doc)
-        val bgMatch = Regex(""""sfondo"\s*:\s*"(https?://[^"]+)"""").find(flightText)?.groupValues?.getOrNull(1)
-            ?: doc.selectFirst("iframe[src*='playlatinsrc']")?.let { null }
+        val bgMatch: String? = Regex(""""sfondo"\s*:\s*"(https?://[^"]+)"""").find(flightText)?.groupValues?.getOrNull(1)
 
         val plot = doc.selectFirst("p.sin-t")?.text()?.trim()?.takeIf { it.isNotEmpty() }
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }

@@ -3,7 +3,6 @@ package com.menorah.repelishdbis
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.LoadResponse.Companion.addDuration
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.MainAPI
@@ -166,7 +165,7 @@ class RePelisHDBisProvider : MainAPI() {
                 this.backgroundPosterUrl = detail.backgroundUrl ?: detail.posterUrl
                 this.plot = detail.plot
                 this.year = detail.year
-                detail.durationMinutes?.let { addDuration(it) }
+                detail.durationMinutes?.let { this.duration = it }
                 detail.rating10?.let { this.score = Score.from10(it) }
                 detail.imdbId?.let { addImdbId(it) }
                 if (detail.genres.isNotEmpty()) this.tags = detail.genres

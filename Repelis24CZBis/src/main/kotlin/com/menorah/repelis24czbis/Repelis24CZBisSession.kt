@@ -100,30 +100,15 @@ internal object Repelis24CZSession {
                 }
             }
             try {
-                repeat(40) {
+                for (attempt in 0 until 40) {
                     delay(400L)
-                    val snapshot = mainWork {
-                        var out = ""
-                        val latch = java.util.concurrent.CountDownLatch(1)
-                        webView.evaluateJavascript(
-                            "(function(){return document.documentElement?document.documentElement.outerHTML:'';})()",
-                        ) { value ->
-                            out = value ?: ""
-                            latch.countDown()
-                        }
-                        // Evaluate runs async on main looper, collect on next cycle via tag
-                        webView.tag = out
-                        ""
-                    }
-                    // Poll via a single-shot suspension helper
                     val html = evalHtml(webView)
                     if (html.isNotBlank() && !Repelis24CZBisMarkup.isChallengePage(200, html) && html.length > 800) {
                         val cmCookie = runCatching { CookieManager.getInstance().getCookie(targetUrl).orEmpty() }.getOrDefault("")
                         if (cmCookie.isNotBlank()) cookieHeader = cmCookie
                         resolvedHtml = html
-                        return@repeat
+                        break
                     }
-                    if (snapshot.isNotEmpty()) resolvedHtml = snapshot
                 }
             } finally {
                 mainWork {
@@ -174,11 +159,11 @@ internal object Repelis24CZSession {
                 }
             }
             try {
-                repeat(25) {
+                for (attempt in 0 until 25) {
                     delay(350L)
                     val h = evalHtml(webView)
                     if (h.isNotBlank() && !Repelis24CZBisMarkup.isChallengePage(200, h) && h.length > 800) {
-                        return@repeat
+                        break
                     }
                 }
                 val js = """
