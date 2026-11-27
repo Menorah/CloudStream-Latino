@@ -1,4 +1,4 @@
-name: Probe GnulaHD Icon Bytes
+name: Probe GnulaHD Exact Selectors
 on:
   workflow_dispatch:
   push:
@@ -7,44 +7,67 @@ on:
 permissions:
   contents: read
 jobs:
-  grab_icon:
+  inspect_dom:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -q requests pillow
-      - name: Emitir LOGO_B64 (paso 1)
+      - run: pip install -q requests beautifulsoup4
+      - name: Inspeccionar selectores exactos
         run: |
           python3 - <<'PY'
-          import base64, io, requests
-          from PIL import Image
+          import re, requests
+          from bs4 import BeautifulSoup
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-          r = requests.get("https://ww3.gnulahd.nu/wp-content/themes/dramastream-child/img/logo-gnula.png?v=1782785985", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
-          b64 = base64.b64encode(r.content).decode("ascii")
-          for i in range(0, len(b64), 3400):
-              print(f"::notice::LOGO_{i//3400}=" + b64[i:i+3400])
-          PY
-      - name: Emitir FAV_B64 parte 1
-        run: |
-          python3 - <<'PY'
-          import base64, io, requests
-          from PIL import Image
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-          r = requests.get("https://ww3.gnulahd.nu/wp-content/uploads/2026/07/cropped-favicon-32x32-2-192x192.png", headers={"User-Agent": UA, "Referer": "https://ww3.gnulahd.nu/"}, timeout=15)
-          im = Image.open(io.BytesIO(r.content)).convert("RGBA")
-          buf = io.BytesIO()
-          im.save(buf, format="PNG", optimize=True)
-          b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-          open("/tmp/fav.b64", "w").write(b64)
-          for i in range(0, min(len(b64), 21000), 3500):
-              print(f"::notice::FAV_{i//3500:02d}=" + b64[i:i+3500])
-          PY
-      - name: Emitir FAV_B64 parte 2
-        run: |
-          python3 - <<'PY'
-          b64 = open("/tmp/fav.b64").read()
-          for i in range(21000, len(b64), 3500):
-              print(f"::notice::FAV_{i//3500:02d}=" + b64[i:i+3500])
+          S = requests.Session()
+          S.headers.update({"User-Agent": UA, "Accept-Language": "es-419,es;q=0.9"})
+          def one(s): return re.sub(r"\s+", " ", s or "").strip()
+
+          for label, u in [
+              ("ANIME_CARD", "https://ww3.gnulahd.nu/ver/anime/"),
+              ("MOVIE_CARD", "https://ww3.gnulahd.nu/ver/peliculas/"),
+              ("SOON_CARD", "https://ww3.gnulahd.nu/proximos-estrenos/"),
+          ]:
+              soup = BeautifulSoup(S.get(u, timeout=15).text, "html.parser")
+              c = soup.select_one("a.gnrd-card")
+              more = soup.select_one("div.gnrd-more-wrap a.gnrd-loadmore")
+              print(f"::notice::{label}=" + one(str(c))[:1200] + " || MORE=" + one(str(more))[:400])
+
+          # Genre pagination link check
+          gsoup = BeautifulSoup(S.get("https://ww3.gnulahd.nu/genres/accion/", timeout=15).text, "html.parser")
+          print("::notice::GENRE_MORE=" + one(str(gsoup.select_one("div.gnrd-more-wrap")))[:600])
+
+          # Movie detail (first movie from /ver/peliculas/)
+          msoup0 = BeautifulSoup(S.get("https://ww3.gnulahd.nu/ver/peliculas/", timeout=15).text, "html.parser")
+          mu = msoup0.select_one("a.gnrd-card")["href"]
+          msoup = BeautifulSoup(S.get(mu, timeout=15).text, "html.parser")
+          trigger = msoup.select("[data-id][data-t]")
+          qfacts = one(str(msoup.select_one(".gnrd-qfacts")))
+          infs = " | ".join(one(str(x)) for x in msoup.select(".gnrd-info-row")[:4])
+          cast = one(str(msoup.select_one(".gnrd-castc")))
+          ey = one(msoup.select_one(".gnrd-eyebrow").get_text(" ", strip=True) if msoup.select_one(".gnrd-eyebrow") else "")
+          tr = one(str(msoup.select_one(".gnrd-trailer")))
+          print(f"::notice::MOVIE[{mu}]=ey:{ey} || triggers:{one(str(trigger))[:400]} || tr:{tr[:200]}")
+          print(f"::notice::MOVIE_META=qfacts:{qfacts[:600]} || info:{infs[:700]} || cast:{cast[:500]}")
+
+          # Series ep card + episode standalone page
+          tsoup = BeautifulSoup(S.get("https://ww3.gnulahd.nu/ver/the-crown/", timeout=15).text, "html.parser")
+          epc = tsoup.select_one("a.gnrd-epc")
+          ep_u = epc["href"]
+          esoup = BeautifulSoup(S.get(ep_u, timeout=15).text, "html.parser")
+          ep_triggers = one(str(esoup.select("[data-id][data-t]")))
+          ep_bc = one(str(esoup.select_one("nav, .gnrd-bc, .breadcrumb, .gnrd-ep-nav, a[href*='/ver/the-crown/']")))
+          print("::notice::EP_CARD_FULL=" + one(str(epc))[:1400])
+          print(f"::notice::EP_PAGE[{ep_u}]=triggers:{ep_triggers[:500]} || back:{ep_bc[:600]}")
+
+          # Upcoming detail
+          ssoup0 = BeautifulSoup(S.get("https://ww3.gnulahd.nu/proximos-estrenos/", timeout=15).text, "html.parser")
+          su = ssoup0.select_one("a.gnrd-card")["href"]
+          ssoup = BeautifulSoup(S.get(su, timeout=15).text, "html.parser")
+          strig = one(str(ssoup.select("[data-id][data-t]")))
+          sey = one(ssoup.select_one(".gnrd-eyebrow").get_text(" ", strip=True) if ssoup.select_one(".gnrd-eyebrow") else "")
+          strl = one(str(ssoup.select_one(".gnrd-trailer")))
+          print(f"::notice::SOON[{su}]=ey:{sey} || triggers:{strig[:300]} || tr:{strl[:250]}")
           PY
