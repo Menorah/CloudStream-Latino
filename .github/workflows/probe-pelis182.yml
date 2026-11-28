@@ -1,6 +1,11 @@
 name: Probe Pelis182
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'arena/**'
+    paths:
+      - '.github/workflows/probe-pelis182.yml'
 permissions:
   contents: read
 jobs:
