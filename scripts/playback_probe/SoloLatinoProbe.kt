@@ -71,6 +71,77 @@ object PlaybackProbe {
                         }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
                     }
                     Log.i("CSPlaybackProbe", "PRECHECK ua=[${sysUa.take(90)}] okhttp=[$preOkHttp] webview=[$preWebView] cfk=[$preCfKiller]")
+
+                    // Direct PSH & Embed69 Android probe (runs regardless of Azure Turnstile on sololatino.net)
+                    val directPshLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                    val pshOk = withContext(Dispatchers.IO) {
+                        SoloLatinoPelisSeriesHoyExtractor.extractWithClient(
+                            provider.client,
+                            "https://player.pelisserieshoy.com/f/tt1190634-5x08",
+                            "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                            "Latino",
+                            {},
+                            { directPshLinks.add(it) },
+                        )
+                    }
+                    val pshDiag = if (directPshLinks.isEmpty()) {
+                        val rawHttp = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val r = com.lagradost.cloudstream3.app.get(
+                                    "https://player.pelisserieshoy.com/f/tt1190634-5x08",
+                                    referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                                    headers = SoloLatinoSessionHelper.buildBrowserHeaders(sysUa, "https://sololatino.net/"),
+                                    timeout = 15L,
+                                )
+                                "http=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} hasT=${r.text.contains("_t")}"
+                            }.getOrElse { e -> "err=${e.javaClass.simpleName}:${e.message}" }
+                        }
+                        " empty($rawHttp)"
+                    } else ""
+                    Log.i("CSPlaybackProbe", "DIRECT_PSH ok=$pshOk count=${directPshLinks.size} names=${directPshLinks.take(4).map { it.name }}$pshDiag")
+
+                    val directE69Links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                    val e69Ok = withContext(Dispatchers.IO) {
+                        SoloLatinoEmbed69Resolver.extract(
+                            "https://embed69.org/f/tt45368240",
+                            "https://sololatino.net/pelicula/street-fighter",
+                            "Latino",
+                            {},
+                            { directE69Links.add(it) },
+                            client = provider.client,
+                        )
+                    }
+                    val e69Diag = if (directE69Links.isEmpty()) {
+                        val rawE69 = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val r = provider.client.fetchExternalHtml("https://embed69.org/f/tt45368240", "https://sololatino.net/") { t ->
+                                    val h = SoloLatinoMarkup.hostOf(t)
+                                    h == "embed69.org" || h.endsWith(".embed69.org")
+                                }
+                                "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} dl=${r.text.contains("dataLink")}"
+                            }.getOrElse { e -> "err=${e.javaClass.simpleName}:${e.message}" }
+                        }
+                        " empty($rawE69)"
+                    } else ""
+                    Log.i("CSPlaybackProbe", "DIRECT_E69 ok=$e69Ok count=${directE69Links.size} names=${directE69Links.take(5).map { it.name }}$e69Diag")
+
+                    for ((kind, list) in listOf("direct-psh" to directPshLinks.toList(), "direct-e69" to directE69Links.toList())) {
+                        if (list.isEmpty()) continue
+                        var okPlay = false
+                        val errs = mutableListOf<String>()
+                        for (lnk in list.take(5)) {
+                            try {
+                                play(context, lnk)
+                                okPlay = true
+                                Log.i("CSPlaybackProbe", "PASS playback $kind via ${lnk.name}")
+                                break
+                            } catch (t: Throwable) {
+                                errs.add("${lnk.name}:${t.javaClass.simpleName}:${t.message?.take(80)}")
+                            }
+                        }
+                        if (!okPlay) Log.i("CSPlaybackProbe", "DIRECT_PLAY_FAIL $kind errs=$errs")
+                    }
+
                     val started = android.os.SystemClock.elapsedRealtime()
 
                     val coreSectionData = setOf(

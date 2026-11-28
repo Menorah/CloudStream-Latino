@@ -490,7 +490,7 @@ internal object SoloLatinoWebTransport {
 
                     private fun checkReady(view: WebView, url: String, expectedGen: Int) {
                         if (finished.get() || generation != expectedGen) return
-                        val inspect = "JSON.stringify({url:location.href,ready:document.readyState,title:document.title||'',text:(document.documentElement?document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1}):'')})"
+                        val inspect = "JSON.stringify({url:location.href,ready:document.readyState,title:document.title||'',body:(document.body?document.body.innerText:'').slice(0,120),text:(document.documentElement?document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1}):'')})"
                         runCatching {
                             view.evaluateJavascript(inspect) { raw ->
                                 if (finished.get() || generation != expectedGen) return@evaluateJavascript
@@ -502,8 +502,9 @@ internal object SoloLatinoWebTransport {
                                 val pageText = page.optString("text")
                                 val readyState = page.optString("ready")
                                 val title = page.optString("title")
+                                val bodySample = page.optString("body").replace(Regex("\\s+"), " ").trim()
                                 val isCf = SoloLatinoSessionHelper.looksLikeCloudflareChallenge(httpStatus, pageText)
-                                lastDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(40)} url=${pageUrl.take(80)} len=${pageText.length}"
+                                lastDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(40)} body=${bodySample.take(80)} url=${pageUrl.take(80)} len=${pageText.length}"
                                 if (isCf) {
                                     handler.postDelayed({ checkReady(view, url, expectedGen) }, 350L)
                                     return@evaluateJavascript

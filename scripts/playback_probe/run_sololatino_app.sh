@@ -65,14 +65,14 @@ for i in $(seq 1 130); do
   log=$(adb logcat -d -s CSPlaybackProbe:V '*:S' || true)
   if echo "$log" | grep -q 'PASS all'; then
     echo "$log"
-    summary=$(echo "$log" | grep -E 'STAGE |PRECHECK |home sections=|PASS home|PASS coil|DIAG |DIAG_|loadLinks |PASS playback|SUMMARY |PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g' || true)
+    summary=$(echo "$log" | grep -E 'STAGE |PRECHECK |DIRECT_|home sections=|PASS home|PASS coil|DIAG |DIAG_|loadLinks |PASS playback|SUMMARY |PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g' || true)
     echo "::notice::$summary"
     echo '::notice::CloudStream comprobó SoloLatino y reprodujo las muestras con Media3'
     exit 0
   fi
   if echo "$log" | grep -q 'FAIL '; then
     echo "$log"
-    summary=$(echo "$log" | grep -E 'STAGE |PRECHECK |home sections=|PASS home|PASS coil|DIAG |DIAG_|loadLinks |PASS playback|SUMMARY ' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g' || true)
+    summary=$(echo "$log" | grep -E 'STAGE |PRECHECK |DIRECT_|home sections=|PASS home|PASS coil|DIAG |DIAG_|loadLinks |PASS playback|SUMMARY ' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g' || true)
     if [ -n "$summary" ]; then echo "::notice::$summary"; fi
     fail_line=$(echo "$log" | grep -E 'FAIL |Caused by:|Exception|Error:' | tail -8 | tr '\n' '|' | sed -e 's/%/%25/g' || true)
     echo "::error::$fail_line"
