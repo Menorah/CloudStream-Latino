@@ -1,0 +1,151 @@
+name: Probe SoloLatino
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'arena/**'
+    paths:
+      - '.github/workflows/probe-sololatino.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup deps
+        shell: bash
+        run: python3 -m pip install -q beautifulsoup4 pillow
+
+      - name: Download, unpack, and deeply analyze sololatino.net.zip and live site
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import urllib.request, urllib.parse, zipfile, pathlib, re, os, json, base64, io
+          from bs4 import BeautifulSoup
+
+          def notice(tag, msg):
+              s = f"[{tag}] " + msg
+              chunk_size = 3500
+              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
+              for idx, part in enumerate(parts):
+                  if len(parts) > 1:
+                      raw_body = part if idx > 0 else part[len(f"[{tag}] "):]
+                      out = f"[{tag}#{idx+1}/{len(parts)}] " + raw_body
+                  else:
+                      out = part
+                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print("::notice::" + out[:3900])
+
+          def fetch_raw(url, headers=None):
+              hdrs = {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                  "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
+              }
+              if headers:
+                  hdrs.update(headers)
+              req = urllib.request.Request(url, headers=hdrs)
+              try:
+                  with urllib.request.urlopen(req, timeout=25) as r:
+                      return r.status, r.geturl(), dict(r.headers), r.read()
+              except Exception as e:
+                  body = b""
+                  try:
+                      if hasattr(e, 'read'):
+                          body = e.read()
+                  except Exception:
+                      pass
+                  return getattr(e, 'code', -1), url, dict(getattr(e, 'headers', {}) or {}), body or str(e).encode()
+
+          # 1. Download and unzip sololatino.net.zip
+          zip_url = "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
+          st, final_u, hdrs, zb = fetch_raw(zip_url)
+          notice("ZIP_DL", f"status={st} final={final_u} bytes={len(zb)} ct={hdrs.get('Content-Type')}")
+          pathlib.Path("/tmp/sl.zip").write_bytes(zb)
+          extract_dir = pathlib.Path("/tmp/sl_unzip")
+          extract_dir.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile("/tmp/sl.zip") as zf:
+              zf.extractall(extract_dir)
+
+          all_files = sorted([p for p in extract_dir.rglob("*") if p.is_file()])
+          inv_lines = [f"{p.relative_to(extract_dir)} ({p.stat().st_size} B)" for p in all_files]
+          notice("ZIP_INVENTORY", f"Total files={len(all_files)}\n" + "\n".join(inv_lines[:150]))
+          if len(inv_lines) > 150:
+              notice("ZIP_INVENTORY_2", "\n".join(inv_lines[150:350]))
+
+          # 2. Analyze every HTML file in the zip
+          html_files = [p for p in all_files if p.suffix.lower() in ('.html', '.htm')]
+          for hp in html_files:
+              rel = str(hp.relative_to(extract_dir))
+              raw = hp.read_text(encoding='utf-8', errors='replace')
+              soup = BeautifulSoup(raw, 'html.parser')
+              title = soup.title.get_text(strip=True) if soup.title else ''
+              canonical = (soup.select_one('link[rel=canonical]') or {}).get('href', '')
+              icons = [(l.get('rel'), l.get('href'), l.get('sizes')) for l in soup.select('link[rel*="icon"]')]
+              forms = [f"action={f.get('action')} method={f.get('method')} inputs={[(i.get('name'), i.get('type'), i.get('placeholder')) for i in f.select('input')]}" for f in soup.select('form')]
+              nav_links = []
+              for a in soup.select('header a[href], nav a[href]'):
+                  nav_links.append((a.get_text(strip=True), a.get('href')))
+              scripts = [s.get('src') for s in soup.select('script[src]')]
+              inline_scripts = [s.get_text() for s in soup.select('script:not([src])') if s.get_text(strip=True)]
+              lds = [s.get_text(strip=True)[:400] for s in soup.select('script[type="application/ld+json"]')]
+
+              data_attrs = set()
+              for el in soup.find_all(True):
+                  for k in el.attrs:
+                      if k.startswith('data-'):
+                          data_attrs.add(f"{el.name}[{k}]")
+
+              buttons = [f"{b.get('class')} | text={b.get_text(strip=True)[:40]} | attrs={ {k:v for k,v in b.attrs.items() if k != 'class'} }" for b in soup.select('button, [data-player-token], [data-iframe], [data-url], [data-id], [data-server], [data-lang]')[:25]]
+              iframes = [f"{ {k:v for k,v in f.attrs.items()} }" for f in soup.select('iframe')[:15]]
+              pagination = [str(p)[:250] for p in soup.select('.pagination, nav[aria-label*="Pag"], a.next, a[rel="next"], ul.page-numbers, .nav-links')[:4]]
+
+              card_candidates = []
+              for sel in ['article', '[class*="card"]', '[class*="poster"]', '[class*="item"]', '[class*="movie"]', '[class*="serie"]', '.grid > div', '.grid > a']:
+                  found = soup.select(sel)
+                  if len(found) >= 3:
+                      card_candidates.append((sel, len(found), str(found[0])[:700]))
+                      if len(card_candidates) >= 4:
+                          break
+
+              inline_summary = "\n---INLINE---\n".join(sc[:1200] for sc in inline_scripts if any(k in sc.lower() for k in ['api', 'player', 'token', 'render', 'fetch', 'axios', 'sanctum', 'xsrf', 'episode', 'season', 'server', 'embed', 'url', 'search']))
+              msg = (
+                  f"FILE: {rel} ({len(raw)} chars)\n"
+                  f"TITLE: {title}\nCANONICAL: {canonical}\nICONS: {icons}\n"
+                  f"FORMS: {forms}\nNAV: {nav_links[:25]}\n"
+                  f"SCRIPTS_SRC: {scripts}\nJSON_LD: {lds}\n"
+                  f"DATA_ATTRS: {sorted(data_attrs)[:60]}\n"
+                  f"BUTTONS_SAMPLE:\n  " + "\n  ".join(buttons[:15]) + "\n"
+                  f"IFRAMES: {iframes}\n"
+                  f"PAGINATION: {pagination}\n"
+                  f"CARDS: {[(c[0], c[1]) for c in card_candidates]}\n"
+                  + "\n".join(f"CARD_HTML[{c[0]}]:\n{c[2]}" for c in card_candidates[:2])
+                  + (f"\nRELEVANT_INLINE_SCRIPTS:\n{inline_summary}" if inline_summary else "")
+              )
+              notice(f"HTML_{rel}", msg)
+
+          # 3. Analyze JS files in the zip
+          js_files = [p for p in all_files if p.suffix.lower() in ('.js', '.mjs') and p.stat().st_size < 1_500_000]
+          for jp in js_files:
+              rel = str(jp.relative_to(extract_dir))
+              js = jp.read_text(encoding='utf-8', errors='replace')
+              keywords = ['player', 'token', 'sanctum', 'render', 'shield', '/api/', 'xsrf', 'embed', 'decrypt', 'episode', 'season', 'buscar', 'search']
+              hits = [kw for kw in keywords if kw in js.lower()]
+              if hits:
+                  snippets = []
+                  for kw in ['api/player', 'sanctum', 'x-sl-render', 'render_shield', 'data-player-token', '/api/', 'fetch(', 'axios', 'player-url', 'server-btn', 'data-lang-group', 'decrypt']:
+                      idx = js.lower().find(kw)
+                      if idx != -1:
+                          snippets.append(f"[{kw}@{idx}]: " + js[max(0, idx-300):idx+600])
+                  notice(f"JS_{rel}", f"size={len(js)} hits={hits}\n" + "\n---\n".join(snippets[:10]))
+
+          # 4. Live probe of sololatino.net
+          for path in ["/", "/peliculas", "/series", "/animes", "/pelicula/street-fighter", "/serie/dexter-resurreccion", "/buscar?q=blade"]:
+              u = "https://sololatino.net" + path
+              st, fu, rh, body = fetch_raw(u)
+              txt = body.decode('utf-8', 'replace')
+              cf = {k: v for k, v in rh.items() if 'cf-' in k.lower() or 'server' in k.lower() or 'set-cookie' in k.lower()}
+              ls = BeautifulSoup(txt, 'html.parser')
+              btns = len(ls.select('[data-player-token]'))
+              js_srcs = [s.get('src') for s in ls.select('script[src]')]
+              notice(f"LIVE_{path}", f"st={st} final={fu} len={len(txt)} cf={cf} data_player_btns={btns} scripts={js_srcs[:12]}")
+          PY
