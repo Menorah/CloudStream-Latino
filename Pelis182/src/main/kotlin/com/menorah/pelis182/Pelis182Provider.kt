@@ -265,7 +265,7 @@ class Pelis182Provider : MainAPI() {
             }
         }
 
-        val mightHaveMoreSeasons = (detail.seasonNumber ?: 0) >= 2 || siblingUrls.isNotEmpty()
+        val mightHaveMoreSeasons = detail.seasonNumber != null || siblingUrls.isNotEmpty()
         if (mightHaveMoreSeasons) {
             val searchUrl = Pelis182Markup.buildSearchUrl(detail.title, 1, mainUrl)
             val searchHtml = getText(searchUrl, timeoutSec = 10L)
