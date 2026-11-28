@@ -1,4 +1,4 @@
-name: Probe SoloLatino Players And Details 3
+name: Probe SoloLatino Catalogs, Icons, And PSH Live
 on:
   workflow_dispatch:
   push:
@@ -9,169 +9,10 @@ on:
 permissions:
   contents: read
 jobs:
-  job_psh_js:
+  job_catalogs_and_icons:
     runs-on: ubuntu-latest
     steps:
-      - name: Download zip and dump player.pelisserieshoy.com full player script
-        shell: bash
-        run: |
-          python3 -m pip install -q beautifulsoup4
-          python3 - <<'PY'
-          import urllib.request, zipfile, pathlib, re, traceback
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              chunk_size = 3500
-              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
-              for idx, part in enumerate(parts):
-                  body = part if idx > 0 else part[len(f"[{tag}] "):]
-                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
-                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print("::notice::" + out[:3900])
-
-          try:
-              UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-              page_url = "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip"
-              html = urllib.request.urlopen(urllib.request.Request(page_url, headers={"User-Agent": UA}), timeout=30).read().decode('utf-8', 'replace')
-              m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', html)
-              zip_url = m.group(0) if m else "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
-              if zip_url.startswith("http://"):
-                  zip_url = "https://" + zip_url[7:]
-              req = urllib.request.Request(zip_url, headers={"User-Agent": UA, "Referer": page_url})
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  data = r.read()
-              pathlib.Path("/tmp/sl.zip").write_bytes(data)
-              d = pathlib.Path("/tmp/sl_unzip")
-              d.mkdir(parents=True, exist_ok=True)
-              with zipfile.ZipFile("/tmp/sl.zip") as zf:
-                  zf.extractall(d)
-
-              txt = next(d.rglob("tt1190634-5x08.html")).read_text(encoding='utf-8', errors='replace')
-              idx = txt.find("const _t =")
-              if idx == -1:
-                  idx = txt.find("_dlOptions")
-              tail = txt[max(0, idx - 200):]
-              notice("PSH_LEN", f"total={len(tail)}, idx={idx}, url={zip_url}")
-              notice("PSH_FULL_TAIL_1", tail[:31000])
-          except Exception as e:
-              notice("ERR_PSH", f"{e}\n{traceback.format_exc()[:2000]}")
-              raise
-          PY
-      - name: Dump second half of player.pelisserieshoy.com and extra iframe files
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, traceback
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              chunk_size = 3500
-              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
-              for idx, part in enumerate(parts):
-                  body = part if idx > 0 else part[len(f"[{tag}] "):]
-                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
-                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print("::notice::" + out[:3900])
-
-          try:
-              d = pathlib.Path("/tmp/sl_unzip")
-              txt = next(d.rglob("tt1190634-5x08.html")).read_text(encoding='utf-8', errors='replace')
-              idx = txt.find("const _t =")
-              tail = txt[max(0, idx - 200):]
-              if len(tail) > 31000:
-                  notice("PSH_FULL_TAIL_2", tail[31000:60000])
-              else:
-                  notice("PSH_FULL_TAIL_2", "NO_MORE")
-
-              voe = next(d.rglob("84emedzn9bzh.html"), None)
-              if voe:
-                  notice("VOE_HTML", voe.read_text(encoding='utf-8', errors='replace')[:3400])
-              sr = list(d.rglob("saved_resource*.html"))
-              notice("SAVED_RES", str([(str(p.relative_to(d)), p.read_text(encoding='utf-8', errors='replace')[:600]) for p in sr]))
-          except Exception as e:
-              notice("ERR_PSH2", f"{e}\n{traceback.format_exc()[:2000]}")
-              raise
-          PY
-
-  job_embed69_and_decrypt:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Inspect embed69 full script and test live AES decrypt on embed69.org
-        shell: bash
-        run: |
-          python3 -m pip install -q cryptography beautifulsoup4
-          python3 - <<'PY'
-          import urllib.request, zipfile, pathlib, re, json, hashlib, base64, traceback
-          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-          from cryptography.hazmat.primitives import padding
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              chunk_size = 3500
-              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
-              for idx, part in enumerate(parts):
-                  body = part if idx > 0 else part[len(f"[{tag}] "):]
-                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
-                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print("::notice::" + out[:3900])
-
-          try:
-              UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-              page_url = "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip"
-              html_p = urllib.request.urlopen(urllib.request.Request(page_url, headers={"User-Agent": UA}), timeout=30).read().decode('utf-8', 'replace')
-              m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', html_p)
-              zip_url = m.group(0) if m else "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
-              if zip_url.startswith("http://"):
-                  zip_url = "https://" + zip_url[7:]
-              with urllib.request.urlopen(urllib.request.Request(zip_url, headers={"User-Agent": UA, "Referer": page_url}), timeout=60) as r:
-                  pathlib.Path("/tmp/sl.zip").write_bytes(r.read())
-              d = pathlib.Path("/tmp/sl_unzip")
-              d.mkdir(parents=True, exist_ok=True)
-              with zipfile.ZipFile("/tmp/sl.zip") as zf:
-                  zf.extractall(d)
-
-              txt = next(d.rglob("tt45368240.html")).read_text(encoding='utf-8', errors='replace')
-              idx = txt.find("changeLanguage(")
-              notice("E69_TAIL", txt[idx:idx+24000])
-
-              results = []
-              for u in ["https://embed69.org/f/tt45368240", "https://embed69.org/f/tt1190634-5x08"]:
-                  req = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": "https://sololatino.net/"})
-                  with urllib.request.urlopen(req, timeout=20) as resp:
-                      html = resp.read().decode('utf-8', 'replace')
-                  dl_m = re.search(r'let\s+dataLink\s*=\s*(\[.*?\]);', html, re.S)
-                  ch_m = re.search(r"LINK_CHALLENGE\s*=\s*['\"]([^'\"]+)['\"]", html)
-                  sa_m = re.search(r"LINK_SALT\s*=\s*['\"]([^'\"]+)['\"]", html)
-                  if dl_m and ch_m and sa_m:
-                      key = hashlib.sha256((ch_m.group(1) + sa_m.group(1)).encode('utf-8')).digest()
-                      dl = json.loads(dl_m.group(1))
-                      dec_out = []
-                      for item in dl:
-                          lang = item.get('video_language')
-                          for srv in item.get('sortedEmbeds', []):
-                              enc = srv.get('link')
-                              if isinstance(enc, dict):
-                                  enc = enc.get('link')
-                              raw = base64.b64decode(enc)
-                              iv, ct = raw[:16], raw[16:]
-                              dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-                              padded = dec.update(ct) + dec.finalize()
-                              unp = padding.PKCS7(128).unpadder()
-                              plain = (unp.update(padded) + unp.finalize()).decode('utf-8', 'replace')
-                              dec_out.append((lang, srv.get('servername'), plain))
-                      results.append(f"{u} -> {dec_out}")
-                  else:
-                      results.append(f"{u} -> missing dl={bool(dl_m)} ch={bool(ch_m)} sa={bool(sa_m)}")
-              notice("E69_LIVE_DECRYPT", "\n".join(results))
-          except Exception as e:
-              notice("ERR_E69", f"{e}\n{traceback.format_exc()[:2000]}")
-              raise
-          PY
-
-  job_zip_remaining_details:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Inspect Home genres/platforms, The Boys seasons/ep pagination, Movie recommendations, and inline JS
+      - name: Check peliculas/series/plataformas HTML, main.js summary, and all logo/favicon files in zip
         shell: bash
         run: |
           python3 -m pip install -q beautifulsoup4
@@ -192,9 +33,9 @@ jobs:
           try:
               UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
               page_url = "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip"
-              html_p = urllib.request.urlopen(urllib.request.Request(page_url, headers={"User-Agent": UA}), timeout=30).read().decode('utf-8', 'replace')
-              m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', html_p)
-              zip_url = m.group(0) if m else "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
+              html = urllib.request.urlopen(urllib.request.Request(page_url, headers={"User-Agent": UA}), timeout=30).read().decode('utf-8', 'replace')
+              m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', html)
+              zip_url = m.group(0)
               if zip_url.startswith("http://"):
                   zip_url = "https://" + zip_url[7:]
               with urllib.request.urlopen(urllib.request.Request(zip_url, headers={"User-Agent": UA, "Referer": page_url}), timeout=60) as r:
@@ -202,37 +43,119 @@ jobs:
               d = pathlib.Path("/tmp/sl_unzip")
               d.mkdir(parents=True, exist_ok=True)
               with zipfile.ZipFile("/tmp/sl.zip") as zf:
+                  all_names = zf.namelist()
                   zf.extractall(d)
 
+              # 1. Check all filenames mentioning logo, icon, favicon, apple, brand, main.js
+              interesting_files = [n for n in all_names if any(k in n.lower() for k in ['logo', 'icon', 'fav', 'apple', 'main.js', 'sololatino'])]
+              notice("FILES_INTEREST", str(interesting_files[:80]))
+
+              # 2. Check Películas, Series, Doramas, Netflix catalogs
+              cat_info = []
+              for pat in ["*Películas en Latino*.html", "*Series en Latino*.html", "*Doramas Online*.html", "*Netflix*.html"]:
+                  matches = list(d.rglob(pat))
+                  if not matches:
+                      continue
+                  p = matches[0]
+                  soup = BeautifulSoup(p.read_text(encoding='utf-8', errors='replace'), 'html.parser')
+                  sels = [(s.get('name'), [o.get('value') for o in s.select('option')[:10]]) for s in soup.select('select')]
+                  cards = [c.select_one('a[href]').get('href') for c in soup.select('.card')[:3] if c.select_one('a[href]')]
+                  pages = [(a.get_text(strip=True), a.get('href')) for a in soup.select('nav.pagination a[href]')]
+                  cat_info.append(f"{p.name}: cards={len(soup.select('.card'))}, selects={sels}, pages={pages}, sample={cards}")
+              notice("CAT_COMPARE", "\n".join(cat_info))
+
+              # 3. Check <head> link icons on home HTML
               hs = BeautifulSoup(next(d.rglob("*Ver películas y series completas*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
-              gen_links = [(a.get_text(strip=True), a.get('href')) for a in hs.select('a[href*="/genero/"]')]
-              red_links = [(a.get_text(strip=True), a.get('href')) for a in hs.select('a[href*="/red/"]')]
-              ep_cards = [str(x)[:450] for x in hs.select('.ep-card')[:2]]
-              sec_samples = []
-              for sec in hs.select('main section'):
-                  h = sec.select_one('h2, h3')
-                  ht = h.get_text(strip=True) if h else '(hero)'
-                  cards = sec.select('.card')
-                  eps = sec.select('.ep-card')
-                  sec_samples.append(f"'{ht}': .card={len(cards)}, .ep-card={len(eps)}")
-              notice("HOME_MAP", f"SECS={sec_samples}\nGENRES={sorted(set(gen_links))}\nREDS={sorted(set(red_links))}\nEP_CARD_SAMPLE={ep_cards}")
+              head_links = [(l.get('rel'), l.get('href'), l.get('type'), l.get('sizes')) for l in hs.select('head link, head meta[property="og:image"], head meta[name="theme-color"]')]
+              notice("HEAD_META", str(head_links))
 
-              ss = BeautifulSoup(next(d.rglob("*The Boys (2019)*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
-              spanels = [(p.get('data-season-panel'), len(p.select('.ep-item')), str(p.select_one('.ep-item'))[:400]) for p in ss.select('[data-season-panel]')]
-              s_recs = [a.get('href') for a in ss.select('.card a[href]')]
-              s_inlines = [sc.get_text()[:1200] for sc in ss.select('script:not([src])') if 'season' in sc.get_text().lower() or 'player' in sc.get_text().lower()]
-              notice("SERIES_PANELS_AND_RECS", f"PANELS={spanels}\nRECS={s_recs[:15]}\nINLINES={s_inlines}")
-
-              es = BeautifulSoup(next(d.rglob("*The Boys T5E08 Online en Latino*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
-              e_links = [(a.get_text(strip=True)[:40], a.get('href')) for a in es.select('main a[href]')]
-              e_inlines = [sc.get_text() for sc in es.select('script:not([src])') if 'SL_' in sc.get_text() or 'player' in sc.get_text().lower()]
-              notice("EP_LINKS_AND_INLINES", f"MAIN_LINKS={e_links[:40]}\nINLINES={e_inlines}")
-
-              ms = BeautifulSoup(next(d.rglob("*Ver Puedes verlo todo*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
-              m_recs = [(a.get_text(strip=True)[:40], a.get('href')) for a in ms.select('.card a[href]')]
-              m_inlines = [sc.get_text() for sc in ms.select('script:not([src])') if 'SL_' in sc.get_text() or 'trailer' in sc.get_text().lower() or 'player' in sc.get_text().lower()]
-              notice("MOVIE_EXTRA", f"RECS={m_recs[:15]}\nINLINES={m_inlines}")
+              # 4. Check main.js content summary (from peliculas/home vs episode)
+              mjs = sorted(set(str(p.relative_to(d)) for p in d.rglob("main.js*")))
+              mjs_first = next(d.rglob("main.js*")).read_text(encoding='utf-8', errors='replace')
+              notice("MAIN_JS", f"paths={mjs} len={len(mjs_first)} body={mjs_first[:2800]}")
           except Exception as e:
-              notice("ERR_ZIP", f"{e}\n{traceback.format_exc()[:2000]}")
+              notice("ERR_CAT", f"{e}\n{traceback.format_exc()[:2000]}")
               raise
+          PY
+
+  job_test_psh_and_embed_hosts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test player.pelisserieshoy.com WITH ?et= and test decrypted embed69 host URLs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import urllib.request, urllib.parse, json, re, traceback
+
+          def notice(tag, msg):
+              s = f"[{tag}] " + msg
+              chunk_size = 3500
+              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
+              for idx, part in enumerate(parts):
+                  body = part if idx > 0 else part[len(f"[{tag}] "):]
+                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
+                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print("::notice::" + out[:3900])
+
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          psh_urls = [
+              "https://player.pelisserieshoy.com/f/tt45368240?et=v1.1795827577.b90cf4b0e066.00876d05fb420b1e0d10a8d34dc3b3f9",
+              "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=v1.1795827861.2901faf003fb.c16b0266335d585b68a63f8ddde1e959",
+          ]
+          out = []
+          for u in psh_urls:
+              try:
+                  req = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": "https://sololatino.net/"})
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      html = resp.read().decode('utf-8', 'replace')
+                  t_m = re.search(r"const\s+_t\s*=\s*'([^']+)'", html)
+                  qc_m = re.search(r'var\s+_qc\s*=\s*"([^"]+)"', html)
+                  qk_m = re.search(r'var\s+_qk\s*=\s*(\[[^\]]+\])', html)
+                  out.append(f"GET {u[:65]} -> st={resp.status} len={len(html)} _t={t_m.group(1) if t_m else None} _qc={qc_m.group(1) if qc_m else None} _qk={qk_m.group(1) if qk_m else None}")
+                  if t_m and qc_m and qk_m:
+                      tok = t_m.group(1)
+                      qc = qc_m.group(1)
+                      qk = json.loads(qk_m.group(1))
+                      qv = qk[1] + qk[3] + qk[0] + qk[2]
+                      s = f"{qv}|clk|{qc}"
+                      h = 2166136261
+                      for ch in s:
+                          h ^= ord(ch)
+                          h = (h * 16777619) & 0xFFFFFFFF
+                      qt = format(h, 'x')
+                      body1 = urllib.parse.urlencode({'a': '1', 'tok': tok, 'rt': qv, 'tk': qt, 'ao': 'https://sololatino.net'}).encode()
+                      req1 = urllib.request.Request("https://player.pelisserieshoy.com/s.php", data=body1, headers={
+                          "User-Agent": UA, "Referer": u, "Origin": "https://player.pelisserieshoy.com"
+                      })
+                      with urllib.request.urlopen(req1, timeout=20) as r1:
+                          j1 = json.loads(r1.read().decode('utf-8', 'replace'))
+                      out.append(f"  s.php a=1 -> keys={list(j1.keys())} s={j1.get('s')} langs_s={j1.get('langs_s')} src={j1.get('src')}")
+                      # Also test click + a=2 on first server
+                      if j1.get('s'):
+                          body_c = urllib.parse.urlencode({'a': 'click', 'tok': tok, 'ts': '1', 'rt': qv, 'tk': qt, 'ao': 'https://sololatino.net'}).encode()
+                          req_c = urllib.request.Request("https://player.pelisserieshoy.com/s.php", data=body_c, headers={
+                              "User-Agent": UA, "Referer": u, "Origin": "https://player.pelisserieshoy.com"
+                          })
+                          with urllib.request.urlopen(req_c, timeout=15) as rc:
+                              out.append(f"  s.php click -> {rc.read().decode('utf-8','replace')[:200]}")
+                          for lbl, srv in (j1.get('s') or [])[:3]:
+                              body2 = urllib.parse.urlencode({'a': '2', 'v': srv, 'tok': tok, 'rt': qv, 'tk': qt, 'ao': 'https://sololatino.net'}).encode()
+                              req2 = urllib.request.Request("https://player.pelisserieshoy.com/s.php", data=body2, headers={
+                                  "User-Agent": UA, "Referer": u, "Origin": "https://player.pelisserieshoy.com"
+                              })
+                              with urllib.request.urlopen(req2, timeout=20) as r2:
+                                  out.append(f"  s.php a=2 ({lbl}) -> {r2.read().decode('utf-8','replace')[:400]}")
+              except Exception as e:
+                  out.append(f"GET {u[:65]} -> ERR {e}")
+
+          # Also test fetching the decrypted embed69 targets
+          for eu in ["https://morencius.com/embed/1ywkwa2abeeu", "https://voe.sx/e/basmjvog9k1o", "https://hglink.to/e/s405k8cf50j9"]:
+              try:
+                  req = urllib.request.Request(eu, headers={"User-Agent": UA, "Referer": "https://embed69.org/"})
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      body = resp.read().decode('utf-8', 'replace')
+                  out.append(f"HOST {eu} -> st={resp.status} final={resp.geturl()} len={len(body)} title={re.findall(r'<title>(.*?)</title>', body, re.S)[:1]}")
+              except Exception as e:
+                  out.append(f"HOST {eu} -> ERR {e}")
+          notice("PSH_AND_HOSTS_LIVE", "\n".join(out))
           PY
