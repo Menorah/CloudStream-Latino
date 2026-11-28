@@ -58,7 +58,7 @@ jobs:
                               }
                           }.awaitAll()
                       }
-                      val firstItem = mainRes.filterNotNull().flatMap { it.items }.firstOrNull()
+                      val firstItem = mainRes.filterNotNull().flatMap { it.items }.flatMap { it.list }.firstOrNull()
                       Log.i("SLRepro", "MAIN_FIRST=${firstItem?.name} url=${firstItem?.url}")
                       // 2. Test search
                       val sr = runCatching { p.search("The Boys") }
@@ -133,6 +133,14 @@ jobs:
           ss = ss.replace(
               target_rg,
               target_rg + ' Log.e("SLReproWV", "RENDER_GONE didCrash=${detail?.didCrash()}"); ',
+          )
+          ss = ss.replace(
+              'val probe = runCatching {\n                SoloLatinoWebTransport.resolvePelisSeriesHoy(',
+              'Log.i("SLReproWV", "PSH_FALLBACK_WEBVIEW url=$embedUrl"); val probe = runCatching {\n                SoloLatinoWebTransport.resolvePelisSeriesHoy(',
+          )
+          ss = ss.replace(
+              'val webRes = runCatching {\n                    SoloLatinoWebTransport.getHtml(',
+              'Log.i("SLReproWV", "SITE_OR_EXT_WEBVIEW url=$url code=$code"); val webRes = runCatching {\n                    SoloLatinoWebTransport.getHtml(',
           )
           open(sp, 'w').write(ss)
           PY
