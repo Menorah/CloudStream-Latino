@@ -947,7 +947,7 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
     }
 
     companion object {
-        suspend fun extract(
+        internal suspend fun extract(
             url: String,
             referer: String?,
             sourceLabel: String = "Voe",
@@ -1168,7 +1168,7 @@ open class SoloLatinoVidHideExtractor : ExtractorApi() {
         )
         private val UNRELIABLE_HOSTS = setOf("vidhidepro.com", "dhtpre.com")
 
-        suspend fun extract(
+        internal suspend fun extract(
             url: String,
             referer: String?,
             sourceLabel: String = "VidHide",
@@ -1302,7 +1302,7 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
         private fun isVsembedUrl(url: String): Boolean =
             runCatching { URI(url).host?.contains("vsembed", ignoreCase = true) == true }.getOrDefault(false)
 
-        suspend fun extract(
+        internal suspend fun extract(
             url: String,
             referer: String?,
             sourceLabel: String = "StreamWish",
