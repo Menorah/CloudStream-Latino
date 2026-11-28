@@ -1,4 +1,4 @@
-name: Inspect PSH Tail End & Android Repro
+name: Repro SoloLatino Android 13
 on:
   push:
     branches:
@@ -6,79 +6,6 @@ on:
 permissions:
   contents: read
 jobs:
-  psh_tail_end:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dump resolveAndPlay + E69_DEC + PSH_403
-        shell: bash
-        run: |
-          python3 -m pip install -q cryptography curl_cffi
-          python3 - <<'PY'
-          import base64, hashlib, pathlib, re, urllib.request, zipfile
-          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-          from cryptography.hazmat.primitives import padding
-          from curl_cffi import requests as cfreq
-
-          DEST = pathlib.Path('/tmp/zip_inspect')
-          DEST.mkdir(parents=True, exist_ok=True)
-          headers = {'User-Agent': 'Mozilla/5.0 Chrome/131.0.0.0', 'Accept': '*/*'}
-          zip_path = pathlib.Path('/tmp/sololatino.net.zip')
-          def fetch_bytes(u):
-              with urllib.request.urlopen(urllib.request.Request(u, headers=headers), timeout=60) as resp:
-                  return resp.read()
-          for cand in ['https://tmpfiles.org/dl/wLAXvg4SCnBj/sololatino.net.zip', 'https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip']:
-              try:
-                  data = fetch_bytes(cand)
-                  if data[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
-                      zip_path.write_bytes(data); break
-                  m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', data.decode('utf-8','replace'))
-                  if m:
-                      data2 = fetch_bytes(m.group(0))
-                      if data2[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
-                          zip_path.write_bytes(data2); break
-              except Exception:
-                  pass
-          with zipfile.ZipFile(zip_path) as zf:
-              zf.extractall(DEST)
-          p = next(x for x in DEST.rglob('tt1190634-5x08.html'))
-          txt = p.read_text('utf-8', 'replace')
-          cleaned = re.sub(r'<style\b[^>]*>[\s\S]*?</style>', '', txt, flags=re.I)
-          idx = cleaned.find("canPlayType('application/vnd.apple.mpe")
-          if idx < 0:
-              idx = cleaned.find('resolveAndPlay')
-          tail = cleaned[idx:] if idx >= 0 else cleaned[-20000:]
-
-          out = [f'=== PSH_END from={idx} len={len(tail)} ===', tail]
-
-          key = hashlib.sha256(b'3cd48b9b8c8c63eb3ac7cf3837cca0d36d07665b9850a0db').digest()
-          for tok in [
-              'wVBFKjxIcb4101hgPHWfZ3HCXKdwBiBzUXIuMX7nFo5rKtrpYcNBjjk7Ne+RWZ4adVDsQ06eoEuu+mQhRqSBPQ==',
-              'VSPBVtRb1Ck1JSN6qzhHLwmiUgy4UG3RK/DqCjiGMSkq8vsadzIfMSUPtc/ODn0W',
-              'KFvRVLBnuL7LuCxP90xnHObJ1to6u7t/sIuJnecIWGT3Y36V6+/d9EJK6HQEaBQ11HNFfIgOGMcBXM9ZK/f76Q==',
-          ]:
-              raw = base64.b64decode(tok)
-              dec = Cipher(algorithms.AES(key), modes.CBC(raw[:16])).decryptor()
-              pt = dec.update(raw[16:]) + dec.finalize()
-              unpadder = padding.PKCS7(128).unpadder()
-              pt = unpadder.update(pt) + unpadder.finalize()
-              u = pt.decode('utf-8', 'replace')
-              try:
-                  r = cfreq.get(u, impersonate='chrome131', headers={'Referer': 'https://embed69.org/'}, timeout=10)
-                  out.append(f'E69_DEC: {u} -> HTTP {r.status_code} len={len(r.text)} snip={re.sub(r"\s+"," ",r.text)[:160]!r}')
-              except Exception as e:
-                  out.append(f'E69_DEC: {u} -> ERR {e}')
-
-          rpsh = cfreq.get('https://player.pelisserieshoy.com/f/tt45368240', impersonate='chrome131', headers={'Referer': 'https://sololatino.net/'}, timeout=12)
-          out.append(f'=== PSH_403 status={rpsh.status_code} ===')
-          out.append(re.sub(r'\s+', ' ', rpsh.text)[:3000])
-
-          full = '\n'.join(out)
-          chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
-          for i, ch in enumerate(chunks[:10]):
-              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f'::notice title=PSH_END_{i:02d}of{len(chunks):02d}::{safe}')
-          PY
-
   android_repro:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -97,7 +24,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           cat > /tmp/run_repro.sh <<'EOF'
           #!/usr/bin/env bash
-          set +e
+          set -euo pipefail
           cat > SoloLatino/src/main/kotlin/com/menorah/sololatino/ReproProbe.kt <<'KOTLIN'
           package com.menorah.sololatino
 
@@ -111,14 +38,15 @@ jobs:
               fun start(context: Context) {
                   val prev = Thread.getDefaultUncaughtExceptionHandler()
                   Thread.setDefaultUncaughtExceptionHandler { t, e ->
-                      Log.e("SLReproFatal", "UNCAUGHT on thread=${t.name}: ${e.javaClass.name}: ${e.message}", e)
+                      Log.e("SLReproFatal", "UNCAUGHT thread=${t.name}: ${e.javaClass.name}: ${e.message}", e)
                       prev?.uncaughtException(t, e)
                   }
                   Log.i("SLRepro", "START sdk=${android.os.Build.VERSION.SDK_INT}")
                   CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                      delay(4000)
+                      delay(3500)
                       val p = SoloLatinoProvider(context)
                       Log.i("SLRepro", "UA=${p.client.currentUserAgent()}")
+                      // 1. Test getMainPage parallel (4 cats like CloudStream Home)
                       val cats = p.mainPage.take(4)
                       val mainRes = coroutineScope {
                           cats.map { mp ->
@@ -132,18 +60,16 @@ jobs:
                       }
                       val firstItem = mainRes.filterNotNull().flatMap { it.items }.firstOrNull()
                       Log.i("SLRepro", "MAIN_FIRST=${firstItem?.name} url=${firstItem?.url}")
+                      // 2. Test search
                       val sr = runCatching { p.search("The Boys") }
                       Log.i("SLRepro", "SEARCH ok=${sr.isSuccess} size=${sr.getOrNull()?.size} err=${sr.exceptionOrNull()?.message}")
-                      val testUrls = listOfNotNull(
-                          firstItem?.url,
-                          "https://sololatino.net/pelicula/puedes-verlo-todo",
-                          "https://sololatino.net/serie/the-boys-2019",
-                      ).distinct()
-                      for (u in testUrls) {
+                      // 3. Test load
+                      for (u in listOfNotNull(firstItem?.url, "https://sololatino.net/pelicula/puedes-verlo-todo", "https://sololatino.net/serie/the-boys-2019").distinct()) {
                           val t0 = System.currentTimeMillis()
                           val lr = runCatching { p.load(u) }
                           Log.i("SLRepro", "LOAD url=$u ms=${System.currentTimeMillis()-t0} ok=${lr.isSuccess} type=${lr.getOrNull()?.javaClass?.simpleName} err=${lr.exceptionOrNull()?.message}")
                       }
+                      // 4. Test loadLinks
                       for (d in listOf(
                           "https://sololatino.net/pelicula/puedes-verlo-todo",
                           "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8"
@@ -153,12 +79,19 @@ jobs:
                           val t0 = System.currentTimeMillis()
                           val ll = runCatching {
                               withTimeout(95_000L) {
-                                  p.loadLinks(d, false, { subs.add(it.url) }) { links.add("${it.name}|${it.url}") }
+                                  p.loadLinks(d, false, { subs.add(it.url) }) { links.add("${it.name}|${it.url.take(70)}") }
                               }
                           }
                           Log.i("SLRepro", "LOADLINKS data=$d ms=${System.currentTimeMillis()-t0} ok=${ll.isSuccess} ret=${ll.getOrNull()} links=${links.size} subs=${subs.size} err=${ll.exceptionOrNull()?.javaClass?.simpleName}:${ll.exceptionOrNull()?.message}")
                           links.take(10).forEach { Log.i("SLRepro", "LINK=$it") }
                       }
+                      // 5. Direct fetchExternalHtml check on embed69 & voe
+                      val e69 = runCatching {
+                          p.client.fetchExternalHtml("https://embed69.org/f/tt45368240", "https://sololatino.net/") {
+                              it.contains("embed69")
+                          }
+                      }
+                      Log.i("SLRepro", "DIRECT_E69 ok=${e69.isSuccess} code=${e69.getOrNull()?.code} len=${e69.getOrNull()?.text?.length} hasDataLink=${e69.getOrNull()?.text?.contains("dataLink")} err=${e69.exceptionOrNull()?.message}")
                       Log.i("SLRepro", "WAIT_20S_FOR_CRASH_CHECK")
                       delay(20_000)
                       Log.i("SLRepro", "DONE_STILL_ALIVE")
@@ -172,29 +105,54 @@ jobs:
               'registerExtractorAPI(SoloLatinoGDriveExtractor())',
               'registerExtractorAPI(SoloLatinoGDriveExtractor()); ReproProbe.start(context)',
           )
+          assert 'ReproProbe.start(context)' in s
           open(p, 'w').write(s)
 
           sp = 'SoloLatino/src/main/kotlin/com/menorah/sololatino/SoloLatinoSession.kt'
           ss = open(sp).read()
+          assert 'import android.webkit.WebViewClient' in ss
           ss = ss.replace(
               'import android.webkit.WebViewClient',
               'import android.util.Log\nimport android.webkit.WebViewClient',
               1,
-          ).replace(
-              'lastDiag = "status=$httpStatus',
-              'Log.i("SLReproWV", "DIAG $targetUrl status=$httpStatus ready=$readyState cf=$isCf title=${title.take(30)} body=${bodySample.take(50)} len=${pageText.length}"); lastDiag = "status=$httpStatus',
-          ).replace(
-              'finish(Result.failure(IllegalStateException("WebView agotó el tiempo cargando SoloLatino',
-              'Log.e("SLReproWV", "TIMEOUT_SITE $targetUrl $lastDiag"); finish(Result.failure(IllegalStateException("WebView agotó el tiempo cargando SoloLatino',
-          ).replace(
-              'override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {',
-              'override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean { Log.e("SLReproWV", "RENDER_GONE didCrash=${detail?.didCrash()}");',
+          )
+          target_diag = 'lastDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(40)} body=${bodySample.take(80)} url=${pageUrl.take(80)} len=${pageText.length}"'
+          assert target_diag in ss
+          ss = ss.replace(
+              target_diag,
+              target_diag + '; Log.i("SLReproWV", "DIAG $targetUrl " + lastDiag)',
+          )
+          target_to = 'finish(Result.failure(IllegalStateException("WebView agotó el tiempo cargando SoloLatino [$lastDiag blocked=$blocked js=$jsErr]")))'
+          assert target_to in ss
+          ss = ss.replace(
+              target_to,
+              'Log.e("SLReproWV", "TIMEOUT_SITE $targetUrl $lastDiag blocked=$blocked js=$jsErr"); ' + target_to,
+          )
+          target_rg = 'override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {'
+          assert target_rg in ss
+          ss = ss.replace(
+              target_rg,
+              target_rg + ' Log.e("SLReproWV", "RENDER_GONE didCrash=${detail?.didCrash()}"); ',
           )
           open(sp, 'w').write(ss)
           PY
-          ./gradlew :SoloLatino:make --stacktrace > build.log 2>&1 || { sleep 8; ./gradlew :SoloLatino:make --stacktrace >> build.log 2>&1; }
-          echo "BUILD_EXIT=$?"
-          tail -n 30 build.log
+
+          set +e
+          ./gradlew :SoloLatino:make --stacktrace > build.log 2>&1
+          bstatus=$?
+          if [ "$bstatus" -ne 0 ] && grep -q '429' build.log; then
+            sleep 8
+            ./gradlew :SoloLatino:make --stacktrace > build.log 2>&1
+            bstatus=$?
+          fi
+          set -e
+          if [ "$bstatus" -ne 0 ]; then
+            errs=$(grep -E '^e: |^> |Caused by:|What went wrong:' build.log | head -20 | tr '\n' '|' | sed 's/%/%25/g')
+            echo "::error::BUILD_FAILED($bstatus): $errs"
+            exit "$bstatus"
+          fi
+          test -f SoloLatino/build/SoloLatino.cs3
+
           curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cs.apk
           adb install -r /tmp/cs.apk
           pkg=com.lagradost.cloudstream3.prerelease
@@ -205,6 +163,8 @@ jobs:
           adb push SoloLatino/build/SoloLatino.cs3 /sdcard/Cloudstream3/plugins/SoloLatino.cs3
           adb logcat -c
           adb shell monkey -p "$pkg" 1
+
+          set +e
           for i in $(seq 1 55); do
             sleep 5
             pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
@@ -213,12 +173,12 @@ jobs:
               break
             fi
             if [ "$i" -gt 4 ] && [ -z "$pid" ]; then
-              echo "PROCESS_DIED_AT_STEP_$i"
+              echo "::notice::PROCESS_DIED_AT_STEP_$i"
               break
             fi
           done
           pid_final=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
-          full_log=$(adb logcat -d -s SLRepro:V SLReproWV:V SLReproFatal:V AndroidRuntime:E chromium:E cr_Crash:E libc:F DEBUG:F ActivityManager:E '*:S' 2>/dev/null | tail -n 180)
+          full_log=$(adb logcat -d -s SLRepro:V SLReproWV:V SLReproFatal:V PluginManager:W AndroidRuntime:E chromium:E cr_Crash:E libc:F DEBUG:F ActivityManager:E '*:S' 2>/dev/null | tail -n 220)
           python3 - "$pid_final" "$full_log" <<'PY'
           import sys
           text = f"PID_FINAL={sys.argv[1]}\n" + sys.argv[2]
