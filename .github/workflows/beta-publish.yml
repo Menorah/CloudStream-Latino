@@ -23,25 +23,38 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compilar y probar los trece complementos
+      - name: Compilar y probar los catorce complementos
         shell: bash
+        env:
+          GNULAHD_LIVE: 'true'
         run: |
           set +e
           ./gradlew \
             :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Latanime:testDebugUnitTest :Repelis24CZ:testDebugUnitTest \
             :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest \
             :PoseidonHD2:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :PeliCineHD:testDebugUnitTest \
-            :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest :PelisJuanita:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+            :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest :PelisJuanita:testDebugUnitTest \
+            :GnulaHD:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
-          tail -40 build-log.txt
-          python3 - <<'PY'
-          import pathlib
-          log = pathlib.Path('build-log.txt').read_text()
-          for line in log.splitlines():
-              if line.startswith('e: ') or 'FAILED' in line:
-                  print('::error::' + line.replace('%', '%25')[:300])
+          tail -60 build-log.txt
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET
+          for report in pathlib.Path('.').glob('*/build/test-results/testDebugUnitTest/TEST-*.xml'):
+              try:
+                  for case in ET.parse(report).findall('.//testcase'):
+                      for failure in case.findall('failure') + case.findall('error'):
+                          text = case.get('classname', '') + '.' + case.get('name', '') + ': ' + (failure.get('message') or failure.text or '')[:1500]
+                          print('::error::' + text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D'))
+              except ET.ParseError:
+                  pass
+          log = pathlib.Path('build-log.txt').read_text(errors='replace')
+          relevant = [s for s in log.splitlines() if s.startswith('e: ') or 'FAILED' in s or 'What went wrong:' in s or s.startswith('> ')]
+          if relevant:
+              print('::error::' + ' | '.join(relevant[:12]).replace('%', '%25'))
           PY
-          exit $status
+          fi
+          exit "$status"
       - name: Preparar archivos beta
         shell: bash
         run: |
@@ -59,6 +72,7 @@ jobs:
           cp CinecalidadOrg/build/CinecalidadOrg.cs3 output/
           cp Cuevana3v/build/Cuevana3v.cs3 output/
           cp PelisJuanita/build/PelisJuanita.cs3 output/
+          cp GnulaHD/build/GnulaHD.cs3 output/
           cp assets/repo-icon.png output/repo-icon.png
           python3 - <<'PY'
           import json, pathlib
@@ -76,7 +90,7 @@ jobs:
           expected = {
               'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Latanime.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
               'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3',
-              'PeliCineHD.cs3', 'CinecalidadOrg.cs3', 'Cuevana3v.cs3', 'PelisJuanita.cs3',
+              'PeliCineHD.cs3', 'CinecalidadOrg.cs3', 'Cuevana3v.cs3', 'PelisJuanita.cs3', 'GnulaHD.cs3',
           }
           assert names == expected, (sorted(names), sorted(expected))
           for name in expected:
