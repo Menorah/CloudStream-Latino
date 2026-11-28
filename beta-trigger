@@ -1,1 +1,1 @@
-14 plugins including GnulaHD (ww3.gnulahd.nu) verified with unit + live integration tests and 32-bit RGBA PNG icons
+14 plugins including GnulaHD (ww3.gnulahd.nu) verified with unit + GNULAHD_LIVE=true integration tests
