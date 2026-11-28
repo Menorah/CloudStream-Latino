@@ -13,6 +13,7 @@ Repositorio de extensiones no oficiales en **español latino (`es-419`)** para C
 - **Cuevana3v** (películas, series y anime)
 - **GnulaHD** (películas, series y anime)
 - **PeliCineHD** (películas y series)
+- **Pelis182** (películas, series y anime)
 - **PelisJuanita** (películas y series; requiere verificación manual desde Ajustes del complemento)
 - **PoseidonHD2** (películas y series)
 - **Repelis24CZ** (películas y series)
