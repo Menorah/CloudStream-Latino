@@ -66,11 +66,11 @@ class SoloLatinoProvider(
         TvType.AnimeMovie,
     )
 
-    override val getMainPageTimeoutMs: Long? = 45_000L
-    override val searchTimeoutMs: Long? = 30_000L
-    override val quickSearchTimeoutMs: Long? = 20_000L
-    override val loadTimeoutMs: Long? = 45_000L
-    override val loadLinksTimeoutMs: Long? = 60_000L
+    override val getMainPageTimeoutMs: Long? = 60_000L
+    override val searchTimeoutMs: Long? = 35_000L
+    override val quickSearchTimeoutMs: Long? = 25_000L
+    override val loadTimeoutMs: Long? = 60_000L
+    override val loadLinksTimeoutMs: Long? = 95_000L
 
     override val mainPage = mainPageOf(
         *SoloLatinoMarkup.mainPageCategories().toTypedArray(),
@@ -435,7 +435,7 @@ class SoloLatinoProvider(
             }
         }
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            if (seenLinks.add(link.url)) {
+            if (seenLinks.add("${link.url}|${link.name}")) {
                 emittedAny.set(true)
                 synchronized(linkLock) {
                     runCatching { callback(link) }
@@ -447,7 +447,7 @@ class SoloLatinoProvider(
             targets.map { target ->
                 async(Dispatchers.IO) {
                     linkGate.withPermit {
-                        withTimeoutOrNull(35_000L) {
+                        withTimeoutOrNull(55_000L) {
                             try {
                                 val lowerUrl = target.url.lowercase(Locale.ROOT)
                                 val lowerType = target.type?.lowercase(Locale.ROOT).orEmpty()
@@ -495,6 +495,7 @@ class SoloLatinoProvider(
                                             referer = finalPageUrl,
                                             sourceLabel = sourceLabel,
                                             subtitleCallback = safeSubtitleCallback,
+                                            serverHint = target.label,
                                             callback = safeCallback,
                                         )
                                 }
