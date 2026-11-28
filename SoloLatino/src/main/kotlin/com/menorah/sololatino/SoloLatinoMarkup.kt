@@ -273,17 +273,46 @@ internal object SoloLatinoMarkup {
         if (lower.endsWith("/no-poster.jpg") || lower.endsWith("/no-poster.png") || lower.contains("_files/")) {
             return null
         }
-        if (preferWidth != null && lower.contains("image.tmdb.org/t/p/")) {
-            return resolved.replace(Regex("""/t/p/(?:w\d+|original)/"""), "/t/p/$preferWidth/")
+        if (preferWidth != null &&
+            lower.contains("image.tmdb.org/t/p/") &&
+            !lower.substringBefore('?').endsWith(".svg")
+        ) {
+            val currentSize = Regex("""/t/p/(w\d+|h\d+|original)/""").find(lower)?.groupValues?.getOrNull(1)
+            val shouldRewrite = when (preferWidth) {
+                "w500" -> currentSize in setOf("w45", "w92", "w154", "w185", "w300", "w342", "original")
+                "w1280" -> currentSize in setOf("w300", "w500", "w780", "original")
+                "w300" -> currentSize == "original"
+                else -> false
+            }
+            if (shouldRewrite) {
+                return resolved.replace(Regex("""/t/p/(?:w\d+|h\d+|original)/"""), "/t/p/$preferWidth/")
+            }
         }
         return resolved
     }
 
     fun extractImageUrl(img: Element?, baseUrl: String = MAIN_URL, preferWidth: String? = null): String? {
         if (img == null) return null
-        val attrs = listOf("data-src", "data-lazy-src", "data-original", "src")
+        val attrs = listOf("data-src", "data-lazy-src", "data-lazy", "data-original", "src")
         for (attr in attrs) {
             val candidate = cleanImageUrl(img.attr(attr), baseUrl, preferWidth)
+            if (candidate != null) return candidate
+        }
+        val srcsetAttrs = listOf("data-srcset", "srcset")
+        for (attr in srcsetAttrs) {
+            val rawSet = img.attr(attr).trim()
+            if (rawSet.isEmpty()) continue
+            val candidates = rawSet.split(',')
+                .mapNotNull { part -> part.trim().split(Regex("""\s+""")).firstOrNull()?.takeIf { it.isNotEmpty() } }
+            for (rawUrl in candidates.asReversed()) {
+                val candidate = cleanImageUrl(rawUrl, baseUrl, preferWidth)
+                if (candidate != null) return candidate
+            }
+        }
+        val inlineBg = img.attr("style")
+        if (inlineBg.isNotBlank()) {
+            val bgUrl = BG_URL_REGEX.find(inlineBg)?.groupValues?.getOrNull(1)
+            val candidate = cleanImageUrl(bgUrl, baseUrl, preferWidth)
             if (candidate != null) return candidate
         }
         return null
@@ -474,7 +503,7 @@ internal object SoloLatinoMarkup {
             val seriesName = imgEl?.attr("alt")?.trim()?.ifBlank { null }
                 ?: titleNode?.text()?.trim()?.ifBlank { null }
                 ?: continue
-            val posterUrl = extractImageUrl(imgEl, baseUrl, "w500")
+            val posterUrl = extractImageUrl(imgEl, baseUrl, "w300")
             val badgeNode: Element? = epCard.selectFirst(".ep-card__badge, .ep-card__ep, span")
             val epTag = coords?.let { (s, e) -> "T$s · E$e" }
                 ?: badgeNode?.text()?.trim()?.ifBlank { null }
@@ -695,17 +724,20 @@ internal object SoloLatinoMarkup {
             cleanImageUrl(it, baseUrl, "w1280")
         }
         val ldImage = extractLdStringOrUrl(primaryLd?.get("image"), baseUrl)
-        val ogImageEl: Element? = doc.selectFirst("meta[property=og:image]")
+            ?: extractLdStringOrUrl(primaryLd?.get("thumbnailUrl"), baseUrl)
+        val ogImageEl: Element? = doc.selectFirst("meta[property=og:image], meta[name=twitter:image]")
         val ogImage = cleanImageUrl(ogImageEl?.attr("content"), baseUrl)
 
-        val posterImgEl: Element? = doc.selectFirst("img.detail-poster, .detail-poster img, .detail-hero__poster img")
+        val posterImgEl: Element? = doc.selectFirst(
+            "img.detail-poster, .detail-poster img, .detail-hero__poster img, .z-10 .flex-shrink-0 img, .z-10 img.rounded-2xl:not(.max-h-16):not(.max-w-xs):not([style*=max-height]), main img.rounded-2xl:not(.max-h-16):not(.max-w-xs):not([style*=max-height])",
+        )
         val posterUrl = extractImageUrl(posterImgEl, baseUrl, "w500")
             ?: cleanImageUrl(ldImage, baseUrl, "w500")
             ?: cleanImageUrl(ogImage, baseUrl, "w500")
-            ?: cleanImageUrl(bgFromStyle, baseUrl, "w500")
+            ?: cleanImageUrl(bgFromStyle, baseUrl, null)
         val backgroundPosterUrl = bgFromStyle
-            ?: cleanImageUrl(ogImage, baseUrl, "w1280")
-            ?: cleanImageUrl(ldImage, baseUrl, "w1280")
+            ?: cleanImageUrl(ogImage, baseUrl, null)
+            ?: cleanImageUrl(ldImage, baseUrl, null)
             ?: posterUrl
 
         val plotEl: Element? = doc.selectFirst(".detail-synopsis, .detail-overview, .detail-description, p.text-gray-300")
@@ -895,7 +927,7 @@ internal object SoloLatinoMarkup {
                     val descEl: Element? = item.selectFirst("p.line-clamp-2")
                     val description = descEl?.text()?.trim()?.takeIf { it.isNotBlank() && !it.equals(cleanTitle, true) }
                     val imgEl: Element? = item.selectFirst("img.ep-thumb, img")
-                    val posterUrl = extractImageUrl(imgEl, baseUrl, "w500")
+                    val posterUrl = extractImageUrl(imgEl, baseUrl, "w300")
                     val releaseDate = parseSlashOrIsoDate(item.text())
 
                     byKey.putIfAbsent(
@@ -1077,9 +1109,11 @@ internal object SoloLatinoMarkup {
         val challenge = E69_CHALLENGE_REGEX.find(html)?.groupValues?.getOrNull(1)
         val salt = E69_SALT_REGEX.find(html)?.groupValues?.getOrNull(1)
         val aesKey: SecretKeySpec? = if (!challenge.isNullOrEmpty() && !salt.isNullOrEmpty()) {
-            val digest = MessageDigest.getInstance("SHA-256")
-                .digest((challenge + salt).toByteArray(StandardCharsets.UTF_8))
-            SecretKeySpec(digest, "AES")
+            runCatching {
+                val digest = MessageDigest.getInstance("SHA-256")
+                    .digest((challenge + salt).toByteArray(StandardCharsets.UTF_8))
+                SecretKeySpec(digest, "AES")
+            }.getOrNull()
         } else {
             null
         }
@@ -1097,17 +1131,19 @@ internal object SoloLatinoMarkup {
                 return clean.trim().trim('`', ' ', '\u0000')
             }
             val key = aesKey ?: return null
-            val bytes = runCatching { Base64.getDecoder().decode(clean) }.getOrNull() ?: return null
-            if (bytes.size <= 16) return null
-            val iv = bytes.copyOfRange(0, 16)
-            val ct = bytes.copyOfRange(16, bytes.size)
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, key, IvParameterSpec(iv))
-            val decrypted = String(cipher.doFinal(ct), StandardCharsets.UTF_8)
-                .replace("\u0000", "")
-                .trim()
-                .trim('`', ' ', '\'', '"')
-            return decrypted.takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            return runCatching {
+                val bytes = Base64.getDecoder().decode(clean)
+                if (bytes.size <= 16) return@runCatching null
+                val iv = bytes.copyOfRange(0, 16)
+                val ct = bytes.copyOfRange(16, bytes.size)
+                val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                cipher.init(Cipher.DECRYPT_MODE, key, IvParameterSpec(iv))
+                val decrypted = String(cipher.doFinal(ct), StandardCharsets.UTF_8)
+                    .replace("\u0000", "")
+                    .trim()
+                    .trim('`', ' ', '\'', '"')
+                decrypted.takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            }.getOrNull()
         }
 
         fun collectList(arr: JsonNode?, langCode: String, langLabel: String, isDownload: Boolean) {
