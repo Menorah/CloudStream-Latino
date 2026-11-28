@@ -139,8 +139,8 @@ object PlaybackProbe {
                     // Also test direct host extraction + ExoPlayer + Coil directly
                     val hostLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
                     withContext(Dispatchers.IO) {
-                        SoloLatinoExtractorDispatcher.extract("https://morencius.com/embed/1ywkwa2abeeu", "https://embed69.org/", "SoloLatino · Latino", {}, { hostLinks.add(it) }, "vidhide")
-                        SoloLatinoExtractorDispatcher.extract("https://voe.sx/e/basmjvog9k1o", "https://embed69.org/", "SoloLatino · Latino", {}, { hostLinks.add(it) }, "voe")
+                        SoloLatinoExtractorDispatcher.extract("https://morencius.com/embed/1ywkwa2abeeu", "https://embed69.org/", "SoloLatino · Latino", {}, serverHint = "vidhide") { hostLinks.add(it) }
+                        SoloLatinoExtractorDispatcher.extract("https://voe.sx/e/basmjvog9k1o", "https://embed69.org/", "SoloLatino · Latino", {}, serverHint = "voe") { hostLinks.add(it) }
                     }
                     Log.i("CSPlaybackProbe", "HOST_DIRECT count=${hostLinks.size} names=${hostLinks.map { it.name }}")
                     for (lnk in hostLinks.take(4)) {
