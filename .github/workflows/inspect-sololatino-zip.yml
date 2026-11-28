@@ -1,4 +1,4 @@
-name: Inspect SoloLatino ZIP Part 2
+name: Inspect SoloLatino ZIP Part 3
 on:
   push:
     branches:
@@ -6,13 +6,13 @@ on:
 permissions:
   contents: read
 jobs:
-  zip_deep:
+  zip_part3:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        part: [peli_html, serie_cap_html, boys_iframe, e69_and_js]
+        part: [psh_player, e69_player_js, home_and_theboys]
     steps:
-      - name: Extract and emit ${{ matrix.part }}
+      - name: Emit ${{ matrix.part }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -45,49 +45,41 @@ jobs:
           all_files = sorted(p for p in DEST.rglob('*') if p.is_file())
           out = []
 
-          def dump_sl_html(p, max_body=15000):
+          if PART == 'psh_player':
+              p = next(x for x in all_files if x.name == 'tt1190634-5x08.html')
               txt = p.read_text('utf-8', 'replace')
-              rel = str(p.relative_to(DEST))
-              out.append(f'=== {rel} len={len(txt)} ===')
-              # Extract main tag content without huge ad/css head bloat
-              main_m = re.search(r'<main\b[\s\S]*</main>', txt, re.I)
-              out.append((main_m.group(0) if main_m else txt)[:max_body])
-              out.append('--- INLINE SCRIPTS ---')
-              for idx, (attrs, body) in enumerate(re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)):
-                  if 'src=' not in attrs and body.strip():
-                      out.append(f'sc[{idx}]({len(body)}): {body.strip()[:2000]}')
-
-          if PART == 'peli_html':
-              p = next(x for x in all_files if 'Ver Puedes verlo todo' in x.name and x.suffix == '.html')
-              dump_sl_html(p, 24000)
-
-          elif PART == 'serie_cap_html':
-              s = next(x for x in all_files if 'Ver The Boys' in x.name and x.suffix == '.html')
-              e = next(x for x in all_files if 'The Boys T5E08' in x.name and x.suffix == '.html')
-              dump_sl_html(s, 13000)
-              dump_sl_html(e, 14000)
-
-          elif PART == 'boys_iframe':
-              p = next(x for x in all_files if 'The Boys T5E08' in str(x) and x.name.startswith('saved_resource'))
-              txt = p.read_text('utf-8', 'replace')
-              out.append(f'=== BOYS_IFRAME {p.relative_to(DEST)} len={len(txt)} ===')
+              out.append(f'=== PSH_PLAYER {p.relative_to(DEST)} len={len(txt)} ===')
               out.append(txt[:33000])
 
-          elif PART == 'e69_and_js':
-              e69 = next(x for x in all_files if x.name == 'tt45368240.html')
-              e69_txt = e69.read_text('utf-8', 'replace')
-              out.append(f'=== tt45368240.html len={len(e69_txt)} ===')
-              for idx, (attrs, body) in enumerate(re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', e69_txt, re.I)):
-                  src = (re.search(r'src=["\']([^"\']+)["\']', attrs, re.I) or [None, None])[1]
-                  out.append(f'  e69 sc[{idx}] src={src} body({len(body)}): {body.strip()[:4000]}')
-              # Also check app-Ce29xM4N tail (after 68000) and loader / site.min.js
-              appjs = next(x for x in all_files if 'app-Ce29xM4N.js' in x.name).read_text('utf-8', 'replace')
-              out.append('=== app-Ce29xM4N TAIL ===\n' + appjs[68000:])
-              for name in ['loader.a40897e.js.download', 'site.min.js.download', 'base.DLdCRf7_.js.download']:
-                  cand = next((x for x in all_files if x.name == name), None)
-                  if cand:
-                      t = cand.read_text('utf-8', 'replace')
-                      out.append(f'=== {name} len={len(t)} ===\n' + t[:4000])
+          elif PART == 'e69_player_js':
+              p = next(x for x in all_files if x.name == 'tt45368240.html')
+              txt = p.read_text('utf-8', 'replace')
+              out.append(f'=== E69_FULL len={len(txt)} ===')
+              for idx, (attrs, body) in enumerate(re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)):
+                  if idx == 3:
+                      out.append(f'sc[3] len={len(body)}:\n' + body)
+              # Also show body HTML (excluding style/script)
+              cleaned = re.sub(r'<(script|style)\b[\s\S]*?</\1>', '', txt, flags=re.I)
+              out.append('=== E69 BODY_HTML ===\n' + re.sub(r'\s+', ' ', cleaned)[:8000])
+
+          elif PART == 'home_and_theboys':
+              tb = next(x for x in all_files if 'Ver The Boys' in x.name and x.suffix == '.html').read_text('utf-8', 'replace')
+              out.append('=== THE_BOYS_SEASON_5 ===')
+              m = re.search(r'data-season-panel=["\']5["\'][\s\S]{0,12000}', tb)
+              if m:
+                  out.append(m.group(0)[:10000])
+              home = next(x for x in all_files if 'Ver películas y series' in x.name and x.suffix == '.html').read_text('utf-8', 'replace')
+              out.append('=== HOME SECTIONS ===')
+              secs = re.findall(r'<h2[^>]*>[\s\S]{0,120}', home)
+              out.append('H2: ' + str([re.sub(r'\s+', ' ', s) for s in secs]))
+              m_ep = re.search(r'id=["\']scroll-episodios["\'][\s\S]{0,6000}', home)
+              if m_ep:
+                  out.append('EP_CAROUSEL: ' + m_ep.group(0)[:5500])
+              m_grid = re.search(r'id=["\']ep-grid-wrapper["\'][\s\S]{0,4000}', home)
+              if m_grid:
+                  out.append('EP_GRID: ' + m_grid.group(0)[:3500])
+              m_cards = re.findall(r'<div[^>]*class=["\']card["\'][\s\S]{0,900}', home)
+              out.append('FIRST_3_CARDS:\n' + '\n---\n'.join(m_cards[:3]))
 
           full = '\n'.join(out)
           chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
@@ -97,77 +89,3 @@ jobs:
           PY
         env:
           PART: ${{ matrix.part }}
-
-  probe_live_targets:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Probe live hosts & xvfb chromium on sololatino.net
-        shell: bash
-        run: |
-          python3 -m pip install -q playwright
-          python3 -m playwright install chromium
-          python3 - <<'PY'
-          import json, re, urllib.error, urllib.request
-          from playwright.sync_api import sync_playwright
-
-          out = []
-          def http_probe(u, ref='https://sololatino.net/'):
-              req = urllib.request.Request(u, headers={
-                  'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                  'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
-                  'Referer': ref,
-              })
-              try:
-                  with urllib.request.urlopen(req, timeout=12) as r:
-                      b = r.read().decode('utf-8', 'replace')
-                      return f'{r.status} len={len(b)} final={r.geturl()} server={r.headers.get("Server")} head={b[:300]!r}'
-              except urllib.error.HTTPError as e:
-                  b = e.read().decode('utf-8', 'replace')
-                  return f'HTTP {e.code} len={len(b)} server={e.headers.get("Server")} cf={e.headers.get("CF-RAY")} cf_mit={e.headers.get("cf-mitigated")} head={b[:300]!r}'
-              except Exception as e:
-                  return f'ERR {e}'
-
-          for u in [
-              'https://sololatino.net/',
-              'https://sololatino.net/peliculas',
-              'https://sololatino.net/sanctum/csrf-cookie',
-              'https://player.pelisserieshoy.com/',
-              'https://embed69.org/f/tt45368240',
-              'https://voe.sx/e/84emedzn9bzh',
-              'https://caseyseemavoid.com/e/84emedzn9bzh',
-              'https://morencius.com/v/y1b4673123',
-              'https://callistanise.com/v/y1b4673123',
-              'https://hglink.to/e/test',
-          ]:
-              out.append(f'GET {u} -> {http_probe(u)}')
-
-          # Try chromium headless=new + non-webdriver on sololatino.net and embed69
-          with sync_playwright() as pw:
-              browser = pw.chromium.launch(headless=True, args=[
-                  '--headless=new',
-                  '--disable-blink-features=AutomationControlled',
-                  '--no-sandbox',
-              ])
-              ctx = browser.new_context(
-                  user_agent='Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-                  viewport={'width': 412, 'height': 915},
-                  locale='es-419',
-              )
-              ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-              page = ctx.new_page()
-              for tgt in ['https://sololatino.net/', 'https://embed69.org/f/tt45368240']:
-                  try:
-                      r = page.goto(tgt, wait_until='domcontentloaded', timeout=20000)
-                      page.wait_for_timeout(6000)
-                      out.append(f'PW_NEW {tgt} st={r.status if r else None} url={page.url} title={page.title()!r} len={len(page.content())} cookies={[(c["name"],c["domain"]) for c in ctx.cookies()]}')
-                  except Exception as e:
-                      out.append(f'PW_NEW {tgt} err={e}')
-              browser.close()
-
-          full = '\n'.join(out)
-          chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
-          for idx, ch in enumerate(chunks[:10]):
-              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f'::notice title=LIVE2_{idx:02d}of{len(chunks):02d}::{safe}')
-          PY
