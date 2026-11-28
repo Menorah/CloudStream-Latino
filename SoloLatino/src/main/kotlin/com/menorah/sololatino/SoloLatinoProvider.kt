@@ -34,6 +34,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -42,7 +43,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.Jsoup
+import java.util.Collections
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -375,7 +378,7 @@ class SoloLatinoProvider(
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val pageUrl = SoloLatinoMarkup.resolveUrl(mainUrl, data) ?: return false
-        val res = fetchHtmlCached(pageUrl, "$mainUrl/", useCache = false)
+        val res = fetchHtmlCached(pageUrl, "$mainUrl/", useCache = true)
         if (res.code !in 200..299 || res.text.isBlank()) return false
 
         val finalPageUrl = res.url.ifBlank { pageUrl }
@@ -419,59 +422,89 @@ class SoloLatinoProvider(
         if (targets.isEmpty()) return false
 
         val emittedAny = AtomicBoolean(false)
+        val linkLock = Any()
+        val subLock = Any()
+        val seenLinks = Collections.synchronizedSet(HashSet<String>())
+        val seenSubs = Collections.synchronizedSet(HashSet<String>())
+
+        val safeSubtitleCallback: (SubtitleFile) -> Unit = { sub ->
+            if (seenSubs.add("${sub.lang}|${sub.url}")) {
+                synchronized(subLock) {
+                    runCatching { subtitleCallback(sub) }
+                }
+            }
+        }
+        val safeCallback: (ExtractorLink) -> Unit = { link ->
+            if (seenLinks.add(link.url)) {
+                emittedAny.set(true)
+                synchronized(linkLock) {
+                    runCatching { callback(link) }
+                }
+            }
+        }
+
         coroutineScope {
             targets.map { target ->
                 async(Dispatchers.IO) {
                     linkGate.withPermit {
-                        val lowerUrl = target.url.lowercase(Locale.ROOT)
-                        val lowerType = target.type?.lowercase(Locale.ROOT).orEmpty()
-                        val sourceLabel = "SoloLatino · ${target.langLabel} · ${target.label}"
-                        val ok = when {
-                            lowerType == "mp4" -> {
-                                callback(
-                                    newExtractorLink(sourceLabel, "${target.label} MP4", target.url, INFER_TYPE) {
-                                        this.referer = "$mainUrl/"
-                                        this.headers = mapOf("Referer" to "$mainUrl/", "user-agent" to client.currentUserAgent())
-                                        this.quality = Qualities.Unknown.value
-                                    },
-                                )
-                                true
+                        withTimeoutOrNull(35_000L) {
+                            try {
+                                val lowerUrl = target.url.lowercase(Locale.ROOT)
+                                val lowerType = target.type?.lowercase(Locale.ROOT).orEmpty()
+                                val sourceLabel = "SoloLatino · ${target.langLabel} · ${target.label}"
+                                val ok = when {
+                                    lowerType == "mp4" -> {
+                                        safeCallback(
+                                            newExtractorLink(sourceLabel, "${target.label} MP4", target.url, INFER_TYPE) {
+                                                this.referer = "$mainUrl/"
+                                                this.headers = mapOf("Referer" to "$mainUrl/", "user-agent" to client.currentUserAgent())
+                                                this.quality = Qualities.Unknown.value
+                                            },
+                                        )
+                                        true
+                                    }
+                                    lowerType == "gdrive" || lowerUrl.contains("drive.google.com") ->
+                                        SoloLatinoGDriveExtractor.extract(
+                                            url = target.url,
+                                            referer = finalPageUrl,
+                                            sourceLabel = sourceLabel,
+                                            subtitleCallback = safeSubtitleCallback,
+                                            callback = safeCallback,
+                                        )
+                                    lowerUrl.contains("embed69.org") ->
+                                        SoloLatinoEmbed69Resolver.extract(
+                                            embedUrl = target.url,
+                                            referer = finalPageUrl,
+                                            preferredLangTag = target.langLabel,
+                                            subtitleCallback = safeSubtitleCallback,
+                                            callback = safeCallback,
+                                        )
+                                    SoloLatinoMarkup.isPelisSeriesHoyUrl(target.url) ->
+                                        SoloLatinoPelisSeriesHoyExtractor.extractWithClient(
+                                            client = client,
+                                            url = target.url,
+                                            referer = finalPageUrl,
+                                            langTag = target.langLabel,
+                                            subtitleCallback = safeSubtitleCallback,
+                                            callback = safeCallback,
+                                        )
+                                    else ->
+                                        SoloLatinoExtractorDispatcher.extract(
+                                            url = target.url,
+                                            referer = finalPageUrl,
+                                            sourceLabel = sourceLabel,
+                                            subtitleCallback = safeSubtitleCallback,
+                                            callback = safeCallback,
+                                        )
+                                }
+                                if (ok) emittedAny.set(true)
+                                ok
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                false
                             }
-                            lowerType == "gdrive" || lowerUrl.contains("drive.google.com") ->
-                                SoloLatinoGDriveExtractor.extract(
-                                    url = target.url,
-                                    referer = finalPageUrl,
-                                    sourceLabel = sourceLabel,
-                                    subtitleCallback = subtitleCallback,
-                                    callback = callback,
-                                )
-                            lowerUrl.contains("embed69.org") ->
-                                SoloLatinoEmbed69Resolver.extract(
-                                    embedUrl = target.url,
-                                    referer = finalPageUrl,
-                                    preferredLangTag = target.langLabel,
-                                    subtitleCallback = subtitleCallback,
-                                    callback = callback,
-                                )
-                            SoloLatinoMarkup.isPelisSeriesHoyUrl(target.url) ->
-                                SoloLatinoPelisSeriesHoyExtractor.extractWithClient(
-                                    client = client,
-                                    url = target.url,
-                                    referer = finalPageUrl,
-                                    langTag = target.langLabel,
-                                    subtitleCallback = subtitleCallback,
-                                    callback = callback,
-                                )
-                            else ->
-                                SoloLatinoExtractorDispatcher.extract(
-                                    url = target.url,
-                                    referer = finalPageUrl,
-                                    sourceLabel = sourceLabel,
-                                    subtitleCallback = subtitleCallback,
-                                    callback = callback,
-                                )
-                        }
-                        if (ok) emittedAny.set(true)
+                        } ?: false
                     }
                 }
             }.awaitAll()

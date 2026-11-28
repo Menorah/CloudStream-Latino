@@ -13,6 +13,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -93,7 +94,7 @@ class SoloLatinoMarkupTest {
         assertEquals(2, eps.size)
         assertEquals("From (T4 · E2)", eps[0].title)
         assertEquals("https://sololatino.net/serie/from/temporada-4/episodio-2", eps[0].url)
-        assertEquals("https://image.tmdb.org/t/p/w500/from-ep.jpg", eps[0].posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w300/from-ep.jpg", eps[0].posterUrl)
         assertEquals("Solo Leveling (T2 · E5)", eps[1].title)
 
         val recent = SoloLatinoMarkup.parseHomeRecentAdded(doc)
@@ -404,8 +405,8 @@ class SoloLatinoMarkupTest {
         assertEquals("s405k8cf50j9", SoloLatinoVsembedCrypto.decryptHex(enc, "vsembed.com"))
 
         // Byse ECDSA P-256 + AES-GCM roundtrip
-        val kp = SoloLatinoByseCrypto.ecKeyPairP256()
-        val sig = SoloLatinoHostHttp.decodeBase64Flexible(SoloLatinoByseCrypto.signNonce("nonce-1", kp))
+        val kp = SoloLatinoByseCrypto.ecKeyPairP256()!!
+        val sig = SoloLatinoHostHttp.decodeBase64Flexible(SoloLatinoByseCrypto.signNonce("nonce-1", kp)!!)
         assertEquals(64, sig.size)
         val k1 = ByteArray(16) { (it + 1).toByte() }
         val k2 = ByteArray(16) { (it + 17).toByte() }
@@ -425,5 +426,128 @@ class SoloLatinoMarkupTest {
         assertEquals("1AbCDefGhIjKlMnOpQrStUvWxYz", SoloLatinoMarkup.extractGDriveFileId("https://drive.google.com/file/d/1AbCDefGhIjKlMnOpQrStUvWxYz/view"))
         assertTrue(SoloLatinoSessionHelper.looksLikeCloudflareChallenge(403, "<title>Just a moment...</title><script>window._cf_chl_opt={};</script>"))
         assertFalse(SoloLatinoSessionHelper.looksLikeCloudflareChallenge(200, "<html><body><div class='card'></div></body></html>"))
+    }
+
+    @Test
+    fun `tailwind posters srcset svg preservation and crash-hardened crypto helpers work`() = runBlocking {
+        // Real SoloLatino detail page markup without .detail-poster, JSON-LD, or og:image:
+        // must pick the Tailwind w-44 rounded-2xl poster, not the .max-h-16 SVG logo, and preserve w1280 backdrop
+        val tailwindDetailHtml = """
+            <html><body>
+              <main class="flex-1 pt-16">
+                <div class="detail-hero">
+                  <div class="detail-hero__bg" style="background-image:url('https://image.tmdb.org/t/p/w1280/hero-bg.jpg')"></div>
+                  <div class="relative z-10">
+                    <div class="flex-shrink-0 hidden sm:block">
+                      <img src="https://image.tmdb.org/t/p/w500/real-tailwind-poster.jpg" alt="Street Fighter" class="w-44 md:w-52 rounded-2xl shadow-2xl" />
+                    </div>
+                    <div class="flex-1">
+                      <img src="https://image.tmdb.org/t/p/original/title-logo.svg" alt="Street Fighter" class="max-h-16 md:max-h-20 max-w-xs mb-3 object-contain" />
+                      <h1>Street Fighter</h1>
+                    </div>
+                  </div>
+                </div>
+              </main>
+            </body></html>
+        """.trimIndent()
+        val detail = SoloLatinoMarkup.parseDetail(Jsoup.parse(tailwindDetailHtml, SoloLatinoMarkup.MAIN_URL), "https://sololatino.net/pelicula/street-fighter")!!
+        assertEquals("https://image.tmdb.org/t/p/w500/real-tailwind-poster.jpg", detail.posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w1280/hero-bg.jpg", detail.backgroundPosterUrl)
+
+        // Backdrop fallback for posterUrl when no poster/og:image exists must NOT rewrite w1280 -> w500
+        val backdropOnlyHtml = """
+            <html><body>
+              <div class="detail-hero">
+                <div class="detail-hero__bg" style="background-image:url('https://image.tmdb.org/t/p/w1280/only-backdrop.jpg')"></div>
+                <h1>Sin Póster</h1>
+              </div>
+            </body></html>
+        """.trimIndent()
+        val bdDetail = SoloLatinoMarkup.parseDetail(Jsoup.parse(backdropOnlyHtml, SoloLatinoMarkup.MAIN_URL), "https://sololatino.net/pelicula/sin-poster")!!
+        assertEquals("https://image.tmdb.org/t/p/w1280/only-backdrop.jpg", bdDetail.posterUrl)
+
+        // Episode stills (w400 / w300) must be preserved without rewriting to w500; SVG must keep original; srcset works
+        assertEquals(
+            "https://image.tmdb.org/t/p/original/logo.svg",
+            SoloLatinoMarkup.cleanImageUrl("https://image.tmdb.org/t/p/original/logo.svg", SoloLatinoMarkup.MAIN_URL, "w500"),
+        )
+        val epHtml = """
+            <html><body>
+              <section>
+                <h2>Últimos Episodios</h2>
+                <a class="ep-card" href="/serie/yellowjackets/temporada-4/episodio-2">
+                  <img alt="Yellowjackets" src="https://image.tmdb.org/t/p/w400/yj-still.jpg" />
+                </a>
+                <a class="ep-card" href="/serie/from/temporada-4/episodio-3">
+                  <img alt="From" srcset="https://image.tmdb.org/t/p/w300/from-300.jpg 300w, https://image.tmdb.org/t/p/w400/from-400.jpg 400w" />
+                </a>
+              </section>
+            </body></html>
+        """.trimIndent()
+        val epCards = SoloLatinoMarkup.parseHomeRecentEpisodes(Jsoup.parse(epHtml, SoloLatinoMarkup.MAIN_URL))
+        assertEquals(2, epCards.size)
+        assertEquals("https://image.tmdb.org/t/p/w400/yj-still.jpg", epCards[0].posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w400/from-400.jpg", epCards[1].posterUrl)
+
+        // Embed69 tolerates malformed ciphertext entries without crashing and still returns valid mirrors
+        val ch = "ch_resilience"
+        val sl = "sl_resilience"
+        val key = MessageDigest.getInstance("SHA-256").digest((ch + sl).toByteArray(StandardCharsets.UTF_8))
+        val iv = ByteArray(16) { (it + 3).toByte() }
+        val c = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+        val validCt = Base64.getEncoder().encodeToString(iv + c.doFinal("https://voe.sx/e/ok123".toByteArray(StandardCharsets.UTF_8)))
+        val badCt = Base64.getEncoder().encodeToString(ByteArray(32) { 0x7f.toByte() })
+        val resilientE69 = """
+            <script>
+              let LINK_CHALLENGE = "$ch";
+              let LINK_SALT = "$sl";
+              let dataLink = [{"video_language":"LAT","sortedEmbeds":[{"servername":"broken","link":"$badCt"},{"servername":"voe","link":"$validCt"}]}];
+            </script>
+        """.trimIndent()
+        val recovered = SoloLatinoMarkup.decryptEmbed69Page(resilientE69)
+        assertEquals(1, recovered.size)
+        assertEquals("https://voe.sx/e/ok123", recovered[0].url)
+
+        // Zero-allocation Byse PoW solver finds a valid solution
+        val powSol = SoloLatinoByseCrypto.solvePow("unit-test-nonce", 4, maxAttempts = 5_000)
+        assertNotNull(powSol)
+
+        // ALTCHA v1 (SHA-256) and ALTCHA v2 (PBKDF2/SHA-256) solvers return valid JSON tokens
+        val targetNumber = 12L
+        val v1Salt = "v1salt|"
+        val v1Challenge = MessageDigest.getInstance("SHA-256")
+            .digest("$v1Salt$targetNumber".toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val v1Solved = SoloLatinoVoeCrypto.solveAltchaSuspend(
+            """{"algorithm":"SHA-256","salt":"$v1Salt","challenge":"$v1Challenge","maxnumber":50}""",
+        )
+        assertNotNull(v1Solved)
+        val v1Json = SoloLatinoMarkup.jsonMapper.readTree(String(Base64.getDecoder().decode(v1Solved), StandardCharsets.UTF_8))
+        assertEquals(targetNumber, v1Json.get("number").asLong())
+
+        val nonceHex = "0102030405060708"
+        val saltHex = "a1a2a3a4a5a6a7a8"
+        val nonceBytes = SoloLatinoHostHttp.hexToBytes(nonceHex)
+        val saltBytes = SoloLatinoHostHttp.hexToBytes(saltHex)
+        val pass5 = nonceBytes + byteArrayOf(0, 0, 0, 5)
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(pass5, "HmacSHA256")) }
+        var u = mac.doFinal(saltBytes + byteArrayOf(0, 0, 0, 1))
+        val t = u.copyOf()
+        for (iter in 2..600) {
+            u = mac.doFinal(u)
+            for (k in t.indices) t[k] = (t[k].toInt() xor u[k].toInt()).toByte()
+        }
+        val fullHex = SoloLatinoHostHttp.bytesToHex(t.copyOf(16))
+        val prefix4 = fullHex.take(4)
+        val v2Solved = SoloLatinoVoeCrypto.solveAltchaSuspend(
+            """{"parameters":{"algorithm":"PBKDF2/SHA-256","cost":600,"keyLength":16,"keyPrefix":"$prefix4","nonce":"$nonceHex","salt":"$saltHex"}}""",
+            maxCounters = 20,
+        )
+        assertNotNull(v2Solved)
+        val v2Json = SoloLatinoMarkup.jsonMapper.readTree(String(Base64.getDecoder().decode(v2Solved), StandardCharsets.UTF_8))
+        val solNode = v2Json.get("solution")
+        assertTrue(solNode.get("derivedKey").asText().startsWith(prefix4))
+        assertTrue(solNode.get("counter").asInt() in 0..5)
     }
 }

@@ -1,1 +1,1 @@
-16 plugins including SoloLatino (sololatino.net) with CloudflareKiller + WebView transport, RenderShield/Sanctum API, Embed69 AES-256-CBC, PelisSeriesHoy s.php/p.php, multi-season series, and host extractors (r3)
+16 plugins including SoloLatino v2 (sololatino.net): fix missing posters (preserve TMDB image sizes/WebView PNG stub/Tailwind detail selector) and eliminate loadLinks crash (safe WebChromeClient/teardown, zero-alloc Byse PoW & ALTCHA PBKDF2, thread-safe link callbacks, bounded extractors) (r4)
