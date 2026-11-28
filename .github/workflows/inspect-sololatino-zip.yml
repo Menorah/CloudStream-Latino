@@ -1,148 +1,85 @@
-name: Inspect SoloLatino Live & Missing ZIP 2
+name: Inspect SoloLatino ZIP
+
 on:
   push:
-    branches: ['arena/**']
-    paths: ['.github/workflows/inspect-sololatino-zip.yml']
-  workflow_dispatch:
-permissions:
-  contents: read
+    branches:
+      - arena/**
+
 jobs:
-  zip_details:
+  zip_extra_details:
     runs-on: ubuntu-latest
     steps:
       - name: Download ZIP
-        shell: bash
+        run: |
+          curl -L -A "Mozilla/5.0" -o /tmp/site.zip "https://tmpfiles.org/dl/wLAXvg4SCnBj/sololatino.net.zip" || \
+          curl -L -A "Mozilla/5.0" -o /tmp/site.zip "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip"
+          unzip -q /tmp/site.zip -d /tmp/site_extract
+
+      - name: Emit PSH tail & embed69 full JSON & casey scripts & all HTML inventory
         run: |
           python3 - <<'PY'
-          import re, urllib.request, zipfile
-          req = urllib.request.Request("https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip", headers={"User-Agent": "Mozilla/5.0 Chrome/131.0.0.0"})
-          page = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-          m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', page)
-          dl_url = m.group(0) if m else "https://tmpfiles.org/dl/1795841645.e782f0f73a74db6e/wLAXvg4SCnBj/sololatino.net.zip"
-          dl_req = urllib.request.Request(dl_url, headers={"User-Agent": "Mozilla/5.0 Chrome/131.0.0.0", "Referer": "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip"})
-          with urllib.request.urlopen(dl_req, timeout=180) as r, open("/tmp/sl.zip", "wb") as f:
-              while True:
-                  buf = r.read(65536)
-                  if not buf:
-                      break
-                  f.write(buf)
-          with zipfile.ZipFile("/tmp/sl.zip") as zf:
-              zf.extractall("/tmp/sl_zip")
+          import os, re, json
+
+          root = '/tmp/site_extract'
+          htmls = []
+          for r, _, fs in os.walk(root):
+              for f in fs:
+                  if f.lower().endswith(('.html', '.htm')):
+                      p = os.path.join(r, f)
+                      htmls.append((os.path.getsize(p), os.path.relpath(p, root), p))
+          htmls.sort()
+
+          def emit(tag, text):
+              if not text: return
+              chunk = 3400
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)]
+              for idx, part in enumerate(parts, 1):
+                  safe = part.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice title={tag}#{idx}/{len(parts)}::{safe}")
+
+          inv = [f"{sz:>8} {rel}" for sz, rel, _ in htmls]
+          emit("HTML_INV", "\n".join(inv))
+
+          # 1. PSH end of script (after _noClickTries)
+          psh_path = next((p for _, rel, p in htmls if 'tt1190634-5x08' in rel and 'pelisserieshoy' in rel), None)
+          if psh_path:
+              s = open(psh_path, errors='ignore').read()
+              idx = s.find('_noClickTries')
+              if idx >= 0:
+                  emit("PSH_END", s[idx:idx+6800])
+
+          # 2. Casey scripts (non-jwplayer/svg)
+          casey_path = next((p for _, rel, p in htmls if '84emedzn9bzh' in rel), None)
+          if casey_path:
+              s = open(casey_path, errors='ignore').read()
+              scripts = re.findall(r'<script[^>]*>.*?</script>', s, re.S | re.I)
+              kept = [sc for sc in scripts if len(sc) < 20000 and ('application/json' in sc.lower() or 'source' in sc.lower() or 'voe' in sc.lower() or 'decrypt' in sc.lower() or len(sc) > 50)]
+              emit("CASEY_SCRIPTS", "\n---\n".join(kept)[:6800])
+
+          # 3. Embed69 dataLink & challenge
+          e69_path = next((p for _, rel, p in htmls if 'tt45368240' in rel and 'embed69' in rel), None)
+          if e69_path:
+              s = open(e69_path, errors='ignore').read()
+              m_dl = re.search(r'dataLink\s*=\s*(\[.*?\]);', s, re.S)
+              m_ch = re.search(r'LINK_CHALLENGE\s*=\s*[\'"]([^\'"]+)', s)
+              m_sa = re.search(r'LINK_SALT\s*=\s*[\'"]([^\'"]+)', s)
+              emit("E69_DATA", f"ch={m_ch and m_ch.group(1)}\nsalt={m_sa and m_sa.group(1)}\ndl={(m_dl and m_dl.group(1))[:3000]}")
           PY
 
-      - name: Emit PSH scanAndShow & resolveAndPlay tail
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, re
-          def emit(tag, text, max_ann=8, chunk=5500):
-              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
-              for idx, p in enumerate(parts[:max_ann], 1):
-                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
-          root = pathlib.Path("/tmp/sl_zip")
-          psh = next(root.rglob("*tt1190634-5x08.html")).read_text(errors="replace")
-          psh = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', psh)
-          p1 = psh.find("async function resolveAndPlay")
-          p2 = psh.find("var _al=false;")
-          emit("PSH_SCAN_TAIL", psh[p1:p2+500], max_ann=6)
-          PY
-
-      - name: Emit Casey & Series & Movie & Loader
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, re
-          def emit(tag, text, max_ann=8, chunk=5500):
-              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
-              for idx, p in enumerate(parts[:max_ann], 1):
-                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
-          root = pathlib.Path("/tmp/sl_zip")
-          casey = next(root.rglob("*84emedzn9bzh.html")).read_text(errors="replace")
-          casey = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', casey)
-          emit("CASEY_NO_CSS", casey, max_ann=5)
-
-          ser = next(root.rglob("*Ver The Boys (2019)*.html")).read_text(errors="replace")
-          s_eps = [m.group(0) for m in re.finditer(r'<a[^>]+href="[^"]*temporada[^"]*"[^>]*>', ser)][:12]
-          s_btns = [m.group(0) for m in re.finditer(r'<button[^>]*data-player-token[^>]*>', ser)][:10]
-          ep_area_idx = ser.find("data-season-panel")
-          emit("SERIES_HTML", f"player_idx={ser.find('id=\"player-section\"')}\nep_links={s_eps}\nbtns={s_btns}\nseason_panel={ser[max(0, ep_area_idx-300):ep_area_idx+3000]}", max_ann=2)
-
-          ldr = next(root.rglob("*loader.a40897e.js*")).read_text(errors="replace")
-          emit("LOADER_HEAD", ldr[:2500], max_ann=1)
-          PY
-
-  live_embeds_probe:
+  casey_and_voe_live:
     runs-on: ubuntu-latest
     steps:
       - name: Install curl_cffi
-        shell: bash
-        run: pip install -q curl_cffi
+        run: python3 -m pip install -q curl_cffi
 
-      - name: Probe live PSH, Embed69, Casey via curl_cffi
-        shell: bash
+      - name: Dump live caseyseemavoid HTML and test mirrors
         run: |
           python3 - <<'PY'
-          import re
           from curl_cffi import requests as creq
-
-          def emit(tag, text, max_ann=8, chunk=5500):
-              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
-              for idx, p in enumerate(parts[:max_ann], 1):
-                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
-
           s = creq.Session(impersonate="chrome131")
-          targets = [
-              ("PSH_MOVIE_NO_ET", "https://player.pelisserieshoy.com/f/tt45368240", "https://sololatino.net/"),
-              ("PSH_MOVIE_WITH_ET", "https://player.pelisserieshoy.com/f/tt45368240?et=v1.1795827577.b90cf4b0e066.00876d05fb420b1e0d10a8d34dc3b3f9", "https://sololatino.net/"),
-              ("PSH_EP_WITH_ET", "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=v1.1795827861.2901faf003fb.c16b0266335d585b68a63f8ddde1e959", "https://sololatino.net/"),
-              ("PSH_EP_NO_REF", "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=v1.1795827861.2901faf003fb.c16b0266335d585b68a63f8ddde1e959", ""),
-              ("E69_MOVIE", "https://embed69.org/f/tt45368240", "https://sololatino.net/"),
-              ("E69_MOVIE_NOREF", "https://embed69.org/f/tt45368240", ""),
-              ("E69_EP", "https://embed69.org/f/tt1190634-5x08", "https://sololatino.net/"),
-              ("CASEY", "https://caseyseemavoid.com/e/84emedzn9bzh", "https://embed69.org/"),
-          ]
-          out = []
-          for name, url, ref in targets:
-              hdrs = {"User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"}
-              if ref:
-                  hdrs["Referer"] = ref
-              try:
-                  r = s.get(url, headers=hdrs, timeout=20)
-                  t_m = re.search(r"const _t\s*=\s*'([^']+)'", r.text)
-                  qc_m = re.search(r'var _qc="([^"]+)"', r.text)
-                  qk_m = re.search(r'var _qk=(\[[^\]]+\])', r.text)
-                  dl_m = re.search(r'dataLink\s*=\s*(\[[\s\S]{0,600})', r.text)
-                  out.append(f"[{name}] status={r.status_code} server={r.headers.get('server')} cf={r.headers.get('cf-mitigated')} len={len(r.text)} final={r.url} _t={t_m.group(1) if t_m else None} _qc={qc_m.group(1) if qc_m else None} has_dl={bool(dl_m)} title={re.findall(r'<title>(.*?)</title>', r.text[:2500], re.S)} snippet={r.text[:250]!r}")
-                  if t_m and qc_m and qk_m:
-                      import json
-                      tok = t_m.group(1)
-                      qc = qc_m.group(1)
-                      qk = json.loads(qk_m.group(1))
-                      qv = qk[1] + qk[3] + qk[0] + qk[2]
-                      # test FNV1a
-                      h = 2166136261
-                      for ch in f"{qv}|clk|{qc}":
-                          h ^= ord(ch)
-                          h = (h * 16777619) & 0xFFFFFFFF
-                      tk = format(h, "x")
-                      ao = "https://sololatino.net"
-                      s.headers.update({"Referer": url, "Origin": "https://player.pelisserieshoy.com"})
-                      r_clk = s.post("https://player.pelisserieshoy.com/s.php", data={"a": "click", "tok": tok, "ts": "1", "rt": qv, "tk": tk, "ao": ao}, timeout=15)
-                      r_1 = s.post("https://player.pelisserieshoy.com/s.php", data={"a": "1", "tok": tok, "rt": qv, "tk": tk, "ao": ao}, timeout=15)
-                      out.append(f"  PSH s.php click -> {r_clk.status_code} {r_clk.text[:200]}")
-                      out.append(f"  PSH s.php a=1 -> {r_1.status_code} {r_1.text[:500]}")
-                      try:
-                          j1 = r_1.json()
-                          if j1.get("s"):
-                              for lbl, srv_u in j1["s"][:3]:
-                                  r_2 = s.post("https://player.pelisserieshoy.com/s.php", data={"a": "2", "v": srv_u, "tok": tok, "rt": qv, "tk": tk, "ao": ao}, timeout=15)
-                                  out.append(f"  PSH a=2 ({lbl}) -> {r_2.status_code} {r_2.text[:350]}")
-                      except Exception as jex:
-                          out.append(f"  PSH j1 err={jex}")
-              except Exception as e:
-                  out.append(f"[{name}] EXC {e}")
-          emit("LIVE_EMBEDS", "\n".join(out), max_ann=8)
+          r = s.get("https://caseyseemavoid.com/e/84emedzn9bzh", headers={"Referer": "https://embed69.org/"}, timeout=15)
+          msg = f"status={r.status_code} headers={dict(r.headers)}\ncookies={dict(s.cookies)}\nbody=\n{r.text}"
+          for idx in range(0, len(msg), 3400):
+              safe = msg[idx:idx+3400].replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f"::notice title=CASEY_LIVE#{idx//3400 + 1}::{safe}")
           PY
