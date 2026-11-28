@@ -454,11 +454,11 @@ internal object SoloLatinoVoeCrypto {
     fun decryptF7(encoded: String): JsonNode? = runCatching {
         val step1 = rot13(encoded.trim())
         var cleaned = step1
-        for (marker in JUNK_PATTERNS) cleaned = cleaned.replace(marker, "")
+        for (marker in JUNK_PATTERNS) cleaned = cleaned.replace(marker, "_")
         cleaned = cleaned.replace("_", "")
-        val step3 = String(SoloLatinoHostHttp.decodeBase64Flexible(cleaned), StandardCharsets.UTF_8)
-        val step4 = buildString(step3.length) {
-            for (ch in step3) append((ch.code - 3).toChar())
+        val step3Bytes = SoloLatinoHostHttp.decodeBase64Flexible(cleaned)
+        val step4 = buildString(step3Bytes.size) {
+            for (b in step3Bytes) append(((b.toInt() and 0xFF) - 3).toChar())
         }
         val step5 = step4.reversed()
         val json = String(SoloLatinoHostHttp.decodeBase64Flexible(step5), StandardCharsets.UTF_8)

@@ -59,7 +59,7 @@ object PlaybackProbe {
                                     SoloLatinoExtractorDispatcher.extract(
                                         url = u,
                                         referer = "https://embed69.org/",
-                                        sourceLabel = "SoloLatino · $lang",
+                                        sourceLabel = "SoloLatino · $lang · $hint",
                                         subtitleCallback = {},
                                         serverHint = hint,
                                         client = provider.client,
@@ -70,8 +70,8 @@ object PlaybackProbe {
                     }
                     Log.i("CSPlaybackProbe", "HOST_DIRECT count=${directHostLinks.size} names=${directHostLinks.map { it.name }} urls=${directHostLinks.take(4).map { it.url.take(60) }}")
                     check(directHostLinks.isNotEmpty()) { "HOST_DIRECT returned no links" }
-                    val voeLink = directHostLinks.firstOrNull { it.name.contains("Voe", ignoreCase = true) || it.url.contains("voe", ignoreCase = true) }
-                    val vidhideLink = directHostLinks.firstOrNull { !it.name.contains("Voe", ignoreCase = true) }
+                    val voeLink = directHostLinks.firstOrNull { it.name.contains("voe", ignoreCase = true) || it.url.contains("voe", ignoreCase = true) }
+                    val vidhideLink = directHostLinks.firstOrNull { !it.name.contains("voe", ignoreCase = true) }
                     if (vidhideLink != null) playFirstWorking(context, "host-vidhide", listOf(vidhideLink))
                     if (voeLink != null) {
                         playFirstWorking(context, "host-voe-altcha", listOf(voeLink))
@@ -103,12 +103,14 @@ object PlaybackProbe {
                                 )
                             } else null
                             val pRes = p?.getOrNull()
-                            val pErr = p?.exceptionOrNull()?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"
-                            val chErr = ch?.exceptionOrNull()?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"
-                            val r1Err = r1.exceptionOrNull()?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"
+                            val pDoc = pRes?.text?.let { Jsoup.parse(it, pRes.url) }
+                            val rawJs = pDoc?.selectFirst("script[type=application/json]")?.data()?.trim().orEmpty()
+                            val enc = Regex("""\[\s*"([^"]+)"\s*]""").find(rawJs)?.groupValues?.getOrNull(1)
+                                ?: rawJs.substringAfter("[\"", "").substringBeforeLast("\"]", "")
+                            val dec = if (enc.isNotBlank()) SoloLatinoVoeCrypto.decryptF7(enc) else null
                             Log.i(
                                 "CSPlaybackProbe",
-                                "VOE_DIAG r1=${r1Res?.code}($r1Err) ch=${chRes?.code}($chErr):${chRes?.text?.take(120)} sol=${sol != null}(${solveMs}ms) post=${pRes?.code}($pErr):hasJson=${pRes?.text?.contains("application/json")}",
+                                "VOE_DIAG r1=${r1Res?.code} ch=${chRes?.code} sol=${sol != null}(${solveMs}ms) post=${pRes?.code} rawLen=${rawJs.length} rawHead=${rawJs.take(80)} decSrc=${dec?.get("source")?.asText()?.take(60)}",
                             )
                         }
                         error("VOE failed - inspect VOE_DIAG")
