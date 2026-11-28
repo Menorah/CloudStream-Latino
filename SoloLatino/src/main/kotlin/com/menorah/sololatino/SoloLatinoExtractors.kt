@@ -716,7 +716,7 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
             langTag: String?,
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
-        ): Boolean = withTimeoutOrNull(30_000L) {
+        ): Boolean = withTimeoutOrNull(48_000L) {
             val origin = SoloLatinoHostHttp.originOf(url, "https://player.pelisserieshoy.com")
             val resolvedServers = try {
                 client.resolvePelisSeriesHoy(url, referer)
@@ -728,7 +728,7 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
             if (resolvedServers.isEmpty()) return@withTimeoutOrNull false
 
             val emitted = AtomicBoolean(false)
-            val streamHeaders = mapOf(
+            val baseHeaders = mapOf(
                 "Referer" to "$origin/",
                 "Origin" to origin,
                 "user-agent" to client.currentUserAgent(),
@@ -736,13 +736,44 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
             coroutineScope {
                 resolvedServers.map { srv ->
                     async(Dispatchers.IO) {
-                        withTimeoutOrNull(16_000L) {
+                        withTimeoutOrNull(18_000L) {
                             try {
                                 val effectiveLang = langTag ?: srv.langLabel
                                 val sourceLabel = "SoloLatino · $effectiveLang · ${srv.label}"
+                                val streamHeaders = if (srv.cookieHeader.isNotBlank()) {
+                                    baseHeaders + ("Cookie" to srv.cookieHeader)
+                                } else {
+                                    baseHeaders
+                                }
                                 when {
-                                    !srv.u.isNullOrBlank() && !srv.sig.isNullOrBlank() -> {
-                                        val proxyM3u8 = SoloLatinoMarkup.buildPelisSeriesHoyHlsProxyUrl(origin, srv.u, srv.sig)
+                                    srv.type.equals("iframe", ignoreCase = true) && !srv.url.isNullOrBlank() -> {
+                                        SoloLatinoExtractorDispatcher.extract(
+                                            url = srv.url,
+                                            referer = "$origin/",
+                                            sourceLabel = sourceLabel,
+                                            subtitleCallback = subtitleCallback,
+                                            serverHint = srv.label,
+                                        ) { link ->
+                                            emitted.set(true)
+                                            callback(link)
+                                        }
+                                    }
+                                    srv.type.equals("mp4", ignoreCase = true) && (!srv.u.isNullOrBlank() || !srv.url.isNullOrBlank()) -> {
+                                        val mp4Url = srv.u ?: srv.url!!
+                                        val isProxied = mp4Url.contains("/p.php", ignoreCase = true) ||
+                                            SoloLatinoMarkup.isPelisSeriesHoyUrl(mp4Url)
+                                        callback(
+                                            newExtractorLink(sourceLabel, "${srv.label} MP4", mp4Url, ExtractorLinkType.VIDEO) {
+                                                this.referer = if (isProxied) "$origin/" else ""
+                                                this.headers = if (isProxied) streamHeaders else mapOf("user-agent" to client.currentUserAgent())
+                                                this.quality = Qualities.Unknown.value
+                                            },
+                                        )
+                                        emitted.set(true)
+                                        true
+                                    }
+                                    !srv.u.isNullOrBlank() -> {
+                                        val proxyM3u8 = SoloLatinoMarkup.buildPelisSeriesHoyHlsProxyUrl(origin, srv.u, srv.sig, srv.ctx)
                                         SoloLatinoHlsHelper.emitHlsSafely(
                                             sourceName = sourceLabel,
                                             displayName = srv.label,
@@ -753,17 +784,6 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
                                             emitted.set(true)
                                             callback(link)
                                         }
-                                    }
-                                    !srv.url.isNullOrBlank() && srv.type.equals("mp4", ignoreCase = true) -> {
-                                        callback(
-                                            newExtractorLink(sourceLabel, "${srv.label} MP4", srv.url, INFER_TYPE) {
-                                                this.referer = "$origin/"
-                                                this.headers = streamHeaders
-                                                this.quality = Qualities.Unknown.value
-                                            },
-                                        )
-                                        emitted.set(true)
-                                        true
                                     }
                                     !srv.url.isNullOrBlank() && srv.url.contains(".m3u8", ignoreCase = true) -> {
                                         SoloLatinoHlsHelper.emitHlsSafely(
@@ -783,6 +803,7 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
                                             referer = "$origin/",
                                             sourceLabel = sourceLabel,
                                             subtitleCallback = subtitleCallback,
+                                            serverHint = srv.label,
                                         ) { link ->
                                             emitted.set(true)
                                             callback(link)
@@ -805,7 +826,7 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
 }
 
 internal object SoloLatinoEmbed69Resolver {
-    private val hostGate = Semaphore(3)
+    private val hostGate = Semaphore(4)
 
     private fun serverPriority(serverName: String, url: String): Int {
         val lower = "${serverName.lowercase(Locale.ROOT)} ${url.lowercase(Locale.ROOT)}"
@@ -829,7 +850,7 @@ internal object SoloLatinoEmbed69Resolver {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
         client: SoloLatinoClient? = null,
-    ): Boolean = withTimeoutOrNull(35_000L) {
+    ): Boolean = withTimeoutOrNull(50_000L) {
         val effRef = referer?.takeIf { it.startsWith("http", ignoreCase = true) } ?: "${SoloLatinoMarkup.MAIN_URL}/"
         val (pageHtml, pageFinalUrl) = if (client != null) {
             val fetched = client.fetchExternalHtml(embedUrl, effRef) { target ->
@@ -873,7 +894,7 @@ internal object SoloLatinoEmbed69Resolver {
             mirrors.map { mirror ->
                 async(Dispatchers.IO) {
                     hostGate.withPermit {
-                        withTimeoutOrNull(15_000L) {
+                        withTimeoutOrNull(16_000L) {
                             try {
                                 val lang = mirror.langLabel.ifBlank { preferredLangTag ?: "Latino" }
                                 val label = mirror.serverName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
@@ -883,6 +904,7 @@ internal object SoloLatinoEmbed69Resolver {
                                     referer = pageFinalUrl,
                                     sourceLabel = sourceLabel,
                                     subtitleCallback = subtitleCallback,
+                                    serverHint = mirror.serverName,
                                 ) { link ->
                                     emitted.set(true)
                                     callback(link)
@@ -2037,6 +2059,7 @@ internal object SoloLatinoExtractorDispatcher {
         referer: String?,
         sourceLabel: String,
         subtitleCallback: (SubtitleFile) -> Unit,
+        serverHint: String? = null,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val cleanUrl = url.trim()
@@ -2044,6 +2067,7 @@ internal object SoloLatinoExtractorDispatcher {
             return false
         }
         val lower = cleanUrl.lowercase(Locale.ROOT)
+        val hintLower = serverHint?.lowercase(Locale.ROOT).orEmpty()
 
         // Direct media files
         if (lower.substringBefore('?').endsWith(".m3u8")) {
@@ -2068,30 +2092,35 @@ internal object SoloLatinoExtractorDispatcher {
             return true
         }
 
-        val nativeHandled = isNativeHost(lower)
+        val nativeHandled = isNativeHost(lower) ||
+            hintLower in setOf("voe", "vidhide", "earnvids", "streamwish", "filemoon", "byse", "savefiles", "lulustream", "luluvid", "dood", "doodstream", "uqload")
         val ok = when {
-            lower.contains("voe.sx") || lower.contains("caseyseemavoid") || lower.contains("crystaltreatmente") ->
+            lower.contains("voe.sx") || lower.contains("caseyseemavoid") || lower.contains("crystaltreatmente") || hintLower == "voe" ->
                 SoloLatinoVoeExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
             lower.contains("morencius") || lower.contains("vidhide") || lower.contains("earnvids") ||
                 lower.contains("callistanise") || lower.contains("minochinos") || lower.contains("peytonepre") ||
                 lower.contains("smoothpre") || lower.contains("ryderjet") || lower.contains("movearnpre") ||
-                lower.contains("dingtezuni") || lower.contains("mivalyo") || lower.contains("taylorplayer") ->
+                lower.contains("dingtezuni") || lower.contains("mivalyo") || lower.contains("taylorplayer") ||
+                hintLower.contains("vidhide") || hintLower.contains("earnvids") ->
                 SoloLatinoVidHideExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
             lower.contains("streamwish") || lower.contains("hglink") || lower.contains("medixiru") ||
                 lower.contains("vsembed") || lower.contains("flaswish") || lower.contains("hlswish") ||
-                lower.contains("playerwish") || lower.contains("dhcplay") || lower.contains("strwish") ->
+                lower.contains("playerwish") || lower.contains("dhcplay") || lower.contains("strwish") ||
+                hintLower.contains("streamwish") ->
                 SoloLatinoStreamWishExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
-            lower.contains("filemoon") ->
+            lower.contains("filemoon") || hintLower.contains("filemoon") ->
                 SoloLatinoFilemoonExtractor.extractFilemoon(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
-            lower.contains("byse") || lower.contains("n1mwq") ->
+            lower.contains("byse") || lower.contains("n1mwq") || hintLower.contains("byse") ->
                 SoloLatinoByseExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
-            lower.contains("savefiles") || lower.contains("streamhls.to") ->
+            lower.contains("savefiles") || lower.contains("streamhls.to") || hintLower.contains("savefiles") ->
                 SoloLatinoSavefilesExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
-            lower.contains("lulustream") || lower.contains("luluvid") || lower.contains("luluvdo") || lower.contains("lulu.st") ->
+            lower.contains("lulustream") || lower.contains("luluvid") || lower.contains("luluvdo") || lower.contains("lulu.st") ||
+                hintLower.contains("lulu") ->
                 SoloLatinoLulustreamExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
-            lower.contains("dood") || lower.contains("d000d") || lower.contains("do7go") || lower.contains("dsvplay") || lower.contains("playmogo") ->
+            lower.contains("dood") || lower.contains("d000d") || lower.contains("do7go") || lower.contains("dsvplay") || lower.contains("playmogo") ||
+                hintLower.contains("dood") ->
                 SoloLatinoDoodExtractor.extract(cleanUrl, sourceLabel, callback)
-            lower.contains("uqload") ->
+            lower.contains("uqload") || hintLower.contains("uqload") ->
                 SoloLatinoUqloadExtractor.extract(cleanUrl, referer, sourceLabel, callback)
             lower.contains("drive.google.com") || lower.contains("drive.usercontent.google.com") ->
                 SoloLatinoGDriveExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)

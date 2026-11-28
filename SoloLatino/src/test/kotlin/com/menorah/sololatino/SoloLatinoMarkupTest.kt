@@ -381,11 +381,29 @@ class SoloLatinoMarkupTest {
         assertEquals("Latino", servers[0].langLabel)
         assertEquals("Subtitulado", servers[1].langLabel)
 
-        val step2Hls = SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"u":"https://cdn.example.com/master.m3u8","sig":"sig_abc=1"}""")!!
+        val step2Hls = SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"u":"https://cdn.example.com/master.m3u8","sig":"sig_abc=1","ctx":"c123"}""")!!
         assertEquals(
-            "https://player.pelisserieshoy.com/p.php?url=https%3A%2F%2Fcdn.example.com%2Fmaster.m3u8&sig=sig_abc%3D1",
-            SoloLatinoMarkup.buildPelisSeriesHoyHlsProxyUrl("https://player.pelisserieshoy.com", step2Hls.u!!, step2Hls.sig!!),
+            "https://player.pelisserieshoy.com/p.php?url=https%3A%2F%2Fcdn.example.com%2Fmaster.m3u8&sig=sig_abc%3D1&ctx=c123",
+            SoloLatinoMarkup.buildPelisSeriesHoyHlsProxyUrl("https://player.pelisserieshoy.com", step2Hls.u!!, step2Hls.sig!!, step2Hls.ctx),
         )
+        // JS _qh() returns unpadded (h>>>0).toString(16) (no zero-padding)
+        assertEquals("de8d5a3", SoloLatinoMarkup.fnv1a32Hex("68"))
+        val pshEmptyAo = """
+            <script>
+              var _t = 'tok2'; var _qc = 'qc2'; var _qk = ['c','a','d','b'];
+              var _ao = ''; var _qsrc = 'sl';
+            </script>
+        """.trimIndent()
+        val initEmptyAo = SoloLatinoMarkup.parsePelisSeriesHoyInit(
+            pshEmptyAo,
+            "https://player.pelisserieshoy.com/f/tt123",
+            refererUrl = "https://sololatino.co/pelicula/algo",
+        )!!
+        assertEquals("https://sololatino.co", initEmptyAo.ao)
+        assertEquals("sl", initEmptyAo.qsrc)
+        val mp4Step2 = SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"type":"mp4","u":"https://cdn.example.com/video.mp4"}""")!!
+        assertEquals("mp4", mp4Step2.type)
+        assertEquals("https://cdn.example.com/video.mp4", mp4Step2.u)
     }
 
     @Test

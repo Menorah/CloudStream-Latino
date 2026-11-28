@@ -120,6 +120,7 @@ internal data class SoloLatinoPelisSeriesHoyInit(
     val qt: String,
     val originUrl: String,
     val ao: String,
+    val qsrc: String = "",
 )
 
 internal data class SoloLatinoPelisSeriesHoyServer(
@@ -133,6 +134,7 @@ internal data class SoloLatinoPelisSeriesHoyResolution(
     val url: String?,
     val u: String?,
     val sig: String?,
+    val ctx: String? = null,
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -196,7 +198,8 @@ internal object SoloLatinoMarkup {
     private val PSH_T_REGEX = Regex("""\b(?:var|let|const)?\s*_t\s*=\s*['"]([^'"]+)['"]""")
     private val PSH_QC_REGEX = Regex("""\b(?:var|let|const)?\s*_qc\s*=\s*['"]([^'"]+)['"]""")
     private val PSH_QK_REGEX = Regex("""\b(?:var|let|const)?\s*_qk\s*=\s*(\[[^\]]+\])""")
-    private val PSH_AO_REGEX = Regex("""\b(?:var|let|const)?\s*ao\s*=\s*['"]([^'"]+)['"]""")
+    private val PSH_AO_REGEX = Regex("""\b(?:var|let|const)?\s*_?ao\s*=\s*['"]([^'"]*)['"]""")
+    private val PSH_SRC_REGEX = Regex("""\b(?:var|let|const)?\s*_qsrc\s*=\s*['"]([^'"]*)['"]""")
 
     fun mainPageCategories(): List<Pair<String, String>> = listOf(
         SECTION_HOME_RECENT_EPISODES to "Últimos Episodios",
@@ -1178,10 +1181,23 @@ internal object SoloLatinoMarkup {
             h = h xor ch.code.toUInt()
             h *= 0x01000193u
         }
-        return h.toString(16).padStart(8, '0')
+        return h.toString(16)
     }
 
-    fun parsePelisSeriesHoyInit(html: String, pageUrl: String): SoloLatinoPelisSeriesHoyInit? {
+    fun originFromUrl(url: String?, fallback: String = MAIN_URL): String {
+        val uri = url?.trim()?.let { runCatching { URI(it) }.getOrNull() }
+        return if (uri != null && !uri.scheme.isNullOrBlank() && !uri.authority.isNullOrBlank()) {
+            "${uri.scheme}://${uri.authority}"
+        } else {
+            fallback
+        }
+    }
+
+    fun parsePelisSeriesHoyInit(
+        html: String,
+        pageUrl: String,
+        refererUrl: String = MAIN_URL,
+    ): SoloLatinoPelisSeriesHoyInit? {
         val t = PSH_T_REGEX.find(html)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null } ?: return null
         val qc = PSH_QC_REGEX.find(html)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null } ?: return null
         val qkRaw = PSH_QK_REGEX.find(html)?.groupValues?.getOrNull(1) ?: return null
@@ -1191,13 +1207,10 @@ internal object SoloLatinoMarkup {
         if (qk.size < 4) return null
         val qv = qk[1] + qk[3] + qk[0] + qk[2]
         val qt = fnv1a32Hex("$qv|clk|$qc")
-        val ao = PSH_AO_REGEX.find(html)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null } ?: MAIN_URL
-        val uri = runCatching { URI(pageUrl) }.getOrNull()
-        val originUrl = if (uri != null && !uri.scheme.isNullOrBlank() && !uri.authority.isNullOrBlank()) {
-            "${uri.scheme}://${uri.authority}"
-        } else {
-            "https://player.pelisserieshoy.com"
-        }
+        val defaultAo = originFromUrl(refererUrl, MAIN_URL)
+        val ao = PSH_AO_REGEX.find(html)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null } ?: defaultAo
+        val qsrc = PSH_SRC_REGEX.find(html)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val originUrl = originFromUrl(pageUrl, "https://player.pelisserieshoy.com")
         return SoloLatinoPelisSeriesHoyInit(
             token = t,
             qc = qc,
@@ -1206,6 +1219,7 @@ internal object SoloLatinoMarkup {
             qt = qt,
             originUrl = originUrl,
             ao = ao,
+            qsrc = qsrc,
         )
     }
 
@@ -1259,15 +1273,26 @@ internal object SoloLatinoMarkup {
         val url = root.get("url")?.asText()?.trim()?.replace("\\/", "/")?.ifBlank { null }
         val u = root.get("u")?.asText()?.trim()?.replace("\\/", "/")?.ifBlank { null }
         val sig = root.get("sig")?.asText()?.trim()?.ifBlank { null }
+        val ctx = root.get("ctx")?.asText()?.trim()?.ifBlank { null }
         if (url == null && u == null) return null
-        return SoloLatinoPelisSeriesHoyResolution(type = type, url = url, u = u, sig = sig)
+        return SoloLatinoPelisSeriesHoyResolution(type = type, url = url, u = u, sig = sig, ctx = ctx)
     }
 
-    fun buildPelisSeriesHoyHlsProxyUrl(originUrl: String, u: String, sig: String): String {
+    fun buildPelisSeriesHoyHlsProxyUrl(
+        originUrl: String,
+        u: String,
+        sig: String?,
+        ctx: String? = null,
+    ): String {
         val cleanOrigin = originUrl.trimEnd('/')
         val encU = URLEncoder.encode(u, StandardCharsets.UTF_8.name())
-        val encSig = URLEncoder.encode(sig, StandardCharsets.UTF_8.name())
-        return "$cleanOrigin/p.php?url=$encU&sig=$encSig"
+        val encSig = URLEncoder.encode(sig.orEmpty(), StandardCharsets.UTF_8.name())
+        return buildString {
+            append(cleanOrigin).append("/p.php?url=").append(encU).append("&sig=").append(encSig)
+            if (!ctx.isNullOrBlank()) {
+                append("&ctx=").append(URLEncoder.encode(ctx, StandardCharsets.UTF_8.name()))
+            }
+        }
     }
 
     private val GDRIVE_FILE_ID_REGEX = Regex("""(?:/file/d/|/d/|[?&]id=)([A-Za-z0-9_-]{12,})""")
