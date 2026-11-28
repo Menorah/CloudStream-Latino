@@ -17,7 +17,7 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | AnimeOnlineNinja | **Reconstruido y verificado (v9)** | Sustituye por completo al complemento antiguo; catálogo completo, portadas Coil + respaldo WebView y reproducción Media3 verificada. |
 | Cuevana3v | **Creado desde cero y verificado (v1)** | Catálogo completo HTML SSR (`/peliculas`, `/series`, `/episodios/recientes`, `/explorar?s=`, géneros, estrenos), descifrado XOR/Base64 de `tungtungsahur.cuevana3v.pro`, extractores propios VidHide para Hyper (`lkhjerbhye3wikhoduh5xiczuvd.lol`) y Nebula (`vibuxer.com`), portadas Coil y reproducción Media3 verificada. |
 | VerAni | Publicado (tareas previas) | Mantiene su módulo propio para VerAni.me. |
-| SoloLatino | **Creado y verificado (v3)** | Reconstrucción completa sobre HTML SSR de `sololatino.net` (catálogos paginados, últimos episodios, búsqueda y sugerencias JSON, pósters TMDB `w500`/`w1280`/`w400`), handshake Sanctum + `X-SL-Render` SHA-256, flujo `player.pelisserieshoy.com` (bypass anti-top-level `window.stop()`, `_ao`/`_qsrc`, FNV-1a sin padding y proxy `/p.php` con `ctx`), descifrado AES-256-CBC de `embed69.org` (petición HTTP no-`wv` y filtro de error Chromium) y extractores nativos verificados en CloudStream + Media3 + Coil. |
+| SoloLatino | **Creado y verificado (v4)** | Reconstrucción completa sobre HTML SSR de `sololatino.net` (catálogos paginados, últimos episodios, búsqueda y sugerencias JSON, pósters TMDB `w500`/`w1280`/`w400`), handshake Sanctum con `X-XSRF-TOKEN` exclusivo (y reintento tras 419) + `X-SL-Render` SHA-256, `WebView` propio (`Semaphore(1)`, UA nativo preservado, `onRenderProcessGone`, sin borrar cookies globales), flujo `player.pelisserieshoy.com` en streaming vía `XMLHttpRequest` (`window.stop()`, `_isLocked`, `_qt`/`_t`,Proxy `/p.php`), `embed69.org` (`dataLink` AES-256-CBC), VOE con espejos + solucionador ALTCHA v2 PBKDF2-HMAC-SHA256 en Kotlin y descifrado F7 unsigned verificados en CloudStream + Media3 + Coil. |
 | PoseidonHD2 | **Reconstruido y verificado (v2)** | Sustituye por completo al complemento antiguo sobre el SSR `__NEXT_DATA__` de `poseidonhd2.co`: 27 secciones paginadas (`/page/<n>`), búsqueda, promoción episodio→serie, extractores propios para VOE (ALTCHA v2 PBKDF2 + descifrado), StreamWish (`medixiru.com` → `vsembed.com` AES-128-CBC), VidHide (cascada de espejos `hls2`), `bysejikuar.com`, más extractores integrados (`Vidara`, `DoodStream`) y reproducción Media3 verificada. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
 | pelisplus.fit | **Sin complemento viable** | Ídem. |
@@ -122,19 +122,19 @@ de imagen + casilla de términos + honeypot `empresa_hp`) que emite la cookie de
     `Vidara`).
   - Los canales de TV en vivo con claves DRM quedan fuera del complemento.
 
-## SoloLatino.net (v3)
+## SoloLatino.net (v4)
 
 Cadena completa implementada y verificada en Android 13 (API 33):
-1. `GET /sanctum/csrf-cookie` → cookies + `XSRF-TOKEN` (sincronizando el reloj vía header `Date`);
-2. `button[data-player-token]` por idioma (`div[data-lang-group]`) y `#player-frame[data-lazy-embed]`;
-3. `POST /api/player-url` y `/api/player-embed` `{"t":token}` con `X-XSRF-TOKEN` y `X-SL-Render`
-   (`sha256(token:minuto:sololatino_render_shield_2026)` truncado a 16 hex) → `{url,type}`:
+1. `GET /sanctum/csrf-cookie` → cookies + `XSRF-TOKEN` exclusivo (sin enviar `X-CSRF-TOKEN` caduco cuando existe `XSRF-TOKEN`, y refrescando automáticamente ante HTTP `419`, sincronizando el reloj vía header `Date`);
+2. `button[data-player-token]` por idioma (`div[data-lang-group]`) y `#player-frame[data-lazy-embed]`, invalidando la caché HTML si una ficha caducada no devuelve reproductores;
+3. `POST /api/player-url` y `/api/player-embed` `{"t":token}` con `X-XSRF-TOKEN` y `X-SL-Render` (`sha256(token:minuto:sololatino_render_shield_2026)` truncado a 16 hex) dentro de `WebView` propio (`Semaphore(1)`, UA del sistema intacto para mantener validez de `cf_clearance`, `onRenderProcessGone`, y sin `CloudflareKiller` para evitar llamadas a `removeAllCookies(null)`) → `{url,type}`:
    - `mp4` → directo;
-   - `player.pelisserieshoy.com` → `_t/_qc/_qk/_ao/_qsrc`, `fnv1a32` sin zero-padding (`(h >>> 0).toString(16)`), `s.php` (`a=click`, `a=1`, `a=2&v=`) y proxy `/p.php?url=&sig=&ctx=` manteniendo sesión en WebView aun tras `window.stop()`;
-   - `embed69.org` → petición directa con UA móvil estándar (sin `; wv)`), filtro de página interna Chromium ante `window.stop()` y descifrado AES-256-CBC de `dataLink` (`sha256(LINK_CHALLENGE+LINK_SALT)`).
+   - `player.pelisserieshoy.com` → resolución en streaming (cada servidor emite su enlace al terminar sin esperar a los más lentos) vía `XMLHttpRequest` (`_t`/`const _t`, `_qc`/`_qk`/`_ao`/`_qsrc`, `fnv1a32` sin zero-padding, fijando `window._qt = tk`, evitando el wrapper de `window.fetch` y `_isLocked`), soporte de respuestas `busy`/`no_click`/`retry_once` y proxy `/p.php?url=&sig=&ctx=` manteniendo sesión en WebView aun tras `window.stop()`;
+   - `embed69.org` → transporte compartido con sesión/UA preservados, filtro de página interna Chromium y descifrado AES-256-CBC de `dataLink` (`sha256(LINK_CHALLENGE+LINK_SALT)`);
+   - Extractores nativos con sesionado/UA compartido (`HostGate = Semaphore(3)`): **VOE** (`voe.sx` con respaldo a espejos `caseyseemavoid.com`/`crystaltreatmente.com`, solucionador ALTCHA v2 PBKDF2-HMAC-SHA256 midstate en Kotlin puro y descifrado F7 unsigned byte-shift), **VidHide / EarnVids** (`morencius.com`/`callistanise.com`, verificado con Media3), **StreamWish / HGLink / vsembed** (sin `WebViewResolver`), **Byse / Filemoon**, **Savefiles**, **Lulustream**, **DoodStream**, **Uqload** y **Google Drive**.
 - Búsqueda `/buscar?q=` y sugerencias `/api/search/suggest`; catálogos `/peliculas`, `/series`, `/animes`, `/doramas`, plataformas (`/red/...`) y géneros (`/genero/...`).
 
-Implementación: módulo `SoloLatino` (`SoloLatinoMarkup`, `SoloLatinoSession`, `SoloLatinoExtractors`, `SoloLatinoProvider`, `SoloLatinoPlugin`) con suite de pruebas JVM (`SoloLatinoMarkupTest`) y verificación en emulador Android 13 con CloudStream + Coil + Media3 ExoPlayer.
+Implementación: módulo `SoloLatino` (`SoloLatinoMarkup`, `SoloLatinoSession`, `SoloLatinoExtractors`, `SoloLatinoProvider`, `SoloLatinoPlugin`) con suite de pruebas JVM (`SoloLatinoMarkupTest`) y verificación en emulador Android 13 con CloudStream pre-release + Coil 3 + Media3 ExoPlayer (VidHide, VOE ALTCHA v2, portadas TMDB y pipeline `WebView` con cancelación segura).
 
 ## PoseidonHD2.co (v2) — reconstruido desde cero y verificado con Media3
 
