@@ -40,16 +40,24 @@ class SoloLatinoLiveTest {
     fun `live embed69 mirrors decrypt and resolve playable host streams`() {
         val embedUrl = "https://embed69.org/f/tt45368240"
         val (code, html) = fetchWithStatus(embedUrl)
-        assertTrue("Expected HTTP 200 on Embed69 ($code)", code == 200)
-        val mirrors = SoloLatinoMarkup.decryptEmbed69Page(html)
-        assertTrue("Expected decrypted Embed69 mirrors", mirrors.isNotEmpty())
+        val embedBlocked = code == 403 || code == 503 || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, html)
+        var verifiedAnyLive = false
 
-        val morencius = mirrors.firstOrNull { it.url.contains("morencius", ignoreCase = true) || it.url.contains("vidhide", ignoreCase = true) }
-        if (morencius != null) {
-            val (mCode, mHtml) = fetchWithStatus(morencius.url, referer = embedUrl)
-            assertTrue("Morencius returned HTTP $mCode", mCode == 200)
-            val parsed = SoloLatinoVidHideParser.parse(mHtml, morencius.url)
-            assertTrue("Morencius embed yields playable HLS stream", parsed.streams.isNotEmpty())
+        if (!embedBlocked) {
+            assertTrue("Expected HTTP 200 on Embed69 ($code)", code == 200)
+            val mirrors = SoloLatinoMarkup.decryptEmbed69Page(html)
+            assertTrue("Expected decrypted Embed69 mirrors", mirrors.isNotEmpty())
+            verifiedAnyLive = true
+
+            val morencius = mirrors.firstOrNull { it.url.contains("morencius", ignoreCase = true) || it.url.contains("vidhide", ignoreCase = true) }
+            if (morencius != null) {
+                val (mCode, mHtml) = fetchWithStatus(morencius.url, referer = embedUrl)
+                if (mCode != 403 && !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(mCode, mHtml)) {
+                    assertTrue("Morencius returned HTTP $mCode", mCode == 200)
+                    val parsed = SoloLatinoVidHideParser.parse(mHtml, morencius.url)
+                    assertTrue("Morencius embed yields playable HLS stream", parsed.streams.isNotEmpty())
+                }
+            }
         }
 
         // Also check SoloLatino main site if runner IP is not Cloudflare-challenged
@@ -57,6 +65,19 @@ class SoloLatinoLiveTest {
         if (slCode == 200 && !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(slCode, slHtml)) {
             val page = SoloLatinoMarkup.parseCatalogPage(Jsoup.parse(slHtml, "${SoloLatinoMarkup.MAIN_URL}/peliculas"))
             assertFalse("Catalog page should return cards when reachable", page.items.isEmpty())
+            assertTrue("Catalog cards should extract TMDB posters", page.items.any { !it.posterUrl.isNullOrBlank() })
+
+            val firstMovieUrl = page.items.firstOrNull { it.url.contains("/pelicula/") }?.url
+            if (firstMovieUrl != null) {
+                val (dCode, dHtml) = fetchWithStatus(firstMovieUrl, referer = "${SoloLatinoMarkup.MAIN_URL}/peliculas")
+                if (dCode == 200 && !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(dCode, dHtml)) {
+                    val detail = SoloLatinoMarkup.parseDetail(Jsoup.parse(dHtml, firstMovieUrl), firstMovieUrl)
+                    assertTrue("Live movie detail parses title and posterUrl", detail != null && !detail.posterUrl.isNullOrBlank())
+                }
+            }
+            verifiedAnyLive = true
         }
+
+        assumeTrue("Runner IP is Cloudflare-challenged for both Embed69 ($code) and SoloLatino ($slCode)", verifiedAnyLive)
     }
 }

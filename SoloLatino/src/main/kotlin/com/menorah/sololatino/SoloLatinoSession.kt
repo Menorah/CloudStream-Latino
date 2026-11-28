@@ -1536,4 +1536,59 @@ internal class SoloLatinoClient(
         }
         return results
     }
+
+    suspend fun fetchExternalHtml(
+        url: String,
+        referer: String,
+        allowedHost: (String) -> Boolean,
+    ): SoloLatinoHttpResult = siteGate.withPermit {
+        val ua = currentUserAgent()
+        val headers = SoloLatinoSessionHelper.buildBrowserHeaders(ua, referer, isAjax = false)
+        val direct = runCatching { app.get(url, referer = referer, headers = headers, timeout = 12L) }.getOrNull()
+        var code = direct?.code ?: 0
+        var finalUrl = direct?.url ?: url
+        var text = direct?.text.orEmpty()
+        if (code in 200..299 && !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text)) {
+            return@withPermit SoloLatinoHttpResult(code, finalUrl, text)
+        }
+        val ctx = appContext
+        if (ctx == null) {
+            cfMutex.withLock {
+                val cfRes = runCatching {
+                    app.get(
+                        url,
+                        referer = referer,
+                        headers = SoloLatinoSessionHelper.buildBrowserHeaders(currentUserAgent(), referer, isAjax = false),
+                        interceptor = cfKiller,
+                        timeout = 18L,
+                    )
+                }.getOrNull()
+                if (cfRes != null) {
+                    code = cfRes.code
+                    finalUrl = cfRes.url
+                    text = cfRes.text
+                }
+            }
+        } else if (code == 403 || code == 503 || code == 0 || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text)) {
+            cfMutex.withLock {
+                val webRes = runCatching {
+                    SoloLatinoWebTransport.getHtml(
+                        context = ctx,
+                        url = url,
+                        referer = referer,
+                        allowedHost = allowedHost,
+                        userAgent = currentUserAgent(),
+                        fetchSameOriginEndpoint = false,
+                        testResponse = testWebResponse,
+                    )
+                }.getOrNull()
+                if (webRes != null) {
+                    code = webRes.code
+                    finalUrl = webRes.url
+                    text = webRes.text
+                }
+            }
+        }
+        SoloLatinoHttpResult(code, finalUrl, text)
+    }
 }

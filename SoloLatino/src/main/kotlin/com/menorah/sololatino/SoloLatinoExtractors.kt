@@ -828,24 +828,35 @@ internal object SoloLatinoEmbed69Resolver {
         preferredLangTag: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
+        client: SoloLatinoClient? = null,
     ): Boolean = withTimeoutOrNull(35_000L) {
         val effRef = referer?.takeIf { it.startsWith("http", ignoreCase = true) } ?: "${SoloLatinoMarkup.MAIN_URL}/"
-        val res = runCatching {
-            app.get(
-                embedUrl,
-                referer = effRef,
-                headers = mapOf(
-                    "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language" to "es-419,es;q=0.9,en;q=0.8",
-                ),
-                timeout = 12L,
-            )
-        }.getOrNull() ?: return@withTimeoutOrNull false
-        if (!res.isSuccessful) return@withTimeoutOrNull false
+        val (pageHtml, pageFinalUrl) = if (client != null) {
+            val fetched = client.fetchExternalHtml(embedUrl, effRef) { target ->
+                val h = SoloLatinoMarkup.hostOf(target)
+                h == "embed69.org" || h.endsWith(".embed69.org")
+            }
+            if (fetched.code !in 200..299 || fetched.text.isBlank()) return@withTimeoutOrNull false
+            fetched.text to fetched.url.ifBlank { embedUrl }
+        } else {
+            val res = runCatching {
+                app.get(
+                    embedUrl,
+                    referer = effRef,
+                    headers = mapOf(
+                        "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language" to "es-419,es;q=0.9,en;q=0.8",
+                    ),
+                    timeout = 12L,
+                )
+            }.getOrNull() ?: return@withTimeoutOrNull false
+            if (!res.isSuccessful) return@withTimeoutOrNull false
+            res.text to res.url
+        }
 
         val normalizedPreferredLang = preferredLangTag?.trim()?.takeIf { it.isNotEmpty() }
-        val mirrors = SoloLatinoMarkup.decryptEmbed69Page(res.text)
+        val mirrors = SoloLatinoMarkup.decryptEmbed69Page(pageHtml)
             .sortedWith(
                 compareBy<SoloLatinoEmbed69Mirror>(
                     { mirror ->
@@ -869,7 +880,7 @@ internal object SoloLatinoEmbed69Resolver {
                                 val sourceLabel = "SoloLatino · $lang · $label"
                                 SoloLatinoExtractorDispatcher.extract(
                                     url = mirror.url,
-                                    referer = res.url,
+                                    referer = pageFinalUrl,
                                     sourceLabel = sourceLabel,
                                     subtitleCallback = subtitleCallback,
                                 ) { link ->

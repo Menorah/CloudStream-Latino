@@ -478,6 +478,7 @@ class SoloLatinoProvider(
                                             preferredLangTag = target.langLabel,
                                             subtitleCallback = safeSubtitleCallback,
                                             callback = safeCallback,
+                                            client = client,
                                         )
                                     SoloLatinoMarkup.isPelisSeriesHoyUrl(target.url) ->
                                         SoloLatinoPelisSeriesHoyExtractor.extractWithClient(
