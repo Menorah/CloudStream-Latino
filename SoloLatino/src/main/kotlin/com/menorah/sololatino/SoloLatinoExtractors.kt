@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.extractors.StreamWishExtractor
 import com.lagradost.cloudstream3.extractors.Voe
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -18,10 +17,13 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -48,7 +50,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Cipher
-import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -111,9 +112,9 @@ internal object SoloLatinoHlsHelper {
         fallbackQuality: Int = Qualities.Unknown.value,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val playlistText = withTimeoutOrNull(4_500L) {
+        val playlistText = withTimeoutOrNull(3_500L) {
             runCatching {
-                app.get(masterUrl, referer = referer, headers = headers, verify = false, timeout = 4L)
+                app.get(masterUrl, referer = referer, headers = headers, verify = false, timeout = 3L)
                     .takeIf { it.isSuccessful }
                     ?.text
             }.getOrNull()
@@ -133,7 +134,7 @@ internal object SoloLatinoHlsHelper {
                 )
                 return true
             }
-            val generated = withTimeoutOrNull(4_500L) {
+            val generated = withTimeoutOrNull(3_500L) {
                 runCatching {
                     M3u8Helper.generateM3u8(
                         source = sourceName,
@@ -315,13 +316,168 @@ internal object SoloLatinoVoeCrypto {
         Regex("""<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"';\s>]+)["']""", RegexOption.IGNORE_CASE),
     )
 
-    private class Pbkdf2Sha256Scratch {
-        val hmac = Mac.getInstance("HmacSHA256")
-        val u = ByteArray(32)
-        val t = ByteArray(32)
+    private val SHA256_H0 = intArrayOf(
+        0x6a09e667, 0xbb67ae85.toInt(), 0x3c6ef372, 0xa54ff53a.toInt(),
+        0x510e527f, 0x9b05688c.toInt(), 0x1f83d9ab, 0x5be0cd19,
+    )
+    private val SHA256_K = intArrayOf(
+        0x428a2f98, 0x71374491, 0xb5c0fbcf.toInt(), 0xe9b5dba5.toInt(),
+        0x3956c25b, 0x59f111f1, 0x923f82a4.toInt(), 0xab1c5ed5.toInt(),
+        0xd807aa98.toInt(), 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe.toInt(), 0x9bdc06a7.toInt(), 0xc19bf174.toInt(),
+        0xe49b69c1.toInt(), 0xefbe4786.toInt(), 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152.toInt(), 0xa831c66d.toInt(), 0xb00327c8.toInt(), 0xbf597fc7.toInt(),
+        0xc6e00bf3.toInt(), 0xd5a79147.toInt(), 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e.toInt(), 0x92722c85.toInt(),
+        0xa2bfe8a1.toInt(), 0xa81a664b.toInt(), 0xc24b8b70.toInt(), 0xc76c51a3.toInt(),
+        0xd192e819.toInt(), 0xd6990624.toInt(), 0xf40e3585.toInt(), 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814.toInt(), 0x8cc70208.toInt(),
+        0x90befffa.toInt(), 0xa4506ceb.toInt(), 0xbef9a3f7.toInt(), 0xc67178f2.toInt(),
+    )
+
+    internal class Pbkdf2Sha256Scratch {
+        val ipadState = IntArray(8)
+        val opadState = IntArray(8)
+        val innerState = IntArray(8)
+        val uWords = IntArray(8)
+        val tWords = IntArray(8)
+        val words = IntArray(16)
+        val w = IntArray(64)
+        val block = ByteArray(64)
+        val keyBlock = ByteArray(64)
     }
 
-    private fun pbkdf2Sha256Block1Into(
+    private fun bytesToWords16(src: ByteArray, dstWords: IntArray) {
+        var b = 0
+        for (i in 0 until 16) {
+            dstWords[i] = ((src[b].toInt() and 0xFF) shl 24) or
+                ((src[b + 1].toInt() and 0xFF) shl 16) or
+                ((src[b + 2].toInt() and 0xFF) shl 8) or
+                (src[b + 3].toInt() and 0xFF)
+            b += 4
+        }
+    }
+
+    private fun sha256CompressWords(state: IntArray, words: IntArray, w: IntArray) {
+        for (t in 0 until 16) w[t] = words[t]
+        for (t in 16 until 64) {
+            val w15 = w[t - 15]
+            val w2 = w[t - 2]
+            val s0 = w15.rotateRight(7) xor w15.rotateRight(18) xor (w15 ushr 3)
+            val s1 = w2.rotateRight(17) xor w2.rotateRight(19) xor (w2 ushr 10)
+            w[t] = w[t - 16] + s0 + w[t - 7] + s1
+        }
+        var a = state[0]
+        var b = state[1]
+        var c = state[2]
+        var d = state[3]
+        var e = state[4]
+        var f = state[5]
+        var g = state[6]
+        var h = state[7]
+        val kArr = SHA256_K
+        for (t in 0 until 64) {
+            val s1 = e.rotateRight(6) xor e.rotateRight(11) xor e.rotateRight(25)
+            val ch = (e and f) xor (e.inv() and g)
+            val temp1 = h + s1 + ch + kArr[t] + w[t]
+            val s0 = a.rotateRight(2) xor a.rotateRight(13) xor a.rotateRight(22)
+            val maj = (a and b) xor (a and c) xor (b and c)
+            val temp2 = s0 + maj
+            h = g
+            g = f
+            f = e
+            e = d + temp1
+            d = c
+            c = b
+            b = a
+            a = temp1 + temp2
+        }
+        state[0] += a
+        state[1] += b
+        state[2] += c
+        state[3] += d
+        state[4] += e
+        state[5] += f
+        state[6] += g
+        state[7] += h
+    }
+
+    private fun sha256FinalizeBytes(
+        state: IntArray,
+        prefixLen: Int,
+        data: ByteArray,
+        dataLen: Int,
+        extraSuffixBeInt: Int?,
+        words: IntArray,
+        w: IntArray,
+        block: ByteArray,
+    ) {
+        val totalBytes = dataLen + (if (extraSuffixBeInt != null) 4 else 0)
+        var pos = 0
+        while (pos + 64 <= dataLen) {
+            var b = pos
+            for (i in 0 until 16) {
+                words[i] = ((data[b].toInt() and 0xFF) shl 24) or
+                    ((data[b + 1].toInt() and 0xFF) shl 16) or
+                    ((data[b + 2].toInt() and 0xFF) shl 8) or
+                    (data[b + 3].toInt() and 0xFF)
+                b += 4
+            }
+            sha256CompressWords(state, words, w)
+            pos += 64
+        }
+        var rem = dataLen - pos
+        block.fill(0)
+        if (rem > 0) System.arraycopy(data, pos, block, 0, rem)
+        if (extraSuffixBeInt != null) {
+            if (rem + 4 <= 64) {
+                block[rem] = (extraSuffixBeInt ushr 24).toByte()
+                block[rem + 1] = (extraSuffixBeInt ushr 16).toByte()
+                block[rem + 2] = (extraSuffixBeInt ushr 8).toByte()
+                block[rem + 3] = extraSuffixBeInt.toByte()
+                rem += 4
+                if (rem == 64) {
+                    bytesToWords16(block, words)
+                    sha256CompressWords(state, words, w)
+                    block.fill(0)
+                    rem = 0
+                }
+            } else {
+                // Split the 4-byte suffix across the 64-byte block boundary
+                var shift = 24
+                while (rem < 64) {
+                    block[rem++] = (extraSuffixBeInt ushr shift).toByte()
+                    shift -= 8
+                }
+                bytesToWords16(block, words)
+                sha256CompressWords(state, words, w)
+                block.fill(0)
+                rem = 0
+                while (shift >= 0) {
+                    block[rem++] = (extraSuffixBeInt ushr shift).toByte()
+                    shift -= 8
+                }
+            }
+        }
+        block[rem] = 0x80.toByte()
+        if (rem >= 56) {
+            bytesToWords16(block, words)
+            sha256CompressWords(state, words, w)
+            block.fill(0)
+        }
+        val totalBits = (prefixLen.toLong() + totalBytes.toLong()) * 8L
+        for (i in 0 until 8) {
+            block[56 + i] = (totalBits ushr ((7 - i) * 8)).toByte()
+        }
+        bytesToWords16(block, words)
+        sha256CompressWords(state, words, w)
+    }
+
+    internal fun pbkdf2Sha256Block1Into(
         password: ByteArray,
         salt: ByteArray,
         iterations: Int,
@@ -329,25 +485,74 @@ internal object SoloLatinoVoeCrypto {
         out: ByteArray,
         scratch: Pbkdf2Sha256Scratch,
     ) {
-        val mac = scratch.hmac
-        mac.init(SecretKeySpec(password, "HmacSHA256"))
-        mac.update(salt, 0, salt.size)
-        mac.update(0.toByte())
-        mac.update(0.toByte())
-        mac.update(0.toByte())
-        mac.update(1.toByte())
-        mac.doFinal(scratch.u, 0)
-        System.arraycopy(scratch.u, 0, scratch.t, 0, 32)
-        for (i in 2..iterations) {
-            mac.update(scratch.u, 0, 32)
-            mac.doFinal(scratch.u, 0)
-            for (k in 0 until 32) scratch.t[k] = (scratch.t[k].toInt() xor scratch.u[k].toInt()).toByte()
+        val keyBlock = scratch.keyBlock
+        val block = scratch.block
+        val words = scratch.words
+        val w = scratch.w
+        keyBlock.fill(0)
+        if (password.size > 64) {
+            val tmpState = scratch.innerState
+            System.arraycopy(SHA256_H0, 0, tmpState, 0, 8)
+            sha256FinalizeBytes(tmpState, 0, password, password.size, null, words, w, block)
+            for (i in 0 until 32) {
+                keyBlock[i] = (tmpState[i ushr 2] ushr ((3 - (i and 3)) * 8)).toByte()
+            }
+        } else {
+            System.arraycopy(password, 0, keyBlock, 0, password.size)
         }
-        System.arraycopy(scratch.t, 0, out, 0, keyLen.coerceAtMost(32))
+
+        val ipadState = scratch.ipadState
+        System.arraycopy(SHA256_H0, 0, ipadState, 0, 8)
+        for (i in 0 until 64) block[i] = (keyBlock[i].toInt() xor 0x36).toByte()
+        bytesToWords16(block, words)
+        sha256CompressWords(ipadState, words, w)
+
+        val opadState = scratch.opadState
+        System.arraycopy(SHA256_H0, 0, opadState, 0, 8)
+        for (i in 0 until 64) block[i] = (keyBlock[i].toInt() xor 0x5C).toByte()
+        bytesToWords16(block, words)
+        sha256CompressWords(opadState, words, w)
+
+        val inner = scratch.innerState
+        val u = scratch.uWords
+        val t = scratch.tWords
+
+        System.arraycopy(ipadState, 0, inner, 0, 8)
+        sha256FinalizeBytes(inner, 64, salt, salt.size, 1, words, w, block)
+        System.arraycopy(opadState, 0, u, 0, 8)
+        System.arraycopy(inner, 0, words, 0, 8)
+        words[8] = 0x80000000.toInt()
+        for (k in 9 until 15) words[k] = 0
+        words[15] = 768
+        sha256CompressWords(u, words, w)
+        System.arraycopy(u, 0, t, 0, 8)
+
+        for (iter in 2..iterations) {
+            System.arraycopy(ipadState, 0, inner, 0, 8)
+            System.arraycopy(u, 0, words, 0, 8)
+            words[8] = 0x80000000.toInt()
+            for (k in 9 until 15) words[k] = 0
+            words[15] = 768
+            sha256CompressWords(inner, words, w)
+
+            System.arraycopy(opadState, 0, u, 0, 8)
+            System.arraycopy(inner, 0, words, 0, 8)
+            words[8] = 0x80000000.toInt()
+            for (k in 9 until 15) words[k] = 0
+            words[15] = 768
+            sha256CompressWords(u, words, w)
+
+            for (k in 0 until 8) t[k] = t[k] xor u[k]
+        }
+
+        val limit = keyLen.coerceAtMost(32)
+        for (i in 0 until limit) {
+            out[i] = (t[i ushr 2] ushr ((3 - (i and 3)) * 8)).toByte()
+        }
     }
 
-    suspend fun solveAltchaSuspend(challengeJson: String, maxCounters: Int = 4000): String? =
-        withTimeoutOrNull(4_000L) {
+    suspend fun solveAltchaSuspend(challengeJson: String, maxCounters: Int = 20_000): String? =
+        withTimeoutOrNull(18_000L) {
             val root = runCatching { SoloLatinoMarkup.jsonMapper.readTree(challengeJson) }.getOrNull() ?: return@withTimeoutOrNull null
             val params = root.get("parameters")
             if (params == null || !params.isObject) {
@@ -368,7 +573,7 @@ internal object SoloLatinoVoeCrypto {
                 runCatching { SoloLatinoHostHttp.hexToBytes(keyPrefix) }.getOrNull()
             } else null
 
-            val workers = 2
+            val workers = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
             val found = AtomicBoolean(false)
             val winner = AtomicReference<String?>(null)
             val started = System.nanoTime()
@@ -452,11 +657,11 @@ internal object SoloLatinoVoeCrypto {
     fun decryptF7(encoded: String): JsonNode? = runCatching {
         val step1 = rot13(encoded.trim())
         var cleaned = step1
-        for (marker in JUNK_PATTERNS) cleaned = cleaned.replace(marker, "")
+        for (marker in JUNK_PATTERNS) cleaned = cleaned.replace(marker, "_")
         cleaned = cleaned.replace("_", "")
-        val step3 = String(SoloLatinoHostHttp.decodeBase64Flexible(cleaned), StandardCharsets.UTF_8)
-        val step4 = buildString(step3.length) {
-            for (ch in step3) append((ch.code - 3).toChar())
+        val step3Bytes = SoloLatinoHostHttp.decodeBase64Flexible(cleaned)
+        val step4 = buildString(step3Bytes.size) {
+            for (b in step3Bytes) append(((b.toInt() and 0xFF) - 3).toChar())
         }
         val step5 = step4.reversed()
         val json = String(SoloLatinoHostHttp.decodeBase64Flexible(step5), StandardCharsets.UTF_8)
@@ -716,109 +921,115 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
             langTag: String?,
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
-        ): Boolean = withTimeoutOrNull(48_000L) {
+        ): Boolean = withTimeoutOrNull(52_000L) {
             val origin = SoloLatinoHostHttp.originOf(url, "https://player.pelisserieshoy.com")
-            val resolvedServers = try {
-                client.resolvePelisSeriesHoy(url, referer)
+            val emitted = AtomicBoolean(false)
+            val serverGate = Semaphore(3)
+            val jobs = Collections.synchronizedList(mutableListOf<Job>())
+
+            try {
+                coroutineScope {
+                    client.resolvePelisSeriesHoyStreaming(url, referer) { srv ->
+                        val effectiveUa = srv.userAgent.ifBlank { client.currentUserAgent(url) }
+                        val baseHeaders = mapOf(
+                            "Referer" to "$origin/",
+                            "Origin" to origin,
+                            "User-Agent" to effectiveUa,
+                        )
+                        val job = launch(Dispatchers.IO) {
+                            serverGate.withPermit {
+                                withTimeoutOrNull(22_000L) {
+                                    try {
+                                        val effectiveLang = langTag ?: srv.langLabel
+                                        val sourceLabel = "SoloLatino · $effectiveLang · ${srv.label}"
+                                        val streamHeaders = if (srv.cookieHeader.isNotBlank()) {
+                                            baseHeaders + ("Cookie" to srv.cookieHeader)
+                                        } else {
+                                            baseHeaders
+                                        }
+                                        when {
+                                            srv.type.equals("iframe", ignoreCase = true) && !srv.url.isNullOrBlank() -> {
+                                                SoloLatinoExtractorDispatcher.extract(
+                                                    url = srv.url,
+                                                    referer = "$origin/",
+                                                    sourceLabel = sourceLabel,
+                                                    subtitleCallback = subtitleCallback,
+                                                    serverHint = srv.label,
+                                                    client = client,
+                                                ) { link ->
+                                                    emitted.set(true)
+                                                    callback(link)
+                                                }
+                                            }
+                                            srv.type.equals("mp4", ignoreCase = true) && (!srv.u.isNullOrBlank() || !srv.url.isNullOrBlank()) -> {
+                                                val mp4Url = srv.u ?: srv.url!!
+                                                val isProxied = mp4Url.contains("/p.php", ignoreCase = true) ||
+                                                    SoloLatinoMarkup.isPelisSeriesHoyUrl(mp4Url)
+                                                callback(
+                                                    newExtractorLink(sourceLabel, "${srv.label} MP4", mp4Url, ExtractorLinkType.VIDEO) {
+                                                        this.referer = if (isProxied) "$origin/" else ""
+                                                        this.headers = if (isProxied) streamHeaders else mapOf("User-Agent" to effectiveUa)
+                                                        this.quality = Qualities.Unknown.value
+                                                    },
+                                                )
+                                                emitted.set(true)
+                                                true
+                                            }
+                                            !srv.u.isNullOrBlank() -> {
+                                                val proxyM3u8 = SoloLatinoMarkup.buildPelisSeriesHoyHlsProxyUrl(origin, srv.u, srv.sig, srv.ctx)
+                                                SoloLatinoHlsHelper.emitHlsSafely(
+                                                    sourceName = sourceLabel,
+                                                    displayName = srv.label,
+                                                    masterUrl = proxyM3u8,
+                                                    referer = "$origin/",
+                                                    headers = streamHeaders,
+                                                ) { link ->
+                                                    emitted.set(true)
+                                                    callback(link)
+                                                }
+                                            }
+                                            !srv.url.isNullOrBlank() && srv.url.contains(".m3u8", ignoreCase = true) -> {
+                                                SoloLatinoHlsHelper.emitHlsSafely(
+                                                    sourceName = sourceLabel,
+                                                    displayName = srv.label,
+                                                    masterUrl = srv.url,
+                                                    referer = "$origin/",
+                                                    headers = streamHeaders,
+                                                ) { link ->
+                                                    emitted.set(true)
+                                                    callback(link)
+                                                }
+                                            }
+                                            !srv.url.isNullOrBlank() -> {
+                                                SoloLatinoExtractorDispatcher.extract(
+                                                    url = srv.url,
+                                                    referer = "$origin/",
+                                                    sourceLabel = sourceLabel,
+                                                    subtitleCallback = subtitleCallback,
+                                                    serverHint = srv.label,
+                                                    client = client,
+                                                ) { link ->
+                                                    emitted.set(true)
+                                                    callback(link)
+                                                }
+                                            }
+                                            else -> false
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Throwable) {
+                                        false
+                                    }
+                                }
+                            }
+                        }
+                        synchronized(jobs) { jobs.add(job) }
+                    }
+                    synchronized(jobs) { jobs.toList() }.joinAll()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
-                emptyList()
-            }
-            if (resolvedServers.isEmpty()) return@withTimeoutOrNull false
-
-            val emitted = AtomicBoolean(false)
-            val baseHeaders = mapOf(
-                "Referer" to "$origin/",
-                "Origin" to origin,
-                "user-agent" to client.currentUserAgent(),
-            )
-            coroutineScope {
-                resolvedServers.map { srv ->
-                    async(Dispatchers.IO) {
-                        withTimeoutOrNull(18_000L) {
-                            try {
-                                val effectiveLang = langTag ?: srv.langLabel
-                                val sourceLabel = "SoloLatino · $effectiveLang · ${srv.label}"
-                                val streamHeaders = if (srv.cookieHeader.isNotBlank()) {
-                                    baseHeaders + ("Cookie" to srv.cookieHeader)
-                                } else {
-                                    baseHeaders
-                                }
-                                when {
-                                    srv.type.equals("iframe", ignoreCase = true) && !srv.url.isNullOrBlank() -> {
-                                        SoloLatinoExtractorDispatcher.extract(
-                                            url = srv.url,
-                                            referer = "$origin/",
-                                            sourceLabel = sourceLabel,
-                                            subtitleCallback = subtitleCallback,
-                                            serverHint = srv.label,
-                                        ) { link ->
-                                            emitted.set(true)
-                                            callback(link)
-                                        }
-                                    }
-                                    srv.type.equals("mp4", ignoreCase = true) && (!srv.u.isNullOrBlank() || !srv.url.isNullOrBlank()) -> {
-                                        val mp4Url = srv.u ?: srv.url!!
-                                        val isProxied = mp4Url.contains("/p.php", ignoreCase = true) ||
-                                            SoloLatinoMarkup.isPelisSeriesHoyUrl(mp4Url)
-                                        callback(
-                                            newExtractorLink(sourceLabel, "${srv.label} MP4", mp4Url, ExtractorLinkType.VIDEO) {
-                                                this.referer = if (isProxied) "$origin/" else ""
-                                                this.headers = if (isProxied) streamHeaders else mapOf("user-agent" to client.currentUserAgent())
-                                                this.quality = Qualities.Unknown.value
-                                            },
-                                        )
-                                        emitted.set(true)
-                                        true
-                                    }
-                                    !srv.u.isNullOrBlank() -> {
-                                        val proxyM3u8 = SoloLatinoMarkup.buildPelisSeriesHoyHlsProxyUrl(origin, srv.u, srv.sig, srv.ctx)
-                                        SoloLatinoHlsHelper.emitHlsSafely(
-                                            sourceName = sourceLabel,
-                                            displayName = srv.label,
-                                            masterUrl = proxyM3u8,
-                                            referer = "$origin/",
-                                            headers = streamHeaders,
-                                        ) { link ->
-                                            emitted.set(true)
-                                            callback(link)
-                                        }
-                                    }
-                                    !srv.url.isNullOrBlank() && srv.url.contains(".m3u8", ignoreCase = true) -> {
-                                        SoloLatinoHlsHelper.emitHlsSafely(
-                                            sourceName = sourceLabel,
-                                            displayName = srv.label,
-                                            masterUrl = srv.url,
-                                            referer = "$origin/",
-                                            headers = streamHeaders,
-                                        ) { link ->
-                                            emitted.set(true)
-                                            callback(link)
-                                        }
-                                    }
-                                    !srv.url.isNullOrBlank() -> {
-                                        SoloLatinoExtractorDispatcher.extract(
-                                            url = srv.url,
-                                            referer = "$origin/",
-                                            sourceLabel = sourceLabel,
-                                            subtitleCallback = subtitleCallback,
-                                            serverHint = srv.label,
-                                        ) { link ->
-                                            emitted.set(true)
-                                            callback(link)
-                                        }
-                                    }
-                                    else -> false
-                                }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (_: Throwable) {
-                                false
-                            }
-                        } ?: false
-                    }
-                }.awaitAll()
             }
             emitted.get()
         } ?: false
@@ -826,7 +1037,7 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
 }
 
 internal object SoloLatinoEmbed69Resolver {
-    private val hostGate = Semaphore(4)
+    private val hostGate = Semaphore(3)
 
     private fun serverPriority(serverName: String, url: String): Int {
         val lower = "${serverName.lowercase(Locale.ROOT)} ${url.lowercase(Locale.ROOT)}"
@@ -894,7 +1105,7 @@ internal object SoloLatinoEmbed69Resolver {
             mirrors.map { mirror ->
                 async(Dispatchers.IO) {
                     hostGate.withPermit {
-                        withTimeoutOrNull(16_000L) {
+                        withTimeoutOrNull(24_000L) {
                             try {
                                 val lang = mirror.langLabel.ifBlank { preferredLangTag ?: "Latino" }
                                 val label = mirror.serverName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
@@ -905,6 +1116,7 @@ internal object SoloLatinoEmbed69Resolver {
                                     sourceLabel = sourceLabel,
                                     subtitleCallback = subtitleCallback,
                                     serverHint = mirror.serverName,
+                                    client = client,
                                 ) { link ->
                                     emitted.set(true)
                                     callback(link)
@@ -938,68 +1150,123 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
     }
 
     companion object {
-        suspend fun extract(
+        private val VOE_MIRROR_ORIGINS = listOf(
+            "https://caseyseemavoid.com",
+            "https://crystaltreatmente.com",
+        )
+
+        internal suspend fun extract(
             url: String,
             referer: String?,
             sourceLabel: String = "Voe",
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
-        ): Boolean = withTimeoutOrNull(14_000L) {
+            client: SoloLatinoClient? = null,
+        ): Boolean = withTimeoutOrNull(30_000L) {
+            // Prefer a clean mobile Chrome UA for VOE / DDoS-Guard HTTP requests (avoids "; wv)" filters)
+            val activeUa = SoloLatinoHostHttp.MOBILE_UA
             val baseHeaders = mapOf(
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to activeUa,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-419,es;q=0.9,en;q=0.8",
             )
             val cookies = linkedMapOf<String, String>()
             var currentUrl = url
             var currentRef = referer?.takeIf { it.isNotBlank() } ?: "${SoloLatinoMarkup.MAIN_URL}/"
-            var res = runCatching {
-                app.get(currentUrl, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = 10L)
-            }.getOrNull() ?: return@withTimeoutOrNull false
-            cookies.putAll(res.cookies)
+            var resCode = 0
+            var resUrl = currentUrl
+            var resText = ""
 
-            repeat(2) {
-                if (!res.text.contains("altcha-widget", ignoreCase = true) &&
-                    !res.text.contains("application/json", ignoreCase = true)
-                ) {
-                    val redir = SoloLatinoVoeCrypto.findRedirect(res.text)
-                    if (redir != null && redir != res.url) {
-                        val nextUrl = SoloLatinoMarkup.resolveUrl(res.url, redir) ?: redir
-                        currentRef = res.url
-                        currentUrl = nextUrl
-                        res = runCatching {
-                            app.get(currentUrl, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = 10L)
-                        }.getOrNull() ?: return@repeat
-                        cookies.putAll(res.cookies)
+            val fileCode = SoloLatinoHostHttp.fileCodeFromPath(url)
+            val candidateStarts = buildList {
+                add(url)
+                val origOrigin = SoloLatinoHostHttp.originOf(url)
+                if (fileCode.isNotBlank()) {
+                    for (mirror in VOE_MIRROR_ORIGINS) {
+                        if (!mirror.equals(origOrigin, ignoreCase = true)) {
+                            add("$mirror/e/$fileCode")
+                        }
                     }
                 }
             }
 
-            if (res.text.contains("altcha-widget", ignoreCase = true)) {
-                val doc = Jsoup.parse(res.text, res.url)
+            for ((idx, candidate) in candidateStarts.withIndex()) {
+                val attempt = runCatching {
+                    app.get(candidate, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = if (idx == 0) 4L else 8L)
+                }.getOrNull()
+                if (attempt != null && attempt.code in 200..399 && attempt.text.isNotBlank()) {
+                    cookies.putAll(attempt.cookies)
+                    currentUrl = candidate
+                    resCode = attempt.code
+                    resUrl = attempt.url
+                    resText = attempt.text
+                    break
+                }
+            }
+            if (resCode == 0 && client == null) {
+                return@withTimeoutOrNull false
+            }
+
+            repeat(2) {
+                if (!resText.contains("altcha-widget", ignoreCase = true) &&
+                    !resText.contains("application/json", ignoreCase = true)
+                ) {
+                    val redir = SoloLatinoVoeCrypto.findRedirect(resText)
+                    if (redir != null && redir != resUrl) {
+                        val nextUrl = SoloLatinoMarkup.resolveUrl(resUrl, redir) ?: redir
+                        currentRef = resUrl
+                        currentUrl = nextUrl
+                        val hopRes = runCatching {
+                            app.get(currentUrl, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = 10L)
+                        }.getOrNull()
+                        if (hopRes != null) {
+                            cookies.putAll(hopRes.cookies)
+                            resCode = hopRes.code
+                            resUrl = hopRes.url
+                            resText = hopRes.text
+                        }
+                    }
+                }
+            }
+
+            if (client != null &&
+                !resText.contains("altcha-widget", ignoreCase = true) &&
+                !resText.contains("application/json", ignoreCase = true) &&
+                (resCode == 0 || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(resCode, resText))
+            ) {
+                val webFetched = client.fetchExternalHtml(currentUrl, currentRef) { true }
+                if (webFetched.code in 200..299 && webFetched.text.isNotBlank()) {
+                    resCode = webFetched.code
+                    resUrl = webFetched.url.ifBlank { currentUrl }
+                    resText = webFetched.text
+                }
+            }
+
+            if (resText.contains("altcha-widget", ignoreCase = true)) {
+                val doc = Jsoup.parse(resText, resUrl)
                 val widget: Element? = doc.selectFirst("altcha-widget")
                 val challengeAttr = (widget?.attr("challenge")?.takeIf { it.isNotBlank() } ?: widget?.attr("challengeurl"))?.trim().orEmpty()
                 val form: Element? = doc.selectFirst("form.access-form, form[method~=^(?i)post$], form[action]")
-                val formAction = form?.attr("abs:action")?.takeIf { it.isNotBlank() } ?: res.url
+                val formAction = form?.attr("abs:action")?.takeIf { it.isNotBlank() } ?: resUrl
                 val tokenInput: Element? = doc.selectFirst("input[name=_token]")
                 val token = tokenInput?.attr("value").orEmpty()
                 val accessInput: Element? = doc.selectFirst("input[name=access]")
                 val accessVal = accessInput?.attr("value") ?: "0"
 
                 if (challengeAttr.isNotEmpty()) {
-                    val challengeUrl = SoloLatinoMarkup.resolveUrl(res.url, challengeAttr) ?: challengeAttr
+                    val challengeUrl = SoloLatinoMarkup.resolveUrl(resUrl, challengeAttr) ?: challengeAttr
                     val chalRes = runCatching {
-                        app.get(challengeUrl, referer = res.url, headers = baseHeaders + ("Accept" to "application/json, */*"), cookies = cookies, timeout = 8L)
+                        app.get(challengeUrl, referer = resUrl, headers = baseHeaders + ("Accept" to "application/json, */*"), cookies = cookies, timeout = 8L)
                     }.getOrNull()
                     if (chalRes != null) {
                         cookies.putAll(chalRes.cookies)
                         val altchaPayload = SoloLatinoVoeCrypto.solveAltchaSuspend(chalRes.text)
                         if (altchaPayload != null) {
-                            val origin = SoloLatinoHostHttp.originOf(res.url)
+                            val origin = SoloLatinoHostHttp.originOf(resUrl)
                             val postRes = runCatching {
                                 app.post(
                                     formAction,
-                                    referer = res.url,
+                                    referer = resUrl,
                                     headers = baseHeaders + mapOf("Origin" to origin, "Content-Type" to "application/x-www-form-urlencoded"),
                                     cookies = cookies,
                                     data = mapOf("_token" to token, "access" to accessVal, "altcha" to altchaPayload),
@@ -1008,15 +1275,19 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
                             }.getOrNull()
                             if (postRes != null) {
                                 cookies.putAll(postRes.cookies)
-                                res = postRes
-                                if (!res.text.contains("application/json", ignoreCase = true)) {
-                                    val postRedir = SoloLatinoVoeCrypto.findRedirect(res.text)
-                                    if (postRedir != null && postRedir != res.url) {
-                                        val nextUrl = SoloLatinoMarkup.resolveUrl(res.url, postRedir) ?: postRedir
-                                        val r2 = runCatching { app.get(nextUrl, referer = res.url, headers = baseHeaders, cookies = cookies, timeout = 10L) }.getOrNull()
+                                resCode = postRes.code
+                                resUrl = postRes.url
+                                resText = postRes.text
+                                if (!resText.contains("application/json", ignoreCase = true)) {
+                                    val postRedir = SoloLatinoVoeCrypto.findRedirect(resText)
+                                    if (postRedir != null && postRedir != resUrl) {
+                                        val nextUrl = SoloLatinoMarkup.resolveUrl(resUrl, postRedir) ?: postRedir
+                                        val r2 = runCatching { app.get(nextUrl, referer = resUrl, headers = baseHeaders, cookies = cookies, timeout = 10L) }.getOrNull()
                                         if (r2 != null) {
                                             cookies.putAll(r2.cookies)
-                                            res = r2
+                                            resCode = r2.code
+                                            resUrl = r2.url
+                                            resText = r2.text
                                         }
                                     }
                                 }
@@ -1026,7 +1297,7 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
                 }
             }
 
-            val doc = Jsoup.parse(res.text, res.url)
+            val doc = Jsoup.parse(resText, resUrl)
             val jsonScript: Element? = doc.selectFirst("script[type=application/json]")
             val encodedJson = jsonScript?.data()?.trim()?.let { raw ->
                 Regex("""\[\s*"([^"]+)"\s*]""").find(raw)?.groupValues?.getOrNull(1)
@@ -1034,10 +1305,11 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
             }?.takeIf { it.isNotEmpty() }
 
             if (encodedJson == null) {
+                if (resText.contains("altcha-widget", ignoreCase = true)) return@withTimeoutOrNull false
                 var builtInOk = false
-                withTimeoutOrNull(7_000L) {
+                withTimeoutOrNull(6_000L) {
                     try {
-                        Voe().getUrl(res.url, referer, subtitleCallback) { link ->
+                        Voe().getUrl(resUrl, referer, subtitleCallback) { link ->
                             builtInOk = true
                             callback(link)
                         }
@@ -1050,11 +1322,11 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
             }
 
             val decrypted = SoloLatinoVoeCrypto.decryptF7(encodedJson) ?: return@withTimeoutOrNull false
-            val origin = SoloLatinoHostHttp.originOf(res.url)
+            val origin = SoloLatinoHostHttp.originOf(resUrl)
             val streamHeaders = mapOf(
                 "Origin" to origin,
                 "Referer" to "$origin/",
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to activeUa,
             )
 
             val captionsNode = decrypted.get("captions")
@@ -1081,7 +1353,8 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
             if (mp4Url != null) {
                 callback(
                     newExtractorLink(sourceLabel, "Voe MP4", mp4Url, INFER_TYPE) {
-                        this.referer = res.url
+                        this.referer = resUrl
+                        this.headers = streamHeaders
                         this.quality = Qualities.Unknown.value
                     },
                 )
@@ -1123,13 +1396,15 @@ open class SoloLatinoVidHideExtractor : ExtractorApi() {
         )
         private val UNRELIABLE_HOSTS = setOf("vidhidepro.com", "dhtpre.com")
 
-        suspend fun extract(
+        internal suspend fun extract(
             url: String,
             referer: String?,
             sourceLabel: String = "VidHide",
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
+            client: SoloLatinoClient? = null,
         ): Boolean = withTimeoutOrNull(14_000L) {
+            val activeUa = client?.currentUserAgent(url) ?: SoloLatinoHostHttp.MOBILE_UA
             val normalizedUrl = SoloLatinoVidHideParser.normalizeEmbedUrl(url)
             val parsedUri = runCatching { URI(normalizedUrl) }.getOrNull()
             val pathWithQuery = buildString {
@@ -1148,7 +1423,7 @@ open class SoloLatinoVidHideExtractor : ExtractorApi() {
             }.take(5)
 
             val reqHeaders = mapOf(
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to activeUa,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-419,es;q=0.9,en;q=0.8",
             )
@@ -1186,7 +1461,7 @@ open class SoloLatinoVidHideExtractor : ExtractorApi() {
                 val streamHeaders = mapOf(
                     "Origin" to attempt.origin,
                     "Referer" to "${attempt.origin}/",
-                    "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                    "User-Agent" to activeUa,
                 )
                 val preferredFallback = attempt.streams.firstOrNull { it.first != "hls3" }?.second ?: attempt.streams.first().second
                 if (firstFallback == null) firstFallback = attempt to preferredFallback
@@ -1208,7 +1483,7 @@ open class SoloLatinoVidHideExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to fallbackParsed.origin,
                 "Referer" to "${fallbackParsed.origin}/",
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to activeUa,
             )
             callback(
                 newExtractorLink(sourceLabel, "EarnVids", fallbackUrl, ExtractorLinkType.M3U8) {
@@ -1255,74 +1530,84 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
         private fun isVsembedUrl(url: String): Boolean =
             runCatching { URI(url).host?.contains("vsembed", ignoreCase = true) == true }.getOrDefault(false)
 
-        suspend fun extract(
+        internal suspend fun extract(
             url: String,
             referer: String?,
             sourceLabel: String = "StreamWish",
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
-        ): Boolean = withTimeoutOrNull(14_000L) {
+            client: SoloLatinoClient? = null,
+        ): Boolean = withTimeoutOrNull(18_000L) {
+            val activeUa = client?.currentUserAgent(url) ?: SoloLatinoHostHttp.MOBILE_UA
             val baseHeaders = mapOf(
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to activeUa,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language" to "es-419,es;q=0.9,en;q=0.8",
             )
             val effRef = referer?.takeIf { it.isNotBlank() } ?: "${SoloLatinoMarkup.MAIN_URL}/"
-            var res = runCatching {
+            val initialRes = runCatching {
                 app.get(url, referer = effRef, headers = baseHeaders, timeout = 6L)
-            }.getOrNull() ?: return@withTimeoutOrNull false
+            }.getOrNull()
+            var resUrl = initialRes?.url ?: url
+            var resText = initialRes?.text.orEmpty()
+            var resCode = initialRes?.code ?: 0
 
-            val unpacked = SoloLatinoVidHideParser.parse(res.text, res.url)
-            if (unpacked.streams.isNotEmpty() && emitParsed(unpacked, sourceLabel, subtitleCallback, callback)) {
+            val unpacked = if (resText.isNotBlank()) SoloLatinoVidHideParser.parse(resText, resUrl) else null
+            if (unpacked != null && unpacked.streams.isNotEmpty() && emitParsed(unpacked, sourceLabel, activeUa, subtitleCallback, callback)) {
                 return@withTimeoutOrNull true
             }
 
-            if (!isVsembedUrl(res.url) &&
-                (res.text.contains("main.js", ignoreCase = true) ||
-                    res.text.contains("Loading...", ignoreCase = true) ||
-                    !res.text.contains("jwplayer", ignoreCase = true))
+            if (!isVsembedUrl(resUrl) &&
+                (resText.isBlank() ||
+                    resText.contains("main.js", ignoreCase = true) ||
+                    resText.contains("Loading...", ignoreCase = true) ||
+                    !resText.contains("jwplayer", ignoreCase = true))
             ) {
                 val fileCode = SoloLatinoHostHttp.fileCodeFromPath(url)
                 if (fileCode.isNotEmpty()) {
                     for (mirror in REDIRECT_HOSTS.take(4)) {
                         val hopped = runCatching {
-                            app.get("$mirror/e/$fileCode", referer = res.url, headers = baseHeaders, timeout = 4L)
+                            app.get("$mirror/e/$fileCode", referer = resUrl, headers = baseHeaders, timeout = 4L)
                         }.getOrNull() ?: continue
-                        res = hopped
-                        if (isVsembedUrl(res.url)) break
-                        val mirrorParsed = SoloLatinoVidHideParser.parse(res.text, res.url)
-                        if (mirrorParsed.streams.isNotEmpty() && emitParsed(mirrorParsed, sourceLabel, subtitleCallback, callback)) {
+                        resCode = hopped.code
+                        resUrl = hopped.url
+                        resText = hopped.text
+                        if (isVsembedUrl(resUrl)) break
+                        val mirrorParsed = SoloLatinoVidHideParser.parse(resText, resUrl)
+                        if (mirrorParsed.streams.isNotEmpty() && emitParsed(mirrorParsed, sourceLabel, activeUa, subtitleCallback, callback)) {
                             return@withTimeoutOrNull true
                         }
                     }
                 }
             }
 
-            if (isVsembedUrl(res.url)) {
-                return@withTimeoutOrNull extractFromVsembed(res.url, res.text, sourceLabel, subtitleCallback, callback)
+            if (isVsembedUrl(resUrl)) {
+                return@withTimeoutOrNull extractFromVsembed(resUrl, resText, sourceLabel, activeUa, subtitleCallback, callback)
             }
 
-            var builtInOk = false
-            withTimeoutOrNull(7_000L) {
-                try {
-                    StreamWishExtractor().getUrl(url, referer, subtitleCallback) { link ->
-                        builtInOk = true
-                        callback(link)
+            if (client != null && (resCode == 0 || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(resCode, resText) || resText.contains("main.js", ignoreCase = true))) {
+                val webFetched = client.fetchExternalHtml(url, effRef) { true }
+                if (webFetched.code in 200..299 && webFetched.text.isNotBlank()) {
+                    resUrl = webFetched.url.ifBlank { url }
+                    resText = webFetched.text
+                    if (isVsembedUrl(resUrl)) {
+                        return@withTimeoutOrNull extractFromVsembed(resUrl, resText, sourceLabel, client.currentUserAgent(resUrl), subtitleCallback, callback)
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
+                    val webParsed = SoloLatinoVidHideParser.parse(resText, resUrl)
+                    if (webParsed.streams.isNotEmpty() && emitParsed(webParsed, sourceLabel, client.currentUserAgent(resUrl), subtitleCallback, callback)) {
+                        return@withTimeoutOrNull true
+                    }
                 }
             }
-            if (builtInOk) return@withTimeoutOrNull true
 
-            val doc = Jsoup.parse(res.text, res.url)
+            if (resText.isBlank()) return@withTimeoutOrNull false
+            val doc = Jsoup.parse(resText, resUrl)
             val scriptData = doc.select("script")
                 .firstOrNull { it.data().contains("sources:") || it.data().contains("jwplayer(") }
                 ?.data()
             if (!scriptData.isNullOrBlank()) {
-                val jwParsed = SoloLatinoVidHideParser.parse(scriptData, res.url)
-                if (jwParsed.streams.isNotEmpty() && emitParsed(jwParsed, sourceLabel, subtitleCallback, callback)) {
+                val jwParsed = SoloLatinoVidHideParser.parse(scriptData, resUrl)
+                if (jwParsed.streams.isNotEmpty() && emitParsed(jwParsed, sourceLabel, activeUa, subtitleCallback, callback)) {
                     return@withTimeoutOrNull true
                 }
             }
@@ -1332,13 +1617,14 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
         private suspend fun emitParsed(
             parsed: SoloLatinoVidHideParsed,
             sourceLabel: String,
+            userAgent: String,
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             val streamHeaders = mapOf(
                 "Origin" to parsed.origin,
                 "Referer" to "${parsed.origin}/",
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to userAgent,
             )
             for ((lbl, subUrl) in parsed.subtitles) subtitleCallback(newSubtitleFile(lbl, subUrl))
             var emitted = false
@@ -1363,6 +1649,7 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
             pageUrl: String,
             pageHtml: String,
             sourceLabel: String,
+            userAgent: String = SoloLatinoHostHttp.MOBILE_UA,
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
@@ -1373,7 +1660,7 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
             if (shortCode.isEmpty()) return false
 
             val apiHeaders = mapOf(
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to userAgent,
                 "Accept" to "application/json, text/plain, */*",
                 "Referer" to pageUrl,
             )
@@ -1421,7 +1708,7 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
             val streamHeaders = mapOf(
                 "Origin" to origin,
                 "Referer" to "$origin/",
-                "user-agent" to SoloLatinoHostHttp.MOBILE_UA,
+                "User-Agent" to userAgent,
             )
 
             var emitted = false
@@ -2060,6 +2347,7 @@ internal object SoloLatinoExtractorDispatcher {
         sourceLabel: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         serverHint: String? = null,
+        client: SoloLatinoClient? = null,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val cleanUrl = url.trim()
@@ -2072,20 +2360,23 @@ internal object SoloLatinoExtractorDispatcher {
         // Direct media files
         if (lower.substringBefore('?').endsWith(".m3u8")) {
             val origin = SoloLatinoHostHttp.originOf(cleanUrl)
+            val ua = client?.currentUserAgent(cleanUrl) ?: SoloLatinoHostHttp.MOBILE_UA
             return SoloLatinoHlsHelper.emitHlsSafely(
                 sourceName = sourceLabel,
                 displayName = "HLS",
                 masterUrl = cleanUrl,
                 referer = referer ?: "$origin/",
-                headers = mapOf("Referer" to (referer ?: "$origin/")),
+                headers = mapOf("Referer" to (referer ?: "$origin/"), "User-Agent" to ua),
                 callback = callback,
             )
         }
         if (lower.substringBefore('?').endsWith(".mp4")) {
             val origin = SoloLatinoHostHttp.originOf(cleanUrl)
+            val ua = client?.currentUserAgent(cleanUrl) ?: SoloLatinoHostHttp.MOBILE_UA
             callback(
                 newExtractorLink(sourceLabel, "MP4", cleanUrl, INFER_TYPE) {
                     this.referer = referer ?: "$origin/"
+                    this.headers = mapOf("User-Agent" to ua)
                     this.quality = Qualities.Unknown.value
                 },
             )
@@ -2096,18 +2387,18 @@ internal object SoloLatinoExtractorDispatcher {
             hintLower in setOf("voe", "vidhide", "earnvids", "streamwish", "filemoon", "byse", "savefiles", "lulustream", "luluvid", "dood", "doodstream", "uqload")
         val ok = when {
             lower.contains("voe.sx") || lower.contains("caseyseemavoid") || lower.contains("crystaltreatmente") || hintLower == "voe" ->
-                SoloLatinoVoeExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
+                SoloLatinoVoeExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback, client = client)
             lower.contains("morencius") || lower.contains("vidhide") || lower.contains("earnvids") ||
                 lower.contains("callistanise") || lower.contains("minochinos") || lower.contains("peytonepre") ||
                 lower.contains("smoothpre") || lower.contains("ryderjet") || lower.contains("movearnpre") ||
                 lower.contains("dingtezuni") || lower.contains("mivalyo") || lower.contains("taylorplayer") ||
                 hintLower.contains("vidhide") || hintLower.contains("earnvids") ->
-                SoloLatinoVidHideExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
+                SoloLatinoVidHideExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback, client = client)
             lower.contains("streamwish") || lower.contains("hglink") || lower.contains("medixiru") ||
                 lower.contains("vsembed") || lower.contains("flaswish") || lower.contains("hlswish") ||
                 lower.contains("playerwish") || lower.contains("dhcplay") || lower.contains("strwish") ||
                 hintLower.contains("streamwish") ->
-                SoloLatinoStreamWishExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
+                SoloLatinoStreamWishExtractor.extract(cleanUrl, referer, sourceLabel, subtitleCallback, callback, client = client)
             lower.contains("filemoon") || hintLower.contains("filemoon") ->
                 SoloLatinoFilemoonExtractor.extractFilemoon(cleanUrl, referer, sourceLabel, subtitleCallback, callback)
             lower.contains("byse") || lower.contains("n1mwq") || hintLower.contains("byse") ->

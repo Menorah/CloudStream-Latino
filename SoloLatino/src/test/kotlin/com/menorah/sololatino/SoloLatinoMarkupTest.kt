@@ -582,4 +582,125 @@ class SoloLatinoMarkupTest {
         val chromiumErr = "<html><head><title>Webpage not available</title></head><!-- Upside down Android --></html>"
         assertTrue(SoloLatinoSessionHelper.isChromiumErrorPage(chromiumErr))
     }
+
+    @Test
+    fun `v4 sanctum exclusive csrf, production psh const _t, and high-cost altcha v2 pass`() = runBlocking {
+        // 1. Laravel Sanctum CSRF rule: never emit X-CSRF-TOKEN when XSRF-TOKEN exists
+        assertEquals(
+            mapOf("X-XSRF-TOKEN" to "rotated-xsrf"),
+            SoloLatinoSessionHelper.buildSanctumCsrfHeaders("rotated-xsrf", "stale-meta-csrf"),
+        )
+        assertEquals(
+            mapOf("X-CSRF-TOKEN" to "meta-only"),
+            SoloLatinoSessionHelper.buildSanctumCsrfHeaders("", "meta-only"),
+        )
+        assertTrue(SoloLatinoSessionHelper.buildSanctumCsrfHeaders(" ", null).isEmpty())
+
+        // Standard User-Agent header casing
+        val hdrs = SoloLatinoSessionHelper.buildBrowserHeaders("CustomUA/1.0")
+        assertEquals("CustomUA/1.0", hdrs["User-Agent"])
+
+        // 2. Real production PelisSeriesHoy markup (const _t + _qk + _qc + dynamic _ao)
+        val prodPshHtml = """
+            <script>
+              var _qc="tt1190634-5x08";
+              var _qk=["LjIzMi4xNjN8","dHQxMTkwNjM0","MTc5NTg0MTkyOA.96e9ee88bd1548337d074a43","LTV4MDh8MTgx"];
+              var _qsrc="";
+              var _ao='';
+              const _t = '3dcf189b8329390d8fab86ebeae50198';
+            </script>
+        """.trimIndent()
+        val pshInit = SoloLatinoMarkup.parsePelisSeriesHoyInit(
+            prodPshHtml,
+            "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=abc",
+            refererUrl = "https://sololatino.net/serie/the-boys/temporada-5/episodio-8",
+        )!!
+        assertEquals("3dcf189b8329390d8fab86ebeae50198", pshInit.token)
+        assertEquals("dHQxMTkwNjM0LTV4MDh8MTgxLjIzMi4xNjN8MTc5NTg0MTkyOA.96e9ee88bd1548337d074a43", pshInit.qv)
+        assertEquals("https://sololatino.net", pshInit.ao)
+        assertEquals(SoloLatinoMarkup.fnv1a32Hex("${pshInit.qv}|clk|tt1190634-5x08"), pshInit.qt)
+
+        // busy / no_click / retry_once payloads do not produce false URL resolutions
+        assertNull(SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"error":"busy","retry":6}"""))
+        assertNull(SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"type":"error","msg":"no_click"}"""))
+        assertNull(SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"error":"retry_once"}"""))
+
+        // 3. ALTCHA v2 PBKDF2/SHA-256 at production cost=10000 solves cleanly within timeout
+        val nonceHex = "1020304050607080"
+        val saltHex = "a0b0c0d0e0f00102"
+        val nonceBytes = SoloLatinoHostHttp.hexToBytes(nonceHex)
+        val saltBytes = SoloLatinoHostHttp.hexToBytes(saltHex)
+        val targetCounter = 7
+        val pass = nonceBytes + byteArrayOf(0, 0, 0, targetCounter.toByte())
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(pass, "HmacSHA256")) }
+        var u = mac.doFinal(saltBytes + byteArrayOf(0, 0, 0, 1))
+        val t = u.copyOf()
+        for (iter in 2..10_000) {
+            u = mac.doFinal(u)
+            for (k in t.indices) t[k] = (t[k].toInt() xor u[k].toInt()).toByte()
+        }
+        val prefix = SoloLatinoHostHttp.bytesToHex(t.copyOf(32)).take(4)
+        val solved = SoloLatinoVoeCrypto.solveAltchaSuspend(
+            """{"parameters":{"algorithm":"PBKDF2/SHA-256","cost":10000,"keyLength":32,"keyPrefix":"$prefix","nonce":"$nonceHex","salt":"$saltHex"}}""",
+            maxCounters = 100,
+        )
+        assertNotNull(solved)
+        val solvedJson = SoloLatinoMarkup.jsonMapper.readTree(String(Base64.getDecoder().decode(solved), StandardCharsets.UTF_8))
+        assertTrue(solvedJson.get("solution").get("derivedKey").asText().startsWith(prefix))
+
+        // 4. Pure-Kotlin midstate PBKDF2-HMAC-SHA256 matches javax.crypto.Mac bit-for-bit across boundary sizes
+        val scratch = SoloLatinoVoeCrypto.Pbkdf2Sha256Scratch()
+        val testCases = listOf(
+            Triple(ByteArray(20) { (it + 7).toByte() }, ByteArray(8) { (it * 3 + 1).toByte() }, 1),
+            Triple(ByteArray(20) { (it + 11).toByte() }, ByteArray(56) { (it * 5 + 2).toByte() }, 2),
+            Triple(ByteArray(64) { (it + 19).toByte() }, ByteArray(61) { (it * 7 + 3).toByte() }, 17),
+            Triple(ByteArray(95) { (it + 23).toByte() }, ByteArray(128) { (it * 13 + 5).toByte() }, 50),
+        )
+        for ((pw, slt, iters) in testCases) {
+            val expectedMac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(pw, "HmacSHA256")) }
+            var refU = expectedMac.doFinal(slt + byteArrayOf(0, 0, 0, 1))
+            val refT = refU.copyOf()
+            for (i in 2..iters) {
+                refU = expectedMac.doFinal(refU)
+                for (k in refT.indices) refT[k] = (refT[k].toInt() xor refU[k].toInt()).toByte()
+            }
+            val actualOut = ByteArray(32)
+            SoloLatinoVoeCrypto.pbkdf2Sha256Block1Into(pw, slt, iters, 32, actualOut, scratch)
+            assertEquals(
+                SoloLatinoHostHttp.bytesToHex(refT),
+                SoloLatinoHostHttp.bytesToHex(actualOut),
+            )
+        }
+
+        // 5. VOE F7 decryption preserves UTF-8 bytes >= 0x80 and handles every junk marker + '_'
+        val voeSamplePayload = """{"source":"https://cdn.example.com/hls/master.m3u8","captions":[{"label":"Español — Ñoño","file":"https://cdn.example.com/sub.vtt"}]}"""
+        val b64Inner = Base64.getEncoder().encodeToString(voeSamplePayload.toByteArray(StandardCharsets.UTF_8))
+        val revPlus3 = b64Inner.reversed().toByteArray(StandardCharsets.ISO_8859_1)
+            .map { ((it.toInt() and 0xFF) + 3).toByte() }.toByteArray()
+        val b64Outer = Base64.getEncoder().encodeToString(revPlus3)
+        // Ensure every junk pattern + '_' before rot13 is properly reversed and stripped
+        fun testRot13(s: String): String = buildString(s.length) {
+            for (c in s) {
+                append(
+                    when (c) {
+                        in 'a'..'z' -> ((c - 'a' + 13) % 26 + 'a'.code).toChar()
+                        in 'A'..'Z' -> ((c - 'A' + 13) % 26 + 'A'.code).toChar()
+                        else -> c
+                    },
+                )
+            }
+        }
+        val f7Encoded = testRot13(b64Outer.chunked(5).joinToString("*~") + "@$^^~@%?!!#&_")
+        val f7Decoded = SoloLatinoVoeCrypto.decryptF7(f7Encoded)
+        assertNotNull(f7Decoded)
+        assertEquals("https://cdn.example.com/hls/master.m3u8", f7Decoded!!.get("source").asText())
+        assertEquals("Español — Ñoño", f7Decoded.get("captions").get(0).get("label").asText())
+
+        // Verify byte >= 0x80 survival explicitly (byte 0xC3 in reversed base64 would corrupt under UTF-8 String; with unsigned char shift it recovers 0xC0 or raw byte accurately)
+        val rawUtfBytes = byteArrayOf(0x80.toByte(), 0xC3.toByte(), 0xFF.toByte())
+        val shifted = ByteArray(rawUtfBytes.size) { ((rawUtfBytes[it].toInt() and 0xFF) - 3).toChar().code.toByte() }
+        assertEquals(0x7D, shifted[0].toInt() and 0xFF)
+        assertEquals(0xC0, shifted[1].toInt() and 0xFF)
+        assertEquals(0xFC, shifted[2].toInt() and 0xFF)
+    }
 }

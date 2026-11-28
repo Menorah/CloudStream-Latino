@@ -378,14 +378,13 @@ class SoloLatinoProvider(
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val pageUrl = SoloLatinoMarkup.resolveUrl(mainUrl, data) ?: return false
-        val res = fetchHtmlCached(pageUrl, "$mainUrl/", useCache = true)
+        val wasCached = htmlCache.containsKey(pageUrl)
+        var res = fetchHtmlCached(pageUrl, "$mainUrl/", useCache = true)
         if (res.code !in 200..299 || res.text.isBlank()) return false
 
-        val finalPageUrl = res.url.ifBlank { pageUrl }
-        val doc = Jsoup.parse(res.text, finalPageUrl)
-        val playerSection = SoloLatinoMarkup.parsePlayerSection(doc, finalPageUrl)
-
-        val (resolvedButtons, lazyApiRes) = client.resolvePlayerSection(finalPageUrl, playerSection)
+        var finalPageUrl = res.url.ifBlank { pageUrl }
+        var playerSection = SoloLatinoMarkup.parsePlayerSection(Jsoup.parse(res.text, finalPageUrl), finalPageUrl)
+        var (resolvedButtons, lazyApiRes) = client.resolvePlayerSection(finalPageUrl, playerSection)
 
         data class DispatchTarget(
             val url: String,
@@ -394,29 +393,49 @@ class SoloLatinoProvider(
             val type: String?,
         )
 
-        val targets = mutableListOf<DispatchTarget>()
-        val seenUrls = HashSet<String>()
-
-        fun addTarget(url: String?, langLabel: String, label: String, type: String?) {
-            val clean = url?.trim()?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) } ?: return
-            if (seenUrls.add(clean)) {
-                targets.add(DispatchTarget(clean, langLabel.ifBlank { "Latino" }, label.ifBlank { "Servidor" }, type))
+        fun collectTargets(
+            buttons: List<SoloLatinoResolvedButtonOutput>,
+            lazy: SoloLatinoPlayerApiResult?,
+            section: SoloLatinoPlayerSection,
+        ): List<DispatchTarget> {
+            val out = mutableListOf<DispatchTarget>()
+            val seenUrls = HashSet<String>()
+            fun addTarget(url: String?, langLabel: String, label: String, type: String?) {
+                val clean = url?.trim()?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) } ?: return
+                if (seenUrls.add(clean)) {
+                    out.add(DispatchTarget(clean, langLabel.ifBlank { "Latino" }, label.ifBlank { "Servidor" }, type))
+                }
             }
+            for (btn in buttons) {
+                addTarget(btn.url, btn.langLabel, btn.label, btn.type)
+            }
+            lazy?.let { l ->
+                addTarget(
+                    l.url,
+                    section.lazyEmbedLang ?: "Latino",
+                    "Principal",
+                    l.type,
+                )
+            }
+            for (iframeUrl in section.directIframeUrls) {
+                addTarget(iframeUrl, section.lazyEmbedLang ?: "Latino", "Reproductor", null)
+            }
+            return out
         }
 
-        for (btn in resolvedButtons) {
-            addTarget(btn.url, btn.langLabel, btn.label, btn.type)
-        }
-        lazyApiRes?.let { lazy ->
-            addTarget(
-                lazy.url,
-                playerSection.lazyEmbedLang ?: "Latino",
-                "Principal",
-                lazy.type,
-            )
-        }
-        for (iframeUrl in playerSection.directIframeUrls) {
-            addTarget(iframeUrl, playerSection.lazyEmbedLang ?: "Latino", "Reproductor", null)
+        var targets = collectTargets(resolvedButtons, lazyApiRes, playerSection)
+        if (targets.isEmpty() && wasCached) {
+            htmlCache.remove(pageUrl)
+            val freshRes = fetchHtmlCached(pageUrl, "$mainUrl/", useCache = false)
+            if (freshRes.code in 200..299 && freshRes.text.isNotBlank()) {
+                res = freshRes
+                finalPageUrl = freshRes.url.ifBlank { pageUrl }
+                playerSection = SoloLatinoMarkup.parsePlayerSection(Jsoup.parse(freshRes.text, finalPageUrl), finalPageUrl)
+                val pair = client.resolvePlayerSection(finalPageUrl, playerSection)
+                resolvedButtons = pair.first
+                lazyApiRes = pair.second
+                targets = collectTargets(resolvedButtons, lazyApiRes, playerSection)
+            }
         }
 
         if (targets.isEmpty()) return false
@@ -457,7 +476,7 @@ class SoloLatinoProvider(
                                         safeCallback(
                                             newExtractorLink(sourceLabel, "${target.label} MP4", target.url, INFER_TYPE) {
                                                 this.referer = "$mainUrl/"
-                                                this.headers = mapOf("Referer" to "$mainUrl/", "user-agent" to client.currentUserAgent())
+                                                this.headers = mapOf("Referer" to "$mainUrl/", "User-Agent" to client.currentUserAgent(target.url))
                                                 this.quality = Qualities.Unknown.value
                                             },
                                         )
@@ -496,6 +515,7 @@ class SoloLatinoProvider(
                                             sourceLabel = sourceLabel,
                                             subtitleCallback = safeSubtitleCallback,
                                             serverHint = target.label,
+                                            client = client,
                                             callback = safeCallback,
                                         )
                                 }

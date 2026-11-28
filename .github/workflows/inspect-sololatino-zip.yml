@@ -1,0 +1,312 @@
+name: Repro SoloLatino Android 13 Full
+on:
+  push:
+    branches:
+      - 'arena/**'
+permissions:
+  contents: read
+jobs:
+  android_repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare KVM and repro runner script
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          cat > /tmp/run_repro.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cat > SoloLatino/src/main/kotlin/com/menorah/sololatino/ReproProbe.kt <<'KOTLIN'
+          package com.menorah.sololatino
+
+          import android.app.Activity
+          import android.app.Application
+          import android.content.Context
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.util.Log
+          import android.view.ViewGroup
+          import android.webkit.CookieManager
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebResourceResponse
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.FrameLayout
+          import com.lagradost.cloudstream3.MainPageRequest
+          import kotlinx.coroutines.*
+          import java.lang.ref.WeakReference
+          import java.util.Collections
+
+          object ReproProbe {
+              @Volatile
+              private var activityRef: WeakReference<Activity>? = null
+
+              fun start(context: Context) {
+                  val app = context.applicationContext as? Application
+                  app?.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+                      override fun onActivityCreated(a: Activity, b: Bundle?) { activityRef = WeakReference(a) }
+                      override fun onActivityStarted(a: Activity) { activityRef = WeakReference(a) }
+                      override fun onActivityResumed(a: Activity) { activityRef = WeakReference(a) }
+                      override fun onActivityPaused(a: Activity) {}
+                      override fun onActivityStopped(a: Activity) {}
+                      override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
+                      override fun onActivityDestroyed(a: Activity) {}
+                  })
+                  val prev = Thread.getDefaultUncaughtExceptionHandler()
+                  Thread.setDefaultUncaughtExceptionHandler { t, e ->
+                      Log.e("SLReproFatal", "UNCAUGHT thread=${t.name}: ${e.javaClass.name}: ${e.message}", e)
+                      prev?.uncaughtException(t, e)
+                  }
+                  Log.i("SLRepro", "START sdk=${android.os.Build.VERSION.SDK_INT} wvPkg=${runCatching { WebView.getCurrentWebViewPackage()?.let { "${it.packageName}:${it.versionName}" } }.getOrNull()}")
+                  CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                      delay(3500)
+                      val p = SoloLatinoProvider(context)
+                      Log.i("SLRepro", "UA=${p.client.currentUserAgent()}")
+
+                      // 1. Test current v4 getMainPage (4 parallel)
+                      val cats = p.mainPage.take(4)
+                      val mainRes = coroutineScope {
+                          cats.map { mp ->
+                              async {
+                                  val t0 = System.currentTimeMillis()
+                                  val r = runCatching { p.getMainPage(1, MainPageRequest(mp.name, mp.data, mp.horizontalImages)) }
+                                  Log.i("SLRepro", "MAIN cat=${mp.name} ms=${System.currentTimeMillis()-t0} ok=${r.isSuccess} size=${r.getOrNull()?.items?.sumOf { it.list.size }} err=${r.exceptionOrNull()?.javaClass?.simpleName}:${r.exceptionOrNull()?.message}")
+                                  r.getOrNull()
+                              }
+                          }.awaitAll()
+                      }
+                      val firstItem = mainRes.filterNotNull().flatMap { it.items }.flatMap { it.list }.firstOrNull()
+                      Log.i("SLRepro", "MAIN_FIRST=${firstItem?.name} url=${firstItem?.url}")
+
+                      // 2. Test current v4 search
+                      val sr = runCatching { p.search("The Boys") }
+                      Log.i("SLRepro", "SEARCH ok=${sr.isSuccess} size=${sr.getOrNull()?.size} err=${sr.exceptionOrNull()?.message}")
+
+                      // 3. Test current v4 loadLinks directly
+                      for (d in listOf(
+                          "https://sololatino.net/pelicula/puedes-verlo-todo",
+                          "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8"
+                      )) {
+                          val links = Collections.synchronizedList(mutableListOf<String>())
+                          val subs = Collections.synchronizedList(mutableListOf<String>())
+                          val t0 = System.currentTimeMillis()
+                          val ll = runCatching {
+                              withTimeout(95_000L) {
+                                  p.loadLinks(d, false, { subs.add(it.url) }) { links.add("${it.name}|${it.url.take(60)}") }
+                              }
+                          }
+                          Log.i("SLRepro", "LOADLINKS data=$d ms=${System.currentTimeMillis()-t0} ok=${ll.isSuccess} ret=${ll.getOrNull()} links=${links.size} subs=${subs.size} err=${ll.exceptionOrNull()?.javaClass?.simpleName}:${ll.exceptionOrNull()?.message}")
+                      }
+
+                      // 4. Direct HTTP & WebView checks on embed69, voe, caseyseemavoid, morencius, callistanise
+                      val e69Http = runCatching {
+                          p.client.fetchExternalHtml("https://embed69.org/f/tt45368240", "https://sololatino.net/") {
+                              it.contains("embed69")
+                          }
+                      }
+                      Log.i("SLRepro", "DIRECT_E69 ok=${e69Http.isSuccess} code=${e69Http.getOrNull()?.code} len=${e69Http.getOrNull()?.text?.length} hasDataLink=${e69Http.getOrNull()?.text?.contains("dataLink")} err=${e69Http.exceptionOrNull()?.message}")
+
+                      // 5. Test ATTACHED Activity WebView WITHOUT blockNetworkImage / DOM outerHTML polling on sololatino.net!
+                      val act = activityRef?.get()
+                      Log.i("SLRepro", "ACTIVITY_REF=${act?.javaClass?.name}")
+                      if (act != null) {
+                          val attachedRes = testAttachedWebView(act, "https://sololatino.net/")
+                          Log.i("SLRepro", "ATTACHED_SL $attachedRes")
+                      }
+
+                      Log.i("SLRepro", "WAIT_15S_FOR_CRASH_CHECK")
+                      delay(15_000)
+                      Log.i("SLRepro", "DONE_STILL_ALIVE")
+                  }
+              }
+
+              private suspend fun testAttachedWebView(activity: Activity, url: String): String = withTimeoutOrNull(28_000L) {
+                  suspendCancellableCoroutine { cont ->
+                      val h = Handler(Looper.getMainLooper())
+                      var host: FrameLayout? = null
+                      var wv: WebView? = null
+                      var done = false
+                      fun finish(msg: String) {
+                          if (done) return
+                          done = true
+                          h.removeCallbacksAndMessages(null)
+                          h.post {
+                              runCatching { CookieManager.getInstance().flush() }
+                              runCatching { wv?.stopLoading() }
+                              runCatching { (host?.parent as? ViewGroup)?.removeView(host) }
+                              runCatching { wv?.destroy() }
+                          }
+                          if (cont.isActive) cont.resume(msg) {}
+                      }
+                      h.post {
+                          try {
+                              val density = activity.resources.displayMetrics.density
+                              val frame = FrameLayout(activity).apply {
+                                  alpha = 0f
+                                  descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                                  importantForAccessibility = ViewGroup.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                              }
+                              val root = activity.findViewById<ViewGroup>(android.R.id.content)
+                              root.addView(frame, 0, FrameLayout.LayoutParams((1024 * density).toInt(), (768 * density).toInt()))
+                              host = frame
+                              val view = WebView(activity)
+                              wv = view
+                              CookieManager.getInstance().setAcceptCookie(true)
+                              CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
+                              view.settings.javaScriptEnabled = true
+                              view.settings.domStorageEnabled = true
+                              view.settings.textZoom = 100
+                              frame.addView(view, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                              var lastGlance = ""
+                              view.webViewClient = object : WebViewClient() {
+                                  override fun onReceivedHttpError(v: WebView, req: WebResourceRequest, resp: WebResourceResponse) {
+                                      if (req.isForMainFrame) Log.i("SLReproWV2", "HTTP ${resp.statusCode} ${req.url}")
+                                  }
+                                  override fun onPageFinished(v: WebView, u: String) {
+                                      Log.i("SLReproWV2", "FINISHED $u title=${v.title}")
+                                  }
+                              }
+                              val glanceTask = object : Runnable {
+                                  var ticks = 0
+                                  override fun run() {
+                                      if (done) return
+                                      ticks++
+                                      view.evaluateJavascript("[document.title||'',location.href,document.readyState,typeof window._cf_chl_opt!=='undefined',document.querySelectorAll('.card,.ep-card').length]") { raw ->
+                                          val c = runCatching { CookieManager.getInstance().getCookie(url).orEmpty() }.getOrDefault("")
+                                          val hasCf = c.contains("cf_clearance")
+                                          val cardsCount = raw?.trim()?.removeSuffix("]")?.substringAfterLast(',')?.toIntOrNull() ?: 0
+                                          if (raw != lastGlance || hasCf || cardsCount > 0) {
+                                              lastGlance = raw ?: "null"
+                                              Log.i("SLReproWV2", "TICK#$ticks glance=$lastGlance cf_cookie=$hasCf cards=$cardsCount")
+                                          }
+                                          if ((hasCf && cardsCount > 0) || (cardsCount > 0 && !raw.orEmpty().contains("moment", ignoreCase = true))) {
+                                              finish("CLEARED ticks=$ticks glance=$lastGlance cookie=${c.take(120)}")
+                                          } else {
+                                              h.postDelayed(this, 600L)
+                                          }
+                                      }
+                                  }
+                              }
+                              h.postDelayed(glanceTask, 1000L)
+                              view.loadUrl(url)
+                          } catch (t: Throwable) {
+                              finish("ERR ${t.javaClass.simpleName}:${t.message}")
+                          }
+                      }
+                  }
+              } ?: "TIMEOUT_ATTACHED"
+          }
+          KOTLIN
+          python3 - <<'PY'
+          p = 'SoloLatino/src/main/kotlin/com/menorah/sololatino/SoloLatinoPlugin.kt'
+          s = open(p).read().replace(
+              'registerExtractorAPI(SoloLatinoGDriveExtractor())',
+              'registerExtractorAPI(SoloLatinoGDriveExtractor()); ReproProbe.start(context)',
+          )
+          assert 'ReproProbe.start(context)' in s
+          open(p, 'w').write(s)
+
+          sp = 'SoloLatino/src/main/kotlin/com/menorah/sololatino/SoloLatinoSession.kt'
+          ss = open(sp).read()
+          assert 'import android.webkit.WebViewClient' in ss
+          ss = ss.replace(
+              'import android.webkit.WebViewClient',
+              'import android.util.Log\nimport android.webkit.WebViewClient',
+              1,
+          )
+          target_diag = 'lastDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(40)} body=${bodySample.take(80)} url=${pageUrl.take(80)} len=${pageText.length}"'
+          assert target_diag in ss
+          ss = ss.replace(
+              target_diag,
+              'val newDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(30)} body=${bodySample.take(60)} len=${pageText.length}"; if (newDiag != lastDiag) Log.i("SLReproWV", "DIAG $targetUrl " + newDiag); ' + target_diag,
+          )
+          target_to = 'finish(Result.failure(IllegalStateException("WebView agotó el tiempo cargando SoloLatino [$lastDiag blocked=$blocked js=$jsErr]")))'
+          assert target_to in ss
+          ss = ss.replace(
+              target_to,
+              'Log.e("SLReproWV", "TIMEOUT_SITE $targetUrl $lastDiag blocked=$blocked js=$jsErr"); ' + target_to,
+          )
+          target_rg = 'override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {'
+          assert target_rg in ss
+          ss = ss.replace(
+              target_rg,
+              target_rg + ' Log.e("SLReproWV", "RENDER_GONE didCrash=${detail?.didCrash()}"); ',
+          )
+          open(sp, 'w').write(ss)
+          PY
+
+          set +e
+          ./gradlew :SoloLatino:make --stacktrace > build.log 2>&1
+          bstatus=$?
+          if [ "$bstatus" -ne 0 ] && grep -q '429' build.log; then
+            sleep 8
+            ./gradlew :SoloLatino:make --stacktrace > build.log 2>&1
+            bstatus=$?
+          fi
+          set -e
+          if [ "$bstatus" -ne 0 ]; then
+            errs=$(grep -E '^e: |^> |Caused by:|What went wrong:' build.log | head -20 | tr '\n' '|' | sed 's/%/%25/g')
+            echo "::error::BUILD_FAILED($bstatus): $errs"
+            exit "$bstatus"
+          fi
+
+          curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cs.apk
+          adb install -r /tmp/cs.apk
+          pkg=com.lagradost.cloudstream3.prerelease
+          adb shell pm grant "$pkg" android.permission.READ_EXTERNAL_STORAGE || true
+          adb shell pm grant "$pkg" android.permission.WRITE_EXTERNAL_STORAGE || true
+          adb shell appops set "$pkg" MANAGE_EXTERNAL_STORAGE allow || true
+          adb shell mkdir -p /sdcard/Cloudstream3/plugins
+          adb push SoloLatino/build/SoloLatino.cs3 /sdcard/Cloudstream3/plugins/SoloLatino.cs3
+          adb logcat -c
+          adb shell monkey -p "$pkg" 1
+
+          set +e
+          for i in $(seq 1 65); do
+            sleep 5
+            pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
+            log=$(adb logcat -d -s SLRepro:V SLReproFatal:V '*:S' 2>/dev/null || true)
+            if echo "$log" | grep -q 'DONE_STILL_ALIVE'; then
+              break
+            fi
+            if [ "$i" -gt 4 ] && [ -z "$pid" ]; then
+              echo "::notice::PROCESS_DIED_AT_STEP_$i"
+              break
+            fi
+          done
+          pid_final=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
+          adb logcat -d -s SLRepro:V SLReproWV:V SLReproWV2:V SLReproFatal:V PluginManager:W AndroidRuntime:E chromium:E cr_Crash:E libc:F DEBUG:F ActivityManager:E '*:S' > /tmp/logcat.txt 2>/dev/null || true
+          python3 - "$pid_final" /tmp/logcat.txt <<'PY'
+          import sys
+          raw = open(sys.argv[2], errors='replace').read()
+          lines = [ln for ln in raw.splitlines() if 'tile_manager' not in ln]
+          # Put all SLRepro/SLReproWV2/Fatal/AndroidRuntime/PluginManager first, plus non-DIAG SLReproWV, plus tail
+          important = [ln for ln in lines if any(k in ln for k in ('SLRepro ', 'SLRepro:', 'SLReproWV2', 'SLReproFatal', 'TIMEOUT_', 'RENDER_GONE', 'AndroidRuntime', 'PluginManager', 'FATAL', 'DEBUG'))]
+          other = [ln for ln in lines if ln not in important and 'DIAG ' not in ln]
+          combined = f"PID_FINAL={sys.argv[1]} total_lines={len(lines)}\n--- IMPORTANT ---\n" + '\n'.join(important[-140:]) + "\n--- TAIL ---\n" + '\n'.join(other[-60:])
+          chunks = [combined[i:i+3500] for i in range(0, len(combined), 3500)]
+          for idx, ch in enumerate(chunks[:10]):
+              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f'::notice title=REPRO2_{idx:02d}of{len(chunks):02d}::{safe}')
+          PY
+          EOF
+          chmod +x /tmp/run_repro.sh
+      - name: Run Android 13 CloudStream Repro
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: /tmp/run_repro.sh
