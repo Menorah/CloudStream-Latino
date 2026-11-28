@@ -1596,7 +1596,7 @@ internal class SoloLatinoClient(
             listOf(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, sysUa).distinct()
         }
         val cookies = readMergedCookies(embedUrl, pshCookies)
-        var pageRes: com.lagradost.cloudstream3.NiceResponse? = null
+        var pageRes: SoloLatinoHttpResult? = null
         var activeUa = uaCandidates.first()
         for (uaAttempt in uaCandidates) {
             val hdrs = SoloLatinoSessionHelper.buildBrowserHeaders(uaAttempt, effReferer, isAjax = false)
@@ -1604,7 +1604,7 @@ internal class SoloLatinoClient(
                 app.get(embedUrl, headers = hdrs, cookies = cookies, timeout = 12L)
             }.getOrNull() ?: continue
             saveCookiesFromResponse(pshCookies, attempt.cookies)
-            pageRes = attempt
+            pageRes = SoloLatinoHttpResult(attempt.code, attempt.url, attempt.text)
             activeUa = uaAttempt
             val parsedInit = SoloLatinoMarkup.parsePelisSeriesHoyInit(attempt.text, attempt.url, effReferer)
             if (parsedInit != null && !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(attempt.code, attempt.text)) {
@@ -1624,7 +1624,7 @@ internal class SoloLatinoClient(
                 )
             }.getOrNull()
             if (cfPage != null) {
-                pageRes = cfPage
+                pageRes = SoloLatinoHttpResult(cfPage.code, cfPage.url, cfPage.text)
                 saveCookiesFromResponse(pshCookies, cfPage.cookies)
                 WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }?.let {
                     preferredUserAgent = it

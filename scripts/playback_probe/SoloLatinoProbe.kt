@@ -234,7 +234,7 @@ object PlaybackProbe {
                 client = localClient,
                 url = pshEmbedUrl,
                 referer = epUrl,
-                sourceLabel = "SoloLatino · Latino",
+                langTag = "Latino",
                 subtitleCallback = {},
                 callback = { pshLinks.add(it) },
             )
