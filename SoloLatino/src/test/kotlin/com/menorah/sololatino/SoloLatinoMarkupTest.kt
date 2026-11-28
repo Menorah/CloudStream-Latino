@@ -582,4 +582,70 @@ class SoloLatinoMarkupTest {
         val chromiumErr = "<html><head><title>Webpage not available</title></head><!-- Upside down Android --></html>"
         assertTrue(SoloLatinoSessionHelper.isChromiumErrorPage(chromiumErr))
     }
+
+    @Test
+    fun `v4 sanctum exclusive csrf, production psh const _t, and high-cost altcha v2 pass`() = runBlocking {
+        // 1. Laravel Sanctum CSRF rule: never emit X-CSRF-TOKEN when XSRF-TOKEN exists
+        assertEquals(
+            mapOf("X-XSRF-TOKEN" to "rotated-xsrf"),
+            SoloLatinoSessionHelper.buildSanctumCsrfHeaders("rotated-xsrf", "stale-meta-csrf"),
+        )
+        assertEquals(
+            mapOf("X-CSRF-TOKEN" to "meta-only"),
+            SoloLatinoSessionHelper.buildSanctumCsrfHeaders("", "meta-only"),
+        )
+        assertTrue(SoloLatinoSessionHelper.buildSanctumCsrfHeaders(" ", null).isEmpty())
+
+        // Standard User-Agent header casing
+        val hdrs = SoloLatinoSessionHelper.buildBrowserHeaders("CustomUA/1.0")
+        assertEquals("CustomUA/1.0", hdrs["User-Agent"])
+
+        // 2. Real production PelisSeriesHoy markup (const _t + _qk + _qc + dynamic _ao)
+        val prodPshHtml = """
+            <script>
+              var _qc="tt1190634-5x08";
+              var _qk=["LjIzMi4xNjN8","dHQxMTkwNjM0","MTc5NTg0MTkyOA.96e9ee88bd1548337d074a43","LTV4MDh8MTgx"];
+              var _qsrc="";
+              var _ao='';
+              const _t = '3dcf189b8329390d8fab86ebeae50198';
+            </script>
+        """.trimIndent()
+        val pshInit = SoloLatinoMarkup.parsePelisSeriesHoyInit(
+            prodPshHtml,
+            "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=abc",
+            refererUrl = "https://sololatino.net/serie/the-boys/temporada-5/episodio-8",
+        )!!
+        assertEquals("3dcf189b8329390d8fab86ebeae50198", pshInit.token)
+        assertEquals("dHQxMTkwNjM0LTV4MDh8MTgxLjIzMi4xNjN8MTc5NTg0MTkyOA.96e9ee88bd1548337d074a43", pshInit.qv)
+        assertEquals("https://sololatino.net", pshInit.ao)
+        assertEquals(SoloLatinoMarkup.fnv1a32Hex("${pshInit.qv}|clk|tt1190634-5x08"), pshInit.qt)
+
+        // busy / no_click / retry_once payloads do not produce false URL resolutions
+        assertNull(SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"error":"busy","retry":6}"""))
+        assertNull(SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"type":"error","msg":"no_click"}"""))
+        assertNull(SoloLatinoMarkup.parsePelisSeriesHoyStep2("""{"error":"retry_once"}"""))
+
+        // 3. ALTCHA v2 PBKDF2/SHA-256 at production cost=10000 solves cleanly within timeout
+        val nonceHex = "1020304050607080"
+        val saltHex = "a0b0c0d0e0f00102"
+        val nonceBytes = SoloLatinoHostHttp.hexToBytes(nonceHex)
+        val saltBytes = SoloLatinoHostHttp.hexToBytes(saltHex)
+        val targetCounter = 7
+        val pass = nonceBytes + byteArrayOf(0, 0, 0, targetCounter.toByte())
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(pass, "HmacSHA256")) }
+        var u = mac.doFinal(saltBytes + byteArrayOf(0, 0, 0, 1))
+        val t = u.copyOf()
+        for (iter in 2..10_000) {
+            u = mac.doFinal(u)
+            for (k in t.indices) t[k] = (t[k].toInt() xor u[k].toInt()).toByte()
+        }
+        val prefix = SoloLatinoHostHttp.bytesToHex(t.copyOf(32)).take(4)
+        val solved = SoloLatinoVoeCrypto.solveAltchaSuspend(
+            """{"parameters":{"algorithm":"PBKDF2/SHA-256","cost":10000,"keyLength":32,"keyPrefix":"$prefix","nonce":"$nonceHex","salt":"$saltHex"}}""",
+            maxCounters = 100,
+        )
+        assertNotNull(solved)
+        val solvedJson = SoloLatinoMarkup.jsonMapper.readTree(String(Base64.getDecoder().decode(solved), StandardCharsets.UTF_8))
+        assertTrue(solvedJson.get("solution").get("derivedKey").asText().startsWith(prefix))
+    }
 }
