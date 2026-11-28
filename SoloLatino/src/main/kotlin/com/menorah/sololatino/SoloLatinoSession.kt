@@ -42,6 +42,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -327,7 +328,7 @@ internal object SoloLatinoWebTransport {
     ): SoloLatinoWebHtmlResponse = suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
         val finished = AtomicBoolean(false)
-        @Volatile var webView: WebView? = null
+        val webViewRef = AtomicReference<WebView?>(null)
         var httpStatus = 200
         var fetchStarted = false
         var generation = 0
@@ -348,8 +349,7 @@ internal object SoloLatinoWebTransport {
                 val cmCookie = runCatching { CookieManager.getInstance().getCookie(res.url).orEmpty() }.getOrDefault("")
                 res.copy(cookieHeader = cmCookie.ifBlank { res.cookieHeader })
             }
-            val viewToDestroy = webView
-            webView = null
+            val viewToDestroy = webViewRef.getAndSet(null)
             handler.post {
                 runCatching { CookieManager.getInstance().flush() }
                 destroyWebViewSafely(viewToDestroy)
@@ -367,7 +367,7 @@ internal object SoloLatinoWebTransport {
         lateinit var poll: Runnable
         poll = Runnable {
             if (finished.get()) return@Runnable
-            val view = webView ?: return@Runnable
+            val view = webViewRef.get() ?: return@Runnable
             runCatching {
                 view.evaluateJavascript("window.__slFetchResult || null") { raw ->
                     if (finished.get()) return@evaluateJavascript
@@ -404,7 +404,7 @@ internal object SoloLatinoWebTransport {
             if (finished.get()) return@post
             try {
                 val view = WebView(context.applicationContext)
-                webView = view
+                webViewRef.set(view)
                 configureWebView(view, userAgent)
                 resolvedUa = runCatching { view.settings.userAgentString }.getOrDefault(userAgent.orEmpty())
                 view.webViewClient = object : WebViewClient() {
@@ -529,7 +529,7 @@ internal object SoloLatinoWebTransport {
     ): SoloLatinoWebPlayersResponse = suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
         val finished = AtomicBoolean(false)
-        @Volatile var webView: WebView? = null
+        val webViewRef = AtomicReference<WebView?>(null)
         var httpStatus = 200
         var resolveStarted = false
         var generation = 0
@@ -542,8 +542,7 @@ internal object SoloLatinoWebTransport {
                 val cmCookie = runCatching { CookieManager.getInstance().getCookie(pageUrl).orEmpty() }.getOrDefault("")
                 res.copy(cookieHeader = cmCookie.ifBlank { res.cookieHeader })
             }
-            val viewToDestroy = webView
-            webView = null
+            val viewToDestroy = webViewRef.getAndSet(null)
             handler.post {
                 runCatching { CookieManager.getInstance().flush() }
                 destroyWebViewSafely(viewToDestroy)
@@ -561,7 +560,7 @@ internal object SoloLatinoWebTransport {
         lateinit var poll: Runnable
         poll = Runnable {
             if (finished.get()) return@Runnable
-            val view = webView ?: return@Runnable
+            val view = webViewRef.get() ?: return@Runnable
             runCatching {
                 view.evaluateJavascript("window.__slPlayerResolveOut || null") { raw ->
                     if (finished.get()) return@evaluateJavascript
@@ -609,7 +608,7 @@ internal object SoloLatinoWebTransport {
             if (finished.get()) return@post
             try {
                 val view = WebView(context.applicationContext)
-                webView = view
+                webViewRef.set(view)
                 configureWebView(view, userAgent)
                 resolvedUa = runCatching { view.settings.userAgentString }.getOrDefault(userAgent.orEmpty())
                 view.webViewClient = object : WebViewClient() {
@@ -785,7 +784,7 @@ internal object SoloLatinoWebTransport {
     ): List<SoloLatinoWebPshServerResult> = suspendCancellableCoroutine { continuation ->
         val handler = Handler(Looper.getMainLooper())
         val finished = AtomicBoolean(false)
-        @Volatile var webView: WebView? = null
+        val webViewRef = AtomicReference<WebView?>(null)
         var httpStatus = 200
         var resolveStarted = false
         var generation = 0
@@ -793,8 +792,7 @@ internal object SoloLatinoWebTransport {
         fun finish(result: Result<List<SoloLatinoWebPshServerResult>>?) {
             if (!finished.compareAndSet(false, true)) return
             handler.removeCallbacksAndMessages(null)
-            val viewToDestroy = webView
-            webView = null
+            val viewToDestroy = webViewRef.getAndSet(null)
             handler.post {
                 runCatching { CookieManager.getInstance().flush() }
                 destroyWebViewSafely(viewToDestroy)
@@ -818,7 +816,7 @@ internal object SoloLatinoWebTransport {
             if (finished.get()) return@post
             try {
                 val view = WebView(context.applicationContext)
-                webView = view
+                webViewRef.set(view)
                 configureWebView(view, userAgent)
 
                 lateinit var checkReadyFn: (WebView, String, Int) -> Unit
@@ -826,7 +824,7 @@ internal object SoloLatinoWebTransport {
                 lateinit var poll: Runnable
                 poll = Runnable {
                     if (finished.get()) return@Runnable
-                    val currentView = webView ?: return@Runnable
+                    val currentView = webViewRef.get() ?: return@Runnable
                     runCatching {
                         currentView.evaluateJavascript("JSON.stringify({out:window.__slPshOut||null,retry:Boolean(window.__slPshRetry)})") { raw ->
                             if (finished.get()) return@evaluateJavascript
