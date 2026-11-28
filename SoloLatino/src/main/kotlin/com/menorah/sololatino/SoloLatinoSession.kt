@@ -104,6 +104,18 @@ internal object SoloLatinoSessionHelper {
         return merged
     }
 
+    fun looksLikeCloudflareAccessDenied(code: Int, body: String): Boolean {
+        if (code != 403 && code != 200 && code != 503) return false
+        return body.contains("used Cloudflare to restrict access", ignoreCase = true) ||
+            body.contains("Attention Required! | Cloudflare", ignoreCase = true) ||
+            (body.contains("Access denied", ignoreCase = true) && body.contains("Cloudflare", ignoreCase = true)) ||
+            body.contains("error code: 1020", ignoreCase = true)
+    }
+
+    fun isChromiumErrorPage(body: String): Boolean =
+        body.contains("Upside down Android", ignoreCase = true) ||
+            body.contains("<title>Webpage not available</title>", ignoreCase = true)
+
     fun looksLikeCloudflareChallenge(code: Int, body: String): Boolean {
         if (body.contains("_cf_chl_opt", ignoreCase = true) ||
             body.contains("challenge-platform", ignoreCase = true) ||
@@ -114,7 +126,10 @@ internal object SoloLatinoSessionHelper {
             return true
         }
         return (code == 403 || code == 503) &&
-            (body.isBlank() || body.contains("Just a moment", ignoreCase = true) || body.contains("cloudflare", ignoreCase = true))
+            (body.isBlank() ||
+                body.contains("Just a moment", ignoreCase = true) ||
+                looksLikeCloudflareAccessDenied(code, body) ||
+                body.contains("cf-error-details", ignoreCase = true))
     }
 
     fun buildBrowserHeaders(
@@ -401,12 +416,16 @@ internal object SoloLatinoWebTransport {
                         val resUrl = obj.optString("url").ifBlank { fallbackDomUrl.ifBlank { targetUrl } }
                         val fetchedText = obj.optString("text")
                         val offsetVal = if (obj.has("offsetMs") && !obj.isNull("offsetMs")) obj.optLong("offsetMs") else null
-                        if (!fetchSameOriginEndpoint &&
-                            (code !in 200..299 || fetchedText.isBlank() || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, fetchedText)) &&
-                            fallbackDomText.isNotBlank() &&
+                        val fetchedBad = code !in 200..299 || fetchedText.isBlank() ||
+                            SoloLatinoSessionHelper.isChromiumErrorPage(fetchedText) ||
+                            SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, fetchedText)
+                        val domUsable = fallbackDomText.isNotBlank() &&
+                            !SoloLatinoSessionHelper.isChromiumErrorPage(fallbackDomText) &&
                             !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(200, fallbackDomText)
-                        ) {
+                        if (!fetchSameOriginEndpoint && fetchedBad && domUsable) {
                             finish(Result.success(SoloLatinoWebHtmlResponse(200, fallbackDomUrl, fallbackDomText, "", resolvedUa, offsetVal)))
+                        } else if (SoloLatinoSessionHelper.isChromiumErrorPage(fetchedText)) {
+                            finish(Result.success(SoloLatinoWebHtmlResponse(0, resUrl, "", "", resolvedUa, offsetVal)))
                         } else {
                             finish(Result.success(SoloLatinoWebHtmlResponse(code, resUrl, fetchedText, "", resolvedUa, offsetVal)))
                         }
@@ -505,6 +524,14 @@ internal object SoloLatinoWebTransport {
                                 val bodySample = page.optString("body").replace(Regex("\\s+"), " ").trim()
                                 val isCf = SoloLatinoSessionHelper.looksLikeCloudflareChallenge(httpStatus, pageText)
                                 lastDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(40)} body=${bodySample.take(80)} url=${pageUrl.take(80)} len=${pageText.length}"
+                                if (SoloLatinoSessionHelper.looksLikeCloudflareAccessDenied(httpStatus, pageText)) {
+                                    finish(Result.success(SoloLatinoWebHtmlResponse(403, pageUrl, pageText, "", resolvedUa, null)))
+                                    return@evaluateJavascript
+                                }
+                                if (SoloLatinoSessionHelper.isChromiumErrorPage(pageText)) {
+                                    finish(Result.success(SoloLatinoWebHtmlResponse(0, pageUrl, "", "", resolvedUa, null)))
+                                    return@evaluateJavascript
+                                }
                                 if (isCf) {
                                     handler.postDelayed({ checkReady(view, url, expectedGen) }, 350L)
                                     return@evaluateJavascript
@@ -942,6 +969,10 @@ internal object SoloLatinoWebTransport {
                                     handler.postDelayed({ checkReadyFn(targetView, url, expectedGen) }, 250L)
                                     return@evaluateJavascript
                                 }
+                                if (SoloLatinoSessionHelper.looksLikeCloudflareAccessDenied(httpStatus, pageText)) {
+                                    finish(Result.success(emptyList()))
+                                    return@evaluateJavascript
+                                }
                                 if (SoloLatinoSessionHelper.looksLikeCloudflareChallenge(httpStatus, pageText)) {
                                     handler.postDelayed({ checkReadyFn(targetView, url, expectedGen) }, 350L)
                                     return@evaluateJavascript
@@ -1257,19 +1288,29 @@ internal class SoloLatinoClient(
         var dateHeader: String? = null
 
         if (activeTestResponse == null) {
-            val ua = currentUserAgent()
             val cookies = readMergedCookies(url, siteCookies)
-            val headers = SoloLatinoSessionHelper.buildBrowserHeaders(ua, referer, isAjax)
-            val direct = runCatching {
-                app.get(url, headers = headers, cookies = cookies, timeout = 14L)
-            }.getOrNull()
-            if (direct != null) {
+            val hasClearance = cookies.keys.any { it.equals("cf_clearance", ignoreCase = true) }
+            val uaList = if (hasClearance) {
+                listOf(currentUserAgent())
+            } else {
+                listOf(currentUserAgent(), SoloLatinoSessionHelper.DEFAULT_USER_AGENT).distinct()
+            }
+            for (ua in uaList) {
+                val headers = SoloLatinoSessionHelper.buildBrowserHeaders(ua, referer, isAjax)
+                val direct = runCatching {
+                    app.get(url, headers = headers, cookies = cookies, timeout = 14L)
+                }.getOrNull() ?: continue
                 code = direct.code
                 finalUrl = direct.url
                 text = direct.text
                 dateHeader = direct.headers["date"] ?: direct.headers["Date"]
                 updateServerOffset(dateHeader)
                 saveCookiesFromResponse(siteCookies, direct.cookies)
+                if (code in 200..299 && text.isNotBlank() &&
+                    !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text)
+                ) {
+                    break
+                }
             }
 
             if (ctx == null && (code == 0 || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text))) {
@@ -1548,14 +1589,27 @@ internal class SoloLatinoClient(
         effReferer: String,
         skipCloudflareKiller: Boolean = false,
     ): List<SoloLatinoWebPshServerResult> {
-        val ua = currentUserAgent()
+        val sysUa = currentUserAgent()
+        val uaCandidates = if (skipCloudflareKiller) {
+            listOf(sysUa, SoloLatinoSessionHelper.DEFAULT_USER_AGENT).distinct()
+        } else {
+            listOf(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, sysUa).distinct()
+        }
         val cookies = readMergedCookies(embedUrl, pshCookies)
-        val getHeaders = SoloLatinoSessionHelper.buildBrowserHeaders(ua, effReferer, isAjax = false)
-        var pageRes = runCatching {
-            app.get(embedUrl, headers = getHeaders, cookies = cookies, timeout = 12L)
-        }.getOrNull()
-        if (pageRes != null) {
-            saveCookiesFromResponse(pshCookies, pageRes.cookies)
+        var pageRes: com.lagradost.cloudstream3.NiceResponse? = null
+        var activeUa = uaCandidates.first()
+        for (uaAttempt in uaCandidates) {
+            val hdrs = SoloLatinoSessionHelper.buildBrowserHeaders(uaAttempt, effReferer, isAjax = false)
+            val attempt = runCatching {
+                app.get(embedUrl, headers = hdrs, cookies = cookies, timeout = 12L)
+            }.getOrNull() ?: continue
+            saveCookiesFromResponse(pshCookies, attempt.cookies)
+            pageRes = attempt
+            activeUa = uaAttempt
+            val parsedInit = SoloLatinoMarkup.parsePelisSeriesHoyInit(attempt.text, attempt.url, effReferer)
+            if (parsedInit != null && !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(attempt.code, attempt.text)) {
+                break
+            }
         }
         if (!skipCloudflareKiller && appContext == null &&
             (pageRes == null || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(pageRes.code, pageRes.text))
@@ -1563,7 +1617,7 @@ internal class SoloLatinoClient(
             val cfPage = runCatching {
                 app.get(
                     embedUrl,
-                    headers = getHeaders,
+                    headers = SoloLatinoSessionHelper.buildBrowserHeaders(activeUa, effReferer, isAjax = false),
                     cookies = readMergedCookies(embedUrl, pshCookies),
                     interceptor = cfKiller,
                     timeout = 20L,
@@ -1572,16 +1626,18 @@ internal class SoloLatinoClient(
             if (cfPage != null) {
                 pageRes = cfPage
                 saveCookiesFromResponse(pshCookies, cfPage.cookies)
-                WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }?.let { preferredUserAgent = it }
+                WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }?.let {
+                    preferredUserAgent = it
+                    activeUa = it
+                }
             }
         }
         val finalPage = pageRes ?: return emptyList()
-        if (!finalPage.isSuccessful || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(finalPage.code, finalPage.text)) {
+        if (SoloLatinoSessionHelper.looksLikeCloudflareChallenge(finalPage.code, finalPage.text)) {
             return emptyList()
         }
         val init = SoloLatinoMarkup.parsePelisSeriesHoyInit(finalPage.text, finalPage.url, effReferer) ?: return emptyList()
 
-        val activeUa = currentUserAgent()
         val postCookies = readMergedCookies(finalPage.url, pshCookies)
         val postHeaders = mapOf(
             "user-agent" to activeUa,
@@ -1723,27 +1779,32 @@ internal class SoloLatinoClient(
         referer: String,
         allowedHost: (String) -> Boolean,
     ): SoloLatinoHttpResult = siteGate.withPermit {
-        val ua = currentUserAgent()
+        val isEmbed69 = SoloLatinoMarkup.hostOf(url).contains("embed69", ignoreCase = true)
+        fun isUsable(c: Int, t: String): Boolean =
+            c in 200..299 && t.isNotBlank() &&
+                !SoloLatinoSessionHelper.isChromiumErrorPage(t) &&
+                !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(c, t) &&
+                (!isEmbed69 || t.contains("dataLink"))
+
+        val sysUa = currentUserAgent()
+        val uaCandidates = listOf(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, sysUa).distinct()
         val activeTestResponse = testWebResponse
         var code = 0
         var finalUrl = url
         var text = ""
         if (activeTestResponse == null) {
             val cookies = readMergedCookies(url, externalCookies)
-            val headers = SoloLatinoSessionHelper.buildBrowserHeaders(ua, referer, isAjax = false)
-            val direct = runCatching { app.get(url, referer = referer, headers = headers, cookies = cookies, timeout = 12L) }.getOrNull()
-            if (direct != null) {
+            for (uaAttempt in uaCandidates) {
+                val headers = SoloLatinoSessionHelper.buildBrowserHeaders(uaAttempt, referer, isAjax = false)
+                val direct = runCatching { app.get(url, referer = referer, headers = headers, cookies = cookies, timeout = 12L) }.getOrNull() ?: continue
                 code = direct.code
                 finalUrl = direct.url
                 text = direct.text
                 saveCookiesFromResponse(externalCookies, direct.cookies)
+                if (isUsable(code, text)) {
+                    return@withPermit SoloLatinoHttpResult(code, finalUrl, text)
+                }
             }
-        }
-        val needsFallback = code !in 200..299 ||
-            text.isBlank() ||
-            SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text)
-        if (!needsFallback) {
-            return@withPermit SoloLatinoHttpResult(code, finalUrl, text)
         }
 
         val ctx = appContext
@@ -1754,7 +1815,7 @@ internal class SoloLatinoClient(
                     app.get(
                         url,
                         referer = referer,
-                        headers = SoloLatinoSessionHelper.buildBrowserHeaders(currentUserAgent(), referer, isAjax = false),
+                        headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, referer, isAjax = false),
                         cookies = readMergedCookies(url, externalCookies),
                         interceptor = cfKiller,
                         timeout = 18L,
@@ -1773,25 +1834,23 @@ internal class SoloLatinoClient(
                 if (activeTestResponse == null) {
                     val retryCookies = readMergedCookies(url, externalCookies)
                     if (retryCookies.isNotEmpty()) {
-                        val retryDirect = runCatching {
-                            app.get(
-                                url,
-                                referer = referer,
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(currentUserAgent(), referer, isAjax = false),
-                                cookies = retryCookies,
-                                timeout = 12L,
-                            )
-                        }.getOrNull()
-                        if (retryDirect != null &&
-                            retryDirect.code in 200..299 &&
-                            retryDirect.text.isNotBlank() &&
-                            !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(retryDirect.code, retryDirect.text)
-                        ) {
-                            code = retryDirect.code
-                            finalUrl = retryDirect.url
-                            text = retryDirect.text
-                            saveCookiesFromResponse(externalCookies, retryDirect.cookies)
-                            return@withLock
+                        for (uaAttempt in listOf(sysUa, SoloLatinoSessionHelper.DEFAULT_USER_AGENT).distinct()) {
+                            val retryDirect = runCatching {
+                                app.get(
+                                    url,
+                                    referer = referer,
+                                    headers = SoloLatinoSessionHelper.buildBrowserHeaders(uaAttempt, referer, isAjax = false),
+                                    cookies = retryCookies,
+                                    timeout = 12L,
+                                )
+                            }.getOrNull() ?: continue
+                            if (isUsable(retryDirect.code, retryDirect.text)) {
+                                code = retryDirect.code
+                                finalUrl = retryDirect.url
+                                text = retryDirect.text
+                                saveCookiesFromResponse(externalCookies, retryDirect.cookies)
+                                return@withLock
+                            }
                         }
                     }
                 }
@@ -1801,43 +1860,37 @@ internal class SoloLatinoClient(
                         url = url,
                         referer = referer,
                         allowedHost = allowedHost,
-                        userAgent = currentUserAgent(),
+                        userAgent = sysUa,
                         fetchSameOriginEndpoint = false,
                         testResponse = activeTestResponse,
                     )
                 }.getOrNull()
-                if (webRes != null) {
+                if (webRes != null && !SoloLatinoSessionHelper.isChromiumErrorPage(webRes.text)) {
                     code = webRes.code
                     finalUrl = webRes.url
                     text = webRes.text
                     if (webRes.userAgent.isNotBlank()) preferredUserAgent = webRes.userAgent
                     saveCookiesFromResponse(externalCookies, emptyMap(), webRes.cookieHeader)
                 }
-                val isEmbed69Incomplete = SoloLatinoMarkup.hostOf(url).contains("embed69", ignoreCase = true) &&
-                    !text.contains("dataLink")
-                if (activeTestResponse == null &&
-                    (code !in 200..299 || text.isBlank() ||
-                        SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text) || isEmbed69Incomplete)
-                ) {
+                if (activeTestResponse == null && !isUsable(code, text)) {
                     val postWebCookies = readMergedCookies(url, externalCookies)
-                    val postWeb = runCatching {
-                        app.get(
-                            url,
-                            referer = referer,
-                            headers = SoloLatinoSessionHelper.buildBrowserHeaders(currentUserAgent(), referer, isAjax = false),
-                            cookies = postWebCookies,
-                            timeout = 12L,
-                        )
-                    }.getOrNull()
-                    if (postWeb != null &&
-                        postWeb.code in 200..299 &&
-                        postWeb.text.isNotBlank() &&
-                        !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(postWeb.code, postWeb.text)
-                    ) {
-                        code = postWeb.code
-                        finalUrl = postWeb.url
-                        text = postWeb.text
-                        saveCookiesFromResponse(externalCookies, postWeb.cookies)
+                    for (uaAttempt in listOf(currentUserAgent(), SoloLatinoSessionHelper.DEFAULT_USER_AGENT).distinct()) {
+                        val postWeb = runCatching {
+                            app.get(
+                                url,
+                                referer = referer,
+                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(uaAttempt, referer, isAjax = false),
+                                cookies = postWebCookies,
+                                timeout = 12L,
+                            )
+                        }.getOrNull() ?: continue
+                        if (isUsable(postWeb.code, postWeb.text)) {
+                            code = postWeb.code
+                            finalUrl = postWeb.url
+                            text = postWeb.text
+                            saveCookiesFromResponse(externalCookies, postWeb.cookies)
+                            break
+                        }
                     }
                 }
             }

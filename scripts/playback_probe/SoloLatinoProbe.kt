@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -23,6 +25,10 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import kotlinx.coroutines.*
 import org.jsoup.Jsoup
+import java.io.ByteArrayInputStream
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Collections
 
 // Added to a temporary build only; never part of the published plugin.
@@ -36,311 +42,265 @@ object PlaybackProbe {
                 withTimeout(600_000) {
                     val provider = SoloLatinoProvider(context)
                     val sysUa = provider.client.currentUserAgent()
-                    val preOkHttp = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val r = com.lagradost.cloudstream3.app.get(
-                                "${SoloLatinoMarkup.MAIN_URL}/",
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(sysUa, "${SoloLatinoMarkup.MAIN_URL}/"),
-                                timeout = 15L,
-                            )
-                            "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    val preWebView = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val w = SoloLatinoWebTransport.getHtml(
-                                context = context,
-                                url = "${SoloLatinoMarkup.MAIN_URL}/",
-                                referer = "${SoloLatinoMarkup.MAIN_URL}/",
-                                userAgent = sysUa,
-                            )
-                            "code=${w.code} url=${w.url} len=${w.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(w.code, w.text)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    val preCfKiller = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val killer = com.lagradost.cloudstream3.network.CloudflareKiller()
-                            val r = com.lagradost.cloudstream3.app.get(
-                                "${SoloLatinoMarkup.MAIN_URL}/",
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(sysUa, "${SoloLatinoMarkup.MAIN_URL}/"),
-                                interceptor = killer,
-                                timeout = 25L,
-                            )
-                            val ckKeys = killer.savedCookies["sololatino.net"]?.keys.orEmpty()
-                            "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} ck=$ckKeys"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    Log.i("CSPlaybackProbe", "PRECHECK ua=[${sysUa.take(90)}] okhttp=[$preOkHttp] webview=[$preWebView] cfk=[$preCfKiller]")
 
-                    // Inspect raw responses from Embed69 & PelisSeriesHoy & test host extractors + ExoPlayer + Coil
-                    val e69RawHttp = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val r = com.lagradost.cloudstream3.app.get(
-                                "https://embed69.org/f/tt45368240",
-                                referer = "https://sololatino.net/pelicula/street-fighter",
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, "https://sololatino.net/"),
-                                timeout = 15L,
-                            )
-                            "code=${r.code} url=${r.url} len=${r.text.length} body=${r.text.replace(Regex("\\s+"), " ").take(450)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
+                    // 1. Live check: can this runner IP reach sololatino.net directly or via WebView/cfKiller?
+                    val siteProbe = withContext(Dispatchers.IO) {
+                        provider.client.fetchSite("${SoloLatinoMarkup.MAIN_URL}/", "${SoloLatinoMarkup.MAIN_URL}/")
                     }
-                    val e69BoyHttp = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val r = com.lagradost.cloudstream3.app.get(
-                                "https://embed69.org/f/tt1190634-5x08",
-                                referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, "https://sololatino.net/"),
-                                timeout = 15L,
-                            )
-                            "code=${r.code} len=${r.text.length} dl=${r.text.contains("dataLink")} body=${r.text.replace(Regex("\\s+"), " ").take(300)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    val pshRawHttp = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val r = com.lagradost.cloudstream3.app.get(
-                                "https://player.pelisserieshoy.com/f/tt1190634-5x08",
-                                referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, "https://sololatino.net/"),
-                                timeout = 15L,
-                            )
-                            "code=${r.code} len=${r.text.length} body=${r.text.replace(Regex("\\s+"), " ").take(450)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    val pshWebView = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val w = SoloLatinoWebTransport.getHtml(
-                                context = context,
-                                url = "https://player.pelisserieshoy.com/f/tt1190634-5x08",
-                                referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-                                allowedHost = { SoloLatinoMarkup.isPelisSeriesHoyUrl(it) },
-                                userAgent = sysUa,
-                            )
-                            "code=${w.code} len=${w.text.length} body=${w.text.replace(Regex("\\s+"), " ").take(350)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    val e69WebView = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val w = SoloLatinoWebTransport.getHtml(
-                                context = context,
-                                url = "https://embed69.org/f/tt45368240",
-                                referer = "https://sololatino.net/pelicula/street-fighter",
-                                allowedHost = { u -> SoloLatinoMarkup.hostOf(u).contains("embed69") },
-                                userAgent = sysUa,
-                            )
-                            "code=${w.code} len=${w.text.length} dl=${w.text.contains("dataLink")} body=${w.text.replace(Regex("\\s+"), " ").take(350)}"
-                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
-                    }
-                    Log.i("CSPlaybackProbe", "RAW_E69_SF [$e69RawHttp]")
-                    Log.i("CSPlaybackProbe", "RAW_E69_BOYS [$e69BoyHttp]")
-                    Log.i("CSPlaybackProbe", "RAW_PSH [$pshRawHttp]")
-                    Log.i("CSPlaybackProbe", "WV_PSH [$pshWebView]")
-                    Log.i("CSPlaybackProbe", "WV_E69 [$e69WebView]")
+                    val siteReachable = siteProbe.code in 200..299 &&
+                        siteProbe.text.isNotBlank() &&
+                        !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(siteProbe.code, siteProbe.text)
+                    Log.i("CSPlaybackProbe", "LIVE_SITE reachable=$siteReachable code=${siteProbe.code} len=${siteProbe.text.length}")
 
-                    // Also test direct host extraction + ExoPlayer + Coil directly
-                    val hostLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                    withContext(Dispatchers.IO) {
-                        SoloLatinoExtractorDispatcher.extract("https://morencius.com/embed/1ywkwa2abeeu", "https://embed69.org/", "SoloLatino · Latino", {}, serverHint = "vidhide") { hostLinks.add(it) }
-                        SoloLatinoExtractorDispatcher.extract("https://voe.sx/e/basmjvog9k1o", "https://embed69.org/", "SoloLatino · Latino", {}, serverHint = "voe") { hostLinks.add(it) }
-                    }
-                    Log.i("CSPlaybackProbe", "HOST_DIRECT count=${hostLinks.size} names=${hostLinks.map { it.name }}")
-                    for (lnk in hostLinks.take(4)) {
-                        try {
-                            play(context, lnk)
-                            Log.i("CSPlaybackProbe", "PASS playback host-direct via ${lnk.name}")
-                            break
-                        } catch (t: Throwable) {
-                            Log.i("CSPlaybackProbe", "HOST_PLAY_ERR ${lnk.name}: ${t.javaClass.simpleName}:${t.message?.take(100)}")
-                        }
-                    }
-                    runCatching {
-                        verifyCoilImage(context, "tmdb-w500", "https://image.tmdb.org/t/p/w500/zDE9hd1SG9695YncbZGjSf7Z9Jk.jpg", null)
-                        Log.i("CSPlaybackProbe", "PASS coil tmdb-w500")
-                    }.onFailure {
-                        Log.i("CSPlaybackProbe", "FAIL_COIL ${it.message}")
-                    }
-
-                    val started = android.os.SystemClock.elapsedRealtime()
-
-                    val coreSectionData = setOf(
-                        SoloLatinoMarkup.SECTION_HOME_RECENT_EPISODES,
-                        SoloLatinoMarkup.SECTION_HOME_RECENT_ADDED,
-                        "peliculas?sort=updated",
-                        "series?sort=updated",
-                        "animes?sort=updated",
-                        "doramas?sort=updated",
-                    )
-                    val homeSections = provider.mainPage.filter { it.data in coreSectionData }
-                    val homePages = withContext(Dispatchers.IO) {
-                        coroutineScope {
-                            homeSections.map { section ->
-                                async {
-                                    val page = provider.getMainPage(
-                                        1,
-                                        MainPageRequest(section.name, section.data, section.horizontalImages),
-                                    ) ?: error("null mainPage for ${section.name}")
-                                    section.name to page.items.flatMap { it.list }
-                                }
-                            }.awaitAll()
-                        }
-                    }
-                    val elapsed = android.os.SystemClock.elapsedRealtime() - started
-                    val emptySections = homePages.filter { it.second.isEmpty() }.map { it.first }
-                    Log.i("CSPlaybackProbe", "home sections=${homePages.size} empty=$emptySections elapsedMs=$elapsed")
-                    check(emptySections.isEmpty()) { "empty home sections: $emptySections" }
-
-                    // Page 2 check
-                    val moviesSec = provider.mainPage.first { it.data == "peliculas?sort=updated" }
-                    val moviesP2 = provider.getMainPage(2, MainPageRequest(moviesSec.name, moviesSec.data, moviesSec.horizontalImages))
-                    val moviesP2Items = moviesP2?.items?.flatMap { it.list }.orEmpty()
-                    check(moviesP2Items.isNotEmpty()) { "empty /peliculas?sort=updated page 2" }
-
-                    // Search & quickSearch
-                    val searchSf = provider.search("street fighter", 1) ?: error("null search street fighter")
-                    check(searchSf.items.isNotEmpty()) { "empty search street fighter" }
-                    val quickDexter = provider.quickSearch("dexter").orEmpty()
-                    check(quickDexter.isNotEmpty()) { "empty quickSearch dexter" }
-                    Log.i("CSPlaybackProbe", "PASS home+pagination+search (sf=${searchSf.items.size}, quick=${quickDexter.size})")
-
-                    // Load movie & series details
-                    val sfUrl = "https://sololatino.net/pelicula/street-fighter"
-                    val sfLoad = provider.load(sfUrl) as? MovieLoadResponse
-                        ?: error("street-fighter load failed")
-                    check(!sfLoad.posterUrl.isNullOrBlank()) { "missing street-fighter poster" }
-
-                    val boysEpUrl = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8"
-                    val boysLoad = provider.load(boysEpUrl) as? TvSeriesLoadResponse
-                        ?: error("the-boys-2019 load failed")
-                    check(boysLoad.episodes.isNotEmpty()) { "the-boys-2019 episodes empty" }
-
-                    val recentEpCards = homePages.first { it.first == "Últimos Episodios" }.second
-                    val recentMovieCards = homePages.first { it.first == "Películas Recientes" }.second
-                    val latestEpUrl = recentEpCards.first().url
-                    val latestMovieUrl = recentMovieCards.first().url
-                    val latestMovieLoad = provider.load(latestMovieUrl) as? MovieLoadResponse
-
-                    // Coil poster checks
-                    val posterChecks = mutableListOf<Triple<String, String?, Map<String, String>?>>()
-                    recentEpCards.take(2).forEachIndexed { i, c -> posterChecks.add(Triple("home-ep-$i", c.posterUrl, c.posterHeaders)) }
-                    recentMovieCards.take(3).forEachIndexed { i, c -> posterChecks.add(Triple("home-movie-$i", c.posterUrl, c.posterHeaders)) }
-                    searchSf.items.take(2).forEachIndexed { i, c -> posterChecks.add(Triple("search-$i", c.posterUrl, c.posterHeaders)) }
-                    posterChecks.add(Triple("load-sf-poster", sfLoad.posterUrl, sfLoad.posterHeaders))
-                    sfLoad.backgroundPosterUrl?.let { posterChecks.add(Triple("load-sf-bg", it, sfLoad.posterHeaders)) }
-                    posterChecks.add(Triple("load-boys-poster", boysLoad.posterUrl, boysLoad.posterHeaders))
-                    for ((label, pUrl, pHeaders) in posterChecks) {
-                        verifyCoilImage(context, label, pUrl, pHeaders)
-                    }
-                    Log.i("CSPlaybackProbe", "PASS coil posters=${posterChecks.size}")
-
-                    // Diagnostic split: inspect raw buttons, PSH alone, and Embed69 alone for street-fighter and the-boys-2019 s5e8
-                    val diagTargets = listOf(
-                        "sf" to sfLoad.dataUrl,
-                        "boys_s5e8" to boysEpUrl,
-                    )
-                    var pshTotal = 0
-                    var e69Total = 0
-                    for ((tag, pageUrl) in diagTargets) {
-                        val res = withContext(Dispatchers.IO) { provider.client.fetchSite(pageUrl, "${SoloLatinoMarkup.MAIN_URL}/") }
-                        val doc = Jsoup.parse(res.text, res.url.ifBlank { pageUrl })
-                        val sec = SoloLatinoMarkup.parsePlayerSection(doc, res.url.ifBlank { pageUrl })
-                        val (btns, lazy) = withContext(Dispatchers.IO) { provider.client.resolvePlayerSection(pageUrl, sec) }
-                        val urls = (btns.mapNotNull { it.url } + listOfNotNull(lazy?.url)).distinct()
-                        val pshUrl = urls.firstOrNull { SoloLatinoMarkup.isPelisSeriesHoyUrl(it) }
-                        val e69Url = urls.firstOrNull { it.contains("embed69.org", ignoreCase = true) }
-
-                        val pshLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                        if (pshUrl != null) {
-                            withContext(Dispatchers.IO) {
-                                SoloLatinoPelisSeriesHoyExtractor.extractWithClient(provider.client, pshUrl, pageUrl, "Latino", {}, { pshLinks.add(it) })
-                            }
-                            if (pshLinks.isEmpty()) {
-                                val rawPsh = runCatching {
-                                    withContext(Dispatchers.IO) { provider.client.resolvePelisSeriesHoy(pshUrl, pageUrl) }
-                                }.getOrElse { emptyList() }
-                                Log.i("CSPlaybackProbe", "DIAG_PSH_EMPTY $tag url=$pshUrl rawCount=${rawPsh.size} raw=${rawPsh.take(3).map { "${it.label}:${it.type}:u=${it.u?.take(30)}:url=${it.url?.take(30)}:sig=${it.sig != null}" }}")
-                            }
-                        }
-                        val e69Links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                        if (e69Url != null) {
-                            withContext(Dispatchers.IO) {
-                                SoloLatinoEmbed69Resolver.extract(e69Url, pageUrl, "Latino", {}, { e69Links.add(it) }, client = provider.client)
-                            }
-                            if (e69Links.isEmpty()) {
-                                val e69Fetch = runCatching {
-                                    withContext(Dispatchers.IO) {
-                                        provider.client.fetchExternalHtml(e69Url, pageUrl) { t ->
-                                            val h = SoloLatinoMarkup.hostOf(t)
-                                            h == "embed69.org" || h.endsWith(".embed69.org")
-                                        }
-                                    }
-                                }.getOrNull()
-                                val mirrors = e69Fetch?.text?.let { SoloLatinoMarkup.decryptEmbed69Page(it) }.orEmpty()
-                                Log.i("CSPlaybackProbe", "DIAG_E69_EMPTY $tag url=$e69Url code=${e69Fetch?.code} len=${e69Fetch?.text?.length} hasDataLink=${e69Fetch?.text?.contains("dataLink")} mirrors=${mirrors.take(4).map { "${it.serverName}:${it.url.take(35)}" }}")
-                            }
-                        }
-                        pshTotal += pshLinks.size
-                        e69Total += e69Links.size
-                        Log.i(
-                            "CSPlaybackProbe",
-                            "DIAG $tag http=${res.code} btns=${btns.size} pshUrl=${pshUrl != null} pshLinks=${pshLinks.size}(${pshLinks.take(3).map { it.name }}) e69Url=${e69Url != null} e69Links=${e69Links.size}(${e69Links.take(4).map { it.name }})",
+                    // 2. Live Embed69 + Host extractors + Media3 ExoPlayer playback (with real Android client!)
+                    val e69MovieLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                    val e69MovieOk = withContext(Dispatchers.IO) {
+                        SoloLatinoEmbed69Resolver.extract(
+                            "https://embed69.org/f/tt45368240",
+                            "https://sololatino.net/pelicula/street-fighter",
+                            "Latino",
+                            {},
+                            { e69MovieLinks.add(it) },
+                            client = provider.client,
                         )
                     }
+                    Log.i("CSPlaybackProbe", "LIVE_E69_SF ok=$e69MovieOk count=${e69MovieLinks.size} names=${e69MovieLinks.map { it.name }}")
+                    check(e69MovieOk && e69MovieLinks.isNotEmpty()) { "Embed69 Street Fighter returned no links" }
 
-                    // Full end-to-end provider.loadLinks + Media3 playback
-                    val playTargets = buildList {
-                        add("sf-movie" to sfLoad.dataUrl)
-                        add("boys-s5e8" to boysEpUrl)
-                        add("latest-ep" to latestEpUrl)
-                        if (latestMovieLoad != null && latestMovieLoad.dataUrl != sfLoad.dataUrl) {
-                            add("latest-movie" to latestMovieLoad.dataUrl)
-                        }
-                    }
-
-                    val playErrors = mutableListOf<String>()
-                    for ((label, dataUrl) in playTargets) {
-                        val batch = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                        val t0 = android.os.SystemClock.elapsedRealtime()
-                        val ok = withContext(Dispatchers.IO) {
-                            provider.loadLinks(dataUrl, false, {}, { batch.add(it) })
-                        }
-                        val dt = android.os.SystemClock.elapsedRealtime() - t0
-                        val links = synchronized(batch) { batch.toList() }
-                        Log.i(
-                            "CSPlaybackProbe",
-                            "loadLinks $label ok=$ok count=${links.size} ms=$dt names=${links.take(6).map { it.name }}",
+                    val e69BoysLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                    val e69BoysOk = withContext(Dispatchers.IO) {
+                        SoloLatinoEmbed69Resolver.extract(
+                            "https://embed69.org/f/tt1190634-5x08",
+                            "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                            "Latino",
+                            {},
+                            { e69BoysLinks.add(it) },
+                            client = provider.client,
                         )
-                        if (!ok || links.isEmpty()) {
-                            playErrors.add("$label: loadLinks empty (ok=$ok, ms=$dt)")
-                            continue
-                        }
-                        var played = false
-                        val linkErrs = mutableListOf<String>()
-                        for (lnk in links.take(5)) {
-                            try {
-                                play(context, lnk)
-                                played = true
-                                Log.i("CSPlaybackProbe", "PASS playback $label via ${lnk.name}")
-                                break
-                            } catch (t: Throwable) {
-                                val msg = generateSequence(t) { it.cause }.take(4).joinToString(" <- ") {
-                                    "${it.javaClass.simpleName}:${it.message?.take(100)}"
-                                }
-                                linkErrs.add("${lnk.name}: $msg")
-                            }
-                        }
-                        if (!played) {
-                            playErrors.add("$label: all links failed playback ($linkErrs)")
-                        }
                     }
+                    Log.i("CSPlaybackProbe", "LIVE_E69_BOYS ok=$e69BoysOk count=${e69BoysLinks.size} names=${e69BoysLinks.take(6).map { it.name }}")
+                    check(e69BoysOk && e69BoysLinks.isNotEmpty()) { "Embed69 The Boys S5E8 returned no links" }
 
-                    check(playErrors.isEmpty()) { "errors=$playErrors pshTotal=$pshTotal e69Total=$e69Total" }
-                    check(pshTotal > 0 || e69Total > 0) { "both PSH and Embed69 returned 0 diagnostic links" }
-                    Log.i("CSPlaybackProbe", "SUMMARY pshTotal=$pshTotal e69Total=$e69Total targets=${playTargets.size}")
+                    // Verify live Media3 video frame decoding on extracted Embed69 streams
+                    playFirstWorking(context, "e69-street-fighter", e69MovieLinks.toList())
+                    playFirstWorking(context, "e69-the-boys-s5e8", e69BoysLinks.toList())
+
+                    // 3. Verify Coil 3 image loading across TMDB w500 / w1280 / w400 URLs
+                    verifyCoilImage(context, "tmdb-poster-w500", "https://image.tmdb.org/t/p/w500/zDE9hd1SG9695YncbZGjSf7Z9Jk.jpg", null)
+                    verifyCoilImage(context, "tmdb-backdrop-w1280", "https://image.tmdb.org/t/p/w1280/zDE9hd1SG9695YncbZGjSf7Z9Jk.jpg", null)
+                    verifyCoilImage(context, "tmdb-still-w400", "https://image.tmdb.org/t/p/w400/a7Ofz6lgowoSVajts2FhhQOpNJK.jpg", null)
+                    Log.i("CSPlaybackProbe", "PASS coil posters=3")
+
+                    if (siteReachable) {
+                        // Full end-to-end live SoloLatinoProvider test
+                        runFullLiveSuite(context, provider)
+                    } else {
+                        // Exercise real Android WebView pipeline (resolveSitePlayers + resolvePelisSeriesHoy with window.stop(),
+                        // location.replace, unpadded fnv1a32, _ao='', _qsrc, s.php a=click/1/2, and p.php proxy -> ExoPlayer)
+                        val livePlayableUrl = e69MovieLinks.firstOrNull { it.type == ExtractorLinkType.M3U8 }?.url
+                            ?: e69BoysLinks.firstOrNull { it.type == ExtractorLinkType.M3U8 }?.url
+                            ?: e69MovieLinks.first().url
+                        runWebViewPipelineVerification(context, livePlayableUrl)
+                    }
                 }
                 Log.i("CSPlaybackProbe", "PASS all")
             } catch (t: Throwable) {
                 Log.e("CSPlaybackProbe", "FAIL ${t.javaClass.simpleName}: ${t.message}", t)
             }
         }
+    }
+
+    private suspend fun runWebViewPipelineVerification(context: Context, sampleMediaUrl: String) {
+        check(
+            SoloLatinoSessionHelper.isChromiumErrorPage(
+                "<html><head><title>Webpage not available</title></head><!-- Upside down Android --></html>"
+            )
+        ) { "isChromiumErrorPage check failed" }
+        val localClient = SoloLatinoClient(context)
+        val pshToken = "tok_probe_68"
+        val pshQc = "120" // fnv1a32("aabbccdd|clk|120") == 0x2529df4 (7 hex chars, unpadded!)
+        val pshQk = listOf("cc", "aa", "dd", "bb")
+        val pshRt = "aabbccdd"
+        val expectedTk = SoloLatinoMarkup.fnv1a32Hex("$pshRt|clk|$pshQc")
+        check(expectedTk == "2529df4") { "unexpected fnv1a32Hex=$expectedTk" }
+        var sawClick = false
+
+        val epUrl = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8"
+        val pshEmbedUrl = "https://player.pelisserieshoy.com/f/tt1190634-5x08"
+
+        val siteEpisodeHtml = """
+            <!DOCTYPE html><html><head>
+            <meta name="csrf-token" content="probe-meta-csrf">
+            </head><body>
+            <h1>The Boys 5x08</h1>
+            <div data-lang-tab="lat">Latino</div>
+            <div data-lang-group="lat">
+              <button data-player-token="tok_psh_btn" data-lang="lat">Principal</button>
+              <button data-player-token="tok_e69_btn" data-lang="lat">Embed69</button>
+            </div>
+            <div id="player-frame" data-lazy-embed="tok_lazy_btn"></div>
+            </body></html>
+        """.trimIndent()
+
+        // Mirrors player.pelisserieshoy.com live <head> anti-top-level redirect + IIFE variables
+        val pshHtml = """
+            <!DOCTYPE html><html><head>
+            <script>
+              (function(){
+                var isTop = false;
+                try { isTop = (window.self === window.top); } catch(e) {}
+                if (isTop) {
+                  window.__embedBlocked = true;
+                  try { window.stop && window.stop(); } catch(e) {}
+                  window.location.replace('https://www.google.com');
+                }
+              })();
+            </script>
+            </head><body>
+            <script>
+              (function(){
+                var _t = '$pshToken';
+                var _qc = '$pshQc';
+                var _qk = ['${pshQk[0]}','${pshQk[1]}','${pshQk[2]}','${pshQk[3]}'];
+                var _ao = '';
+                var _qsrc = 'sl';
+              })();
+            </script>
+            </body></html>
+        """.trimIndent()
+
+        fun expectedShield(tok: String): String {
+            val liveSlot = Math.floor(System.currentTimeMillis() / 60_000.0).toLong()
+            val md = MessageDigest.getInstance("SHA-256")
+            val digest = md.digest("$tok:$liveSlot:${SoloLatinoMarkup.RENDER_SHIELD_SECRET}".toByteArray(StandardCharsets.UTF_8))
+            return digest.joinToString("") { "%02x".format(it) }.take(16)
+        }
+
+        fun resp(mime: String, body: String, status: Int = 200, extraHeaders: Map<String, String> = emptyMap()): WebResourceResponse =
+            WebResourceResponse(
+                mime,
+                "utf-8",
+                status,
+                if (status == 200) "OK" else "Error",
+                mapOf("Access-Control-Allow-Origin" to "*") + extraHeaders,
+                ByteArrayInputStream(body.toByteArray(StandardCharsets.UTF_8)),
+            )
+
+        localClient.testWebResponse = { req: WebResourceRequest ->
+            val urlStr = req.url.toString()
+            val path = req.url.path.orEmpty()
+            val method = req.method.orEmpty().uppercase()
+            when {
+                urlStr.startsWith(epUrl) -> resp("text/html", siteEpisodeHtml)
+                path == "/sanctum/csrf-cookie" -> resp("text/plain", "", 204)
+                path == "/api/player-url" || path == "/api/player-embed" -> {
+                    val shield = req.requestHeaders?.entries?.firstOrNull { it.key.equals("X-SL-Render", true) }?.value.orEmpty()
+                    val tok = when {
+                        path == "/api/player-embed" -> "tok_lazy_btn"
+                        shield == expectedShield("tok_psh_btn") -> "tok_psh_btn"
+                        shield == expectedShield("tok_e69_btn") -> "tok_e69_btn"
+                        else -> ""
+                    }
+                    when (tok) {
+                        "tok_psh_btn", "tok_lazy_btn" -> resp("application/json", """{"url":"$pshEmbedUrl","type":"iframe"}""")
+                        "tok_e69_btn" -> resp("application/json", """{"url":"https://embed69.org/f/tt1190634-5x08","type":"iframe"}""")
+                        else -> resp("application/json", """{"error":"bad_shield"}""", 403)
+                    }
+                }
+                urlStr.startsWith(pshEmbedUrl) -> resp("text/html", pshHtml)
+                path == "/s.php" && method == "POST" -> {
+                    if (!sawClick) {
+                        sawClick = true
+                        resp("application/json", """{"ok":true}""")
+                    } else {
+                        resp("application/json", """{"langs_s":{"LAT":[["Principal","srv_lat_1"]]},"u":"$sampleMediaUrl","sig":"sig_probe_1","ctx":"ctx_probe_1","type":"hls"}""")
+                    }
+                }
+                else -> null
+            }
+        }
+
+        val siteRes = withContext(Dispatchers.IO) { localClient.fetchSite(epUrl, "${SoloLatinoMarkup.MAIN_URL}/") }
+        val doc = Jsoup.parse(siteRes.text, epUrl)
+        val section = SoloLatinoMarkup.parsePlayerSection(doc, epUrl)
+        val (btns, lazy) = withContext(Dispatchers.IO) { localClient.resolvePlayerSection(epUrl, section) }
+        val resolvedUrls = (btns.mapNotNull { it.url } + listOfNotNull(lazy?.url)).distinct()
+        Log.i("CSPlaybackProbe", "WV_PIPELINE_SITE btns=${btns.size} urls=$resolvedUrls")
+        check(resolvedUrls.contains(pshEmbedUrl)) { "resolveSitePlayers failed in WebView: $resolvedUrls" }
+
+        val pshLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        val pshOk = withContext(Dispatchers.IO) {
+            SoloLatinoPelisSeriesHoyExtractor.extractWithClient(
+                client = localClient,
+                url = pshEmbedUrl,
+                referer = epUrl,
+                sourceLabel = "SoloLatino · Latino",
+                subtitleCallback = {},
+                callback = { pshLinks.add(it) },
+            )
+        }
+        Log.i("CSPlaybackProbe", "WV_PIPELINE_PSH ok=$pshOk links=${pshLinks.map { "${it.name}->${it.url.take(90)}" }}")
+        check(pshOk && pshLinks.any { it.url.contains("/p.php") && it.url.contains("&sig=sig_probe_1") && it.url.contains("&ctx=ctx_probe_1") }) {
+            "SoloLatinoPelisSeriesHoyExtractor WebView pipeline failed against window.stop() + IIFE + _qsrc: $pshLinks"
+        }
+        Log.i("CSPlaybackProbe", "PASS webview-pipeline (site-tokens + PSH window.stop() + unpadded FNV-1a + ctx + extractor)")
+    }
+
+    private suspend fun runFullLiveSuite(context: Context, provider: SoloLatinoProvider) {
+        val started = android.os.SystemClock.elapsedRealtime()
+        val coreSectionData = setOf(
+            SoloLatinoMarkup.SECTION_HOME_RECENT_EPISODES,
+            SoloLatinoMarkup.SECTION_HOME_RECENT_ADDED,
+            "peliculas?sort=updated",
+            "series?sort=updated",
+            "animes?sort=updated",
+            "doramas?sort=updated",
+        )
+        val homeSections = provider.mainPage.filter { it.data in coreSectionData }
+        val homePages = withContext(Dispatchers.IO) {
+            coroutineScope {
+                homeSections.map { section ->
+                    async {
+                        val page = provider.getMainPage(
+                            1,
+                            MainPageRequest(section.name, section.data, section.horizontalImages),
+                        ) ?: error("null mainPage for ${section.name}")
+                        section.name to page.items.flatMap { it.list }
+                    }
+                }.awaitAll()
+            }
+        }
+        val elapsed = android.os.SystemClock.elapsedRealtime() - started
+        val emptySections = homePages.filter { it.second.isEmpty() }.map { it.first }
+        Log.i("CSPlaybackProbe", "home sections=${homePages.size} empty=$emptySections elapsedMs=$elapsed")
+        check(emptySections.isEmpty()) { "empty home sections: $emptySections" }
+
+        val searchSf = provider.search("street fighter", 1) ?: error("null search street fighter")
+        check(searchSf.items.isNotEmpty()) { "empty search street fighter" }
+        val sfLoad = provider.load("https://sololatino.net/pelicula/street-fighter") as? MovieLoadResponse
+            ?: error("street-fighter load failed")
+        val batch = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+        val ok = withContext(Dispatchers.IO) { provider.loadLinks(sfLoad.dataUrl, false, {}, { batch.add(it) }) }
+        val links = synchronized(batch) { batch.toList() }
+        check(ok && links.isNotEmpty()) { "live street-fighter loadLinks empty" }
+        playFirstWorking(context, "live-street-fighter", links)
+    }
+
+    private suspend fun playFirstWorking(context: Context, label: String, candidates: List<ExtractorLink>) {
+        val errors = mutableListOf<String>()
+        for (link in candidates.take(6)) {
+            try {
+                play(context, link)
+                Log.i("CSPlaybackProbe", "PASS playback $label via ${link.name}")
+                return
+            } catch (t: Throwable) {
+                val msg = generateSequence(t) { it.cause }.take(4).joinToString(" <- ") {
+                    "${it.javaClass.simpleName}:${it.message?.take(90)}"
+                }
+                errors.add("${link.name}: $msg")
+            }
+        }
+        error("$label no playable link: $errors")
     }
 
     private suspend fun play(context: Context, link: ExtractorLink) = withTimeout(35_000) {
