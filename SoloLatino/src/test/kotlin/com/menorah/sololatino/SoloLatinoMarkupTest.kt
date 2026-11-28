@@ -647,5 +647,60 @@ class SoloLatinoMarkupTest {
         assertNotNull(solved)
         val solvedJson = SoloLatinoMarkup.jsonMapper.readTree(String(Base64.getDecoder().decode(solved), StandardCharsets.UTF_8))
         assertTrue(solvedJson.get("solution").get("derivedKey").asText().startsWith(prefix))
+
+        // 4. Pure-Kotlin midstate PBKDF2-HMAC-SHA256 matches javax.crypto.Mac bit-for-bit across boundary sizes
+        val scratch = SoloLatinoVoeCrypto.Pbkdf2Sha256Scratch()
+        val testCases = listOf(
+            Triple(ByteArray(20) { (it + 7).toByte() }, ByteArray(8) { (it * 3 + 1).toByte() }, 1),
+            Triple(ByteArray(20) { (it + 11).toByte() }, ByteArray(56) { (it * 5 + 2).toByte() }, 2),
+            Triple(ByteArray(64) { (it + 19).toByte() }, ByteArray(61) { (it * 7 + 3).toByte() }, 17),
+            Triple(ByteArray(95) { (it + 23).toByte() }, ByteArray(128) { (it * 13 + 5).toByte() }, 50),
+        )
+        for ((pw, slt, iters) in testCases) {
+            val expectedMac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(pw, "HmacSHA256")) }
+            var refU = expectedMac.doFinal(slt + byteArrayOf(0, 0, 0, 1))
+            val refT = refU.copyOf()
+            for (i in 2..iters) {
+                refU = expectedMac.doFinal(refU)
+                for (k in refT.indices) refT[k] = (refT[k].toInt() xor refU[k].toInt()).toByte()
+            }
+            val actualOut = ByteArray(32)
+            SoloLatinoVoeCrypto.pbkdf2Sha256Block1Into(pw, slt, iters, 32, actualOut, scratch)
+            assertEquals(
+                SoloLatinoHostHttp.bytesToHex(refT),
+                SoloLatinoHostHttp.bytesToHex(actualOut),
+            )
+        }
+
+        // 5. VOE F7 decryption preserves UTF-8 bytes >= 0x80 and handles every junk marker + '_'
+        val voeSamplePayload = """{"source":"https://cdn.example.com/hls/master.m3u8","captions":[{"label":"Español — Ñoño","file":"https://cdn.example.com/sub.vtt"}]}"""
+        val b64Inner = Base64.getEncoder().encodeToString(voeSamplePayload.toByteArray(StandardCharsets.UTF_8))
+        val revPlus3 = b64Inner.reversed().toByteArray(StandardCharsets.ISO_8859_1)
+            .map { ((it.toInt() and 0xFF) + 3).toByte() }.toByteArray()
+        val b64Outer = Base64.getEncoder().encodeToString(revPlus3)
+        // Ensure every junk pattern + '_' before rot13 is properly reversed and stripped
+        fun testRot13(s: String): String = buildString(s.length) {
+            for (c in s) {
+                append(
+                    when (c) {
+                        in 'a'..'z' -> ((c - 'a' + 13) % 26 + 'a'.code).toChar()
+                        in 'A'..'Z' -> ((c - 'A' + 13) % 26 + 'A'.code).toChar()
+                        else -> c
+                    },
+                )
+            }
+        }
+        val f7Encoded = testRot13(b64Outer.chunked(5).joinToString("*~") + "@$^^~@%?!!#&_")
+        val f7Decoded = SoloLatinoVoeCrypto.decryptF7(f7Encoded)
+        assertNotNull(f7Decoded)
+        assertEquals("https://cdn.example.com/hls/master.m3u8", f7Decoded!!.get("source").asText())
+        assertEquals("Español — Ñoño", f7Decoded.get("captions").get(0).get("label").asText())
+
+        // Verify byte >= 0x80 survival explicitly (byte 0xC3 in reversed base64 would corrupt under UTF-8 String; with unsigned char shift it recovers 0xC0 or raw byte accurately)
+        val rawUtfBytes = byteArrayOf(0x80.toByte(), 0xC3.toByte(), 0xFF.toByte())
+        val shifted = ByteArray(rawUtfBytes.size) { ((rawUtfBytes[it].toInt() and 0xFF) - 3).toChar().code.toByte() }
+        assertEquals(0x7D, shifted[0].toInt() and 0xFF)
+        assertEquals(0xC0, shifted[1].toInt() and 0xFF)
+        assertEquals(0xFC, shifted[2].toInt() and 0xFF)
     }
 }

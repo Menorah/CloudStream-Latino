@@ -50,7 +50,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Cipher
-import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -317,13 +316,168 @@ internal object SoloLatinoVoeCrypto {
         Regex("""<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"';\s>]+)["']""", RegexOption.IGNORE_CASE),
     )
 
-    private class Pbkdf2Sha256Scratch {
-        val hmac = Mac.getInstance("HmacSHA256")
-        val u = ByteArray(32)
-        val t = ByteArray(32)
+    private val SHA256_H0 = intArrayOf(
+        0x6a09e667, 0xbb67ae85.toInt(), 0x3c6ef372, 0xa54ff53a.toInt(),
+        0x510e527f, 0x9b05688c.toInt(), 0x1f83d9ab, 0x5be0cd19,
+    )
+    private val SHA256_K = intArrayOf(
+        0x428a2f98, 0x71374491, 0xb5c0fbcf.toInt(), 0xe9b5dba5.toInt(),
+        0x3956c25b, 0x59f111f1, 0x923f82a4.toInt(), 0xab1c5ed5.toInt(),
+        0xd807aa98.toInt(), 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe.toInt(), 0x9bdc06a7.toInt(), 0xc19bf174.toInt(),
+        0xe49b69c1.toInt(), 0xefbe4786.toInt(), 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152.toInt(), 0xa831c66d.toInt(), 0xb00327c8.toInt(), 0xbf597fc7.toInt(),
+        0xc6e00bf3.toInt(), 0xd5a79147.toInt(), 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e.toInt(), 0x92722c85.toInt(),
+        0xa2bfe8a1.toInt(), 0xa81a664b.toInt(), 0xc24b8b70.toInt(), 0xc76c51a3.toInt(),
+        0xd192e819.toInt(), 0xd6990624.toInt(), 0xf40e3585.toInt(), 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814.toInt(), 0x8cc70208.toInt(),
+        0x90befffa.toInt(), 0xa4506ceb.toInt(), 0xbef9a3f7.toInt(), 0xc67178f2.toInt(),
+    )
+
+    internal class Pbkdf2Sha256Scratch {
+        val ipadState = IntArray(8)
+        val opadState = IntArray(8)
+        val innerState = IntArray(8)
+        val uWords = IntArray(8)
+        val tWords = IntArray(8)
+        val words = IntArray(16)
+        val w = IntArray(64)
+        val block = ByteArray(64)
+        val keyBlock = ByteArray(64)
     }
 
-    private fun pbkdf2Sha256Block1Into(
+    private fun bytesToWords16(src: ByteArray, dstWords: IntArray) {
+        var b = 0
+        for (i in 0 until 16) {
+            dstWords[i] = ((src[b].toInt() and 0xFF) shl 24) or
+                ((src[b + 1].toInt() and 0xFF) shl 16) or
+                ((src[b + 2].toInt() and 0xFF) shl 8) or
+                (src[b + 3].toInt() and 0xFF)
+            b += 4
+        }
+    }
+
+    private fun sha256CompressWords(state: IntArray, words: IntArray, w: IntArray) {
+        for (t in 0 until 16) w[t] = words[t]
+        for (t in 16 until 64) {
+            val w15 = w[t - 15]
+            val w2 = w[t - 2]
+            val s0 = w15.rotateRight(7) xor w15.rotateRight(18) xor (w15 ushr 3)
+            val s1 = w2.rotateRight(17) xor w2.rotateRight(19) xor (w2 ushr 10)
+            w[t] = w[t - 16] + s0 + w[t - 7] + s1
+        }
+        var a = state[0]
+        var b = state[1]
+        var c = state[2]
+        var d = state[3]
+        var e = state[4]
+        var f = state[5]
+        var g = state[6]
+        var h = state[7]
+        val kArr = SHA256_K
+        for (t in 0 until 64) {
+            val s1 = e.rotateRight(6) xor e.rotateRight(11) xor e.rotateRight(25)
+            val ch = (e and f) xor (e.inv() and g)
+            val temp1 = h + s1 + ch + kArr[t] + w[t]
+            val s0 = a.rotateRight(2) xor a.rotateRight(13) xor a.rotateRight(22)
+            val maj = (a and b) xor (a and c) xor (b and c)
+            val temp2 = s0 + maj
+            h = g
+            g = f
+            f = e
+            e = d + temp1
+            d = c
+            c = b
+            b = a
+            a = temp1 + temp2
+        }
+        state[0] += a
+        state[1] += b
+        state[2] += c
+        state[3] += d
+        state[4] += e
+        state[5] += f
+        state[6] += g
+        state[7] += h
+    }
+
+    private fun sha256FinalizeBytes(
+        state: IntArray,
+        prefixLen: Int,
+        data: ByteArray,
+        dataLen: Int,
+        extraSuffixBeInt: Int?,
+        words: IntArray,
+        w: IntArray,
+        block: ByteArray,
+    ) {
+        val totalBytes = dataLen + (if (extraSuffixBeInt != null) 4 else 0)
+        var pos = 0
+        while (pos + 64 <= dataLen) {
+            var b = pos
+            for (i in 0 until 16) {
+                words[i] = ((data[b].toInt() and 0xFF) shl 24) or
+                    ((data[b + 1].toInt() and 0xFF) shl 16) or
+                    ((data[b + 2].toInt() and 0xFF) shl 8) or
+                    (data[b + 3].toInt() and 0xFF)
+                b += 4
+            }
+            sha256CompressWords(state, words, w)
+            pos += 64
+        }
+        var rem = dataLen - pos
+        block.fill(0)
+        if (rem > 0) System.arraycopy(data, pos, block, 0, rem)
+        if (extraSuffixBeInt != null) {
+            if (rem + 4 <= 64) {
+                block[rem] = (extraSuffixBeInt ushr 24).toByte()
+                block[rem + 1] = (extraSuffixBeInt ushr 16).toByte()
+                block[rem + 2] = (extraSuffixBeInt ushr 8).toByte()
+                block[rem + 3] = extraSuffixBeInt.toByte()
+                rem += 4
+                if (rem == 64) {
+                    bytesToWords16(block, words)
+                    sha256CompressWords(state, words, w)
+                    block.fill(0)
+                    rem = 0
+                }
+            } else {
+                // Split the 4-byte suffix across the 64-byte block boundary
+                var shift = 24
+                while (rem < 64) {
+                    block[rem++] = (extraSuffixBeInt ushr shift).toByte()
+                    shift -= 8
+                }
+                bytesToWords16(block, words)
+                sha256CompressWords(state, words, w)
+                block.fill(0)
+                rem = 0
+                while (shift >= 0) {
+                    block[rem++] = (extraSuffixBeInt ushr shift).toByte()
+                    shift -= 8
+                }
+            }
+        }
+        block[rem] = 0x80.toByte()
+        if (rem >= 56) {
+            bytesToWords16(block, words)
+            sha256CompressWords(state, words, w)
+            block.fill(0)
+        }
+        val totalBits = (prefixLen.toLong() + totalBytes.toLong()) * 8L
+        for (i in 0 until 8) {
+            block[56 + i] = (totalBits ushr ((7 - i) * 8)).toByte()
+        }
+        bytesToWords16(block, words)
+        sha256CompressWords(state, words, w)
+    }
+
+    internal fun pbkdf2Sha256Block1Into(
         password: ByteArray,
         salt: ByteArray,
         iterations: Int,
@@ -331,25 +485,74 @@ internal object SoloLatinoVoeCrypto {
         out: ByteArray,
         scratch: Pbkdf2Sha256Scratch,
     ) {
-        val mac = scratch.hmac
-        mac.init(SecretKeySpec(password, "HmacSHA256"))
-        mac.update(salt, 0, salt.size)
-        mac.update(0.toByte())
-        mac.update(0.toByte())
-        mac.update(0.toByte())
-        mac.update(1.toByte())
-        mac.doFinal(scratch.u, 0)
-        System.arraycopy(scratch.u, 0, scratch.t, 0, 32)
-        for (i in 2..iterations) {
-            mac.update(scratch.u, 0, 32)
-            mac.doFinal(scratch.u, 0)
-            for (k in 0 until 32) scratch.t[k] = (scratch.t[k].toInt() xor scratch.u[k].toInt()).toByte()
+        val keyBlock = scratch.keyBlock
+        val block = scratch.block
+        val words = scratch.words
+        val w = scratch.w
+        keyBlock.fill(0)
+        if (password.size > 64) {
+            val tmpState = scratch.innerState
+            System.arraycopy(SHA256_H0, 0, tmpState, 0, 8)
+            sha256FinalizeBytes(tmpState, 0, password, password.size, null, words, w, block)
+            for (i in 0 until 32) {
+                keyBlock[i] = (tmpState[i ushr 2] ushr ((3 - (i and 3)) * 8)).toByte()
+            }
+        } else {
+            System.arraycopy(password, 0, keyBlock, 0, password.size)
         }
-        System.arraycopy(scratch.t, 0, out, 0, keyLen.coerceAtMost(32))
+
+        val ipadState = scratch.ipadState
+        System.arraycopy(SHA256_H0, 0, ipadState, 0, 8)
+        for (i in 0 until 64) block[i] = (keyBlock[i].toInt() xor 0x36).toByte()
+        bytesToWords16(block, words)
+        sha256CompressWords(ipadState, words, w)
+
+        val opadState = scratch.opadState
+        System.arraycopy(SHA256_H0, 0, opadState, 0, 8)
+        for (i in 0 until 64) block[i] = (keyBlock[i].toInt() xor 0x5C).toByte()
+        bytesToWords16(block, words)
+        sha256CompressWords(opadState, words, w)
+
+        val inner = scratch.innerState
+        val u = scratch.uWords
+        val t = scratch.tWords
+
+        System.arraycopy(ipadState, 0, inner, 0, 8)
+        sha256FinalizeBytes(inner, 64, salt, salt.size, 1, words, w, block)
+        System.arraycopy(opadState, 0, u, 0, 8)
+        System.arraycopy(inner, 0, words, 0, 8)
+        words[8] = 0x80000000.toInt()
+        for (k in 9 until 15) words[k] = 0
+        words[15] = 768
+        sha256CompressWords(u, words, w)
+        System.arraycopy(u, 0, t, 0, 8)
+
+        for (iter in 2..iterations) {
+            System.arraycopy(ipadState, 0, inner, 0, 8)
+            System.arraycopy(u, 0, words, 0, 8)
+            words[8] = 0x80000000.toInt()
+            for (k in 9 until 15) words[k] = 0
+            words[15] = 768
+            sha256CompressWords(inner, words, w)
+
+            System.arraycopy(opadState, 0, u, 0, 8)
+            System.arraycopy(inner, 0, words, 0, 8)
+            words[8] = 0x80000000.toInt()
+            for (k in 9 until 15) words[k] = 0
+            words[15] = 768
+            sha256CompressWords(u, words, w)
+
+            for (k in 0 until 8) t[k] = t[k] xor u[k]
+        }
+
+        val limit = keyLen.coerceAtMost(32)
+        for (i in 0 until limit) {
+            out[i] = (t[i ushr 2] ushr ((3 - (i and 3)) * 8)).toByte()
+        }
     }
 
-    suspend fun solveAltchaSuspend(challengeJson: String, maxCounters: Int = 12_000): String? =
-        withTimeoutOrNull(9_500L) {
+    suspend fun solveAltchaSuspend(challengeJson: String, maxCounters: Int = 20_000): String? =
+        withTimeoutOrNull(18_000L) {
             val root = runCatching { SoloLatinoMarkup.jsonMapper.readTree(challengeJson) }.getOrNull() ?: return@withTimeoutOrNull null
             val params = root.get("parameters")
             if (params == null || !params.isObject) {
@@ -370,7 +573,7 @@ internal object SoloLatinoVoeCrypto {
                 runCatching { SoloLatinoHostHttp.hexToBytes(keyPrefix) }.getOrNull()
             } else null
 
-            val workers = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+            val workers = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
             val found = AtomicBoolean(false)
             val winner = AtomicReference<String?>(null)
             val started = System.nanoTime()
@@ -902,7 +1105,7 @@ internal object SoloLatinoEmbed69Resolver {
             mirrors.map { mirror ->
                 async(Dispatchers.IO) {
                     hostGate.withPermit {
-                        withTimeoutOrNull(16_000L) {
+                        withTimeoutOrNull(24_000L) {
                             try {
                                 val lang = mirror.langLabel.ifBlank { preferredLangTag ?: "Latino" }
                                 val label = mirror.serverName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
@@ -959,7 +1162,7 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
             client: SoloLatinoClient? = null,
-        ): Boolean = withTimeoutOrNull(25_000L) {
+        ): Boolean = withTimeoutOrNull(30_000L) {
             // Prefer a clean mobile Chrome UA for VOE / DDoS-Guard HTTP requests (avoids "; wv)" filters)
             val activeUa = SoloLatinoHostHttp.MOBILE_UA
             val baseHeaders = mapOf(
@@ -989,7 +1192,7 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
 
             for ((idx, candidate) in candidateStarts.withIndex()) {
                 val attempt = runCatching {
-                    app.get(candidate, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = if (idx == 0) 6L else 8L)
+                    app.get(candidate, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = if (idx == 0) 4L else 8L)
                 }.getOrNull()
                 if (attempt != null && attempt.code in 200..399 && attempt.text.isNotBlank()) {
                     cookies.putAll(attempt.cookies)

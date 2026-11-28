@@ -110,7 +110,7 @@ object PlaybackProbe {
                             val dec = if (enc.isNotBlank()) SoloLatinoVoeCrypto.decryptF7(enc) else null
                             Log.i(
                                 "CSPlaybackProbe",
-                                "VOE_DIAG r1=${r1Res?.code} ch=${chRes?.code} sol=${sol != null}(${solveMs}ms) post=${pRes?.code} rawLen=${rawJs.length} rawHead=${rawJs.take(80)} decSrc=${dec?.get("source")?.asText()?.take(60)}",
+                                "VOE_DIAG r1=${r1Res?.code} ch=${chRes?.code} chHead=${chRes?.text?.take(120)} sol=${sol != null}(${solveMs}ms) post=${pRes?.code} rawLen=${rawJs.length} rawHead=${rawJs.take(80)} decSrc=${dec?.get("source")?.asText()?.take(60)}",
                             )
                         }
                         error("VOE failed - inspect VOE_DIAG")
