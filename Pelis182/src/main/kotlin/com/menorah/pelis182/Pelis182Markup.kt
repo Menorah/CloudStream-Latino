@@ -253,16 +253,17 @@ internal object Pelis182Markup {
         baseUrl: String = MAIN_URL,
         defaultKind: Pelis182MediaKind = Pelis182MediaKind.MOVIE,
     ): Pelis182CatalogCard? {
-        val anchor = card.selectFirst("a[href]") ?: return null
+        val anchor: Element = card.selectFirst("a[href]") ?: return null
         val url = resolveUrl(baseUrl, anchor.attr("href")) ?: return null
-        val titleEl = card.selectFirst("h3") ?: anchor
+        val titleEl: Element = card.selectFirst("h3") ?: anchor
         val title = titleEl.text().trim().ifBlank { anchor.attr("aria-label").trim() }
         if (title.isBlank()) return null
 
-        val imgEl = card.selectFirst("img")
+        val imgEl: Element? = card.selectFirst("img")
         val posterUrl = extractImageUrl(imgEl, baseUrl, "w500")
 
-        val badgeText = card.selectFirst(".p182-card__badge")?.text()?.trim().orEmpty()
+        val badgeEl: Element? = card.selectFirst(".p182-card__badge")
+        val badgeText = badgeEl?.text()?.trim().orEmpty()
         val hasSeasonMarker = extractSeasonNumber(title, url) != null
         val isSeries = badgeText.contains("SERIE", ignoreCase = true) ||
             defaultKind == Pelis182MediaKind.SERIES ||
@@ -314,7 +315,10 @@ internal object Pelis182Markup {
         val targetCards = if (containerCards.isNotEmpty()) {
             containerCards
         } else {
-            doc.select("article.p182-card").filter { it.closest("section.related") == null }
+            doc.select("article.p182-card").filter {
+                val rel: Element? = it.closest("section.related")
+                rel == null
+            }
         }
         for (card in targetCards) {
             val parsed = parseCatalogCard(card, baseUrl, defaultKind) ?: continue
@@ -323,7 +327,7 @@ internal object Pelis182Markup {
                 items.add(parsed)
             }
         }
-        val nextAnchor = doc.selectFirst("a.next.page-numbers[href], link[rel=next][href]")
+        val nextAnchor: Element? = doc.selectFirst("a.next.page-numbers[href], link[rel=next][href]")
         val nextUrl = if (nextAnchor != null) resolveUrl(baseUrl, nextAnchor.attr("href")) else null
         return Pelis182CatalogPage(
             items = items,
@@ -389,7 +393,7 @@ internal object Pelis182Markup {
             return resolveUrl(baseUrl, trimmed)
         }
         val frag = Jsoup.parseBodyFragment(trimmed, baseUrl)
-        val iframe = frag.selectFirst("iframe") ?: return null
+        val iframe: Element = frag.selectFirst("iframe") ?: return null
         val src = iframe.attr("data-uvpi-src").ifBlank { iframe.attr("src") }
         return resolveUrl(baseUrl, src)?.takeIf { isValidEmbedUrl(it) }
     }
@@ -452,19 +456,22 @@ internal object Pelis182Markup {
         pageUrl: String,
         baseUrl: String = MAIN_URL,
     ): Pelis182Detail? {
-        val article = doc.selectFirst("article.watch-page") ?: doc.selectFirst("main#main-content") ?: return null
-        val canonicalUrl = doc.selectFirst("link[rel=canonical][href]")
-            ?.let { resolveUrl(baseUrl, it.attr("href")) }
+        val article: Element = doc.selectFirst("article.watch-page") ?: doc.selectFirst("main#main-content") ?: return null
+        val canonicalEl: Element? = doc.selectFirst("link[rel=canonical][href]")
+        val canonicalHref = canonicalEl?.attr("href")
+        val canonicalUrl = resolveUrl(baseUrl, canonicalHref)
             ?: resolveUrl(baseUrl, pageUrl)
             ?: pageUrl
 
         val ldNodes = parseJsonLdNodes(doc)
         val primaryLd = ldNodes.firstOrNull()
 
-        val kicker = article.selectFirst(".watch-kicker")?.text()?.trim().orEmpty()
-        val seasonText = article.selectFirst(".watch-season")?.text()?.trim()?.ifEmpty { null }
-        val h1Text = article.selectFirst("h1.watch-title")?.text()?.trim()
-            ?: article.selectFirst("h1")?.text()?.trim()
+        val kickerEl: Element? = article.selectFirst(".watch-kicker")
+        val kicker = kickerEl?.text()?.trim().orEmpty()
+        val seasonEl: Element? = article.selectFirst(".watch-season")
+        val seasonText = seasonEl?.text()?.trim()?.ifEmpty { null }
+        val h1El: Element? = article.selectFirst("h1.watch-title") ?: article.selectFirst("h1")
+        val h1Text = h1El?.text()?.trim()
             ?: primaryLd?.get("name")?.asText()?.trim()
             ?: doc.title().substringBefore(" online").trim()
         if (h1Text.isBlank()) return null
@@ -492,15 +499,18 @@ internal object Pelis182Markup {
             else -> Pelis182MediaKind.MOVIE
         }
 
-        val posterImg = article.selectFirst(".watch-heading__poster img")
+        val posterImg: Element? = article.selectFirst(".watch-heading__poster img")
         val posterUrl = extractImageUrl(posterImg, baseUrl, "w500")
             ?: primaryLd?.get("image")?.asText()?.let { upgradeTmdbImage(resolveUrl(baseUrl, it), "w500") }
 
-        val uvpiPoster = article.selectFirst(".uvpi-poster[style]")
-        val bgFromStyle = uvpiPoster?.attr("style")?.let { style ->
-            BG_URL_REGEX.findAll(style)
+        val uvpiPoster: Element? = article.selectFirst(".uvpi-poster[style]")
+        val uvpiStyle = uvpiPoster?.attr("style")
+        val bgFromStyle = if (!uvpiStyle.isNullOrBlank()) {
+            BG_URL_REGEX.findAll(uvpiStyle)
                 .mapNotNull { resolveUrl(baseUrl, it.groupValues[1]) }
                 .firstOrNull()
+        } else {
+            null
         }
         val ldImage = primaryLd?.get("image")?.asText()?.let { resolveUrl(baseUrl, it) }
         val backgroundPosterUrl = bgFromStyle ?: upgradeTmdbImage(ldImage, "w1280") ?: posterUrl
@@ -509,7 +519,8 @@ internal object Pelis182Markup {
         var year: Int? = null
         var durationMinutes: Int? = null
         for (span in watchMetaSpans) {
-            if (span.hasClass("watch-rating") || span.closest(".watch-rating") != null) continue
+            val ratingParent: Element? = span.closest(".watch-rating")
+            if (span.hasClass("watch-rating") || ratingParent != null) continue
             val t = span.text().trim()
             if (year == null) {
                 YEAR_REGEX.matchEntire(t)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { year = it }
@@ -522,9 +533,9 @@ internal object Pelis182Markup {
             durationMinutes = parseDurationMinutes(primaryLd?.get("duration")?.asText())
         }
 
-        val ratingEl = article.selectFirst(".watch-rating")
-        val rating = ratingEl?.text()
-            ?.substringBefore("/")
+        val ratingEl: Element? = article.selectFirst(".watch-rating")
+        val ratingRawText = ratingEl?.text()?.substringBefore("/")
+        val rating = ratingRawText
             ?.let { FLOAT_REGEX.find(it)?.groupValues?.getOrNull(1)?.replace(',', '.')?.toDoubleOrNull() }
             ?.takeIf { it in 0.1..10.0 }
 
@@ -542,9 +553,9 @@ internal object Pelis182Markup {
             }
         }
 
-        val plotEl = article.selectFirst("#sinopsis p.p182ms-text") ?: article.selectFirst("#sinopsis p")
-        val plot = plotEl?.text()?.trim()?.ifEmpty { null }
-            ?: primaryLd?.get("description")?.asText()?.trim()?.ifEmpty { null }
+        val plotEl: Element? = article.selectFirst("#sinopsis p.p182ms-text") ?: article.selectFirst("#sinopsis p")
+        val plotText = plotEl?.text()?.trim()?.ifEmpty { null }
+        val plot = plotText ?: primaryLd?.get("description")?.asText()?.trim()?.ifEmpty { null }
 
         var isoDate: String? = null
         for (dd in article.select(".entry-facts dd")) {
@@ -564,10 +575,13 @@ internal object Pelis182Markup {
         val actors = mutableListOf<Pelis182Actor>()
         val seenActors = HashSet<String>()
         for (person in article.select(".entry-cast__person")) {
-            val actorName = person.selectFirst("b")?.text()?.trim().orEmpty()
+            val nameEl: Element? = person.selectFirst("b")
+            val actorName = nameEl?.text()?.trim().orEmpty()
             if (actorName.isEmpty() || !seenActors.add(actorName.lowercase())) continue
-            val role = person.selectFirst("small")?.text()?.trim()?.ifEmpty { null }
-            val photoUrl = extractImageUrl(person.selectFirst("img"), baseUrl, "w185")
+            val roleEl: Element? = person.selectFirst("small")
+            val role = roleEl?.text()?.trim()?.ifEmpty { null }
+            val photoImg: Element? = person.selectFirst("img")
+            val photoUrl = extractImageUrl(photoImg, baseUrl, "w185")
             actors.add(Pelis182Actor(actorName, role, photoUrl))
         }
         if (actors.isEmpty()) {
