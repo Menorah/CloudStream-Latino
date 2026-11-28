@@ -1,4 +1,4 @@
-name: Probe Pelis182
+name: Probe Pelis182 Deep
 on:
   workflow_dispatch:
   push:
@@ -12,10 +12,10 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Download zip and unpack
+      - name: Setup and unpack zip
         shell: bash
         run: |
-          python3 -m pip install -q beautifulsoup4
+          python3 -m pip install -q beautifulsoup4 pillow
           mkdir -p /tmp/pelis182_zip
           curl -fsSL -A "Mozilla/5.0" "https://tmpfiles.org/dl/1795826677.9fd718905ea26ff7/wBAlvykFhc8v/pelis182.net.zip" -o /tmp/pelis182.zip || {
             PAGE=$(curl -fsSL -A "Mozilla/5.0" "https://tmpfiles.org/wBAlvykFhc8v/pelis182.net.zip")
@@ -23,13 +23,12 @@ jobs:
             curl -fsSL -A "Mozilla/5.0" "$DL" -o /tmp/pelis182.zip
           }
           unzip -q -o /tmp/pelis182.zip -d /tmp/pelis182_zip
-          ls -la /tmp/pelis182_zip
 
-      - name: Step 1 - Zip inventory and navigation
+      - name: Deep 1 - Home sections, Catalog filters, Anime, Pagination
         shell: bash
         run: |
           python3 - <<'PY'
-          import pathlib, re
+          import pathlib, urllib.request
           from bs4 import BeautifulSoup
 
           def notice(tag, msg):
@@ -38,62 +37,63 @@ jobs:
               print("::notice::" + s[:3800])
 
           root = pathlib.Path('/tmp/pelis182_zip')
-          files = sorted([p for p in root.rglob('*') if p.is_file()])
-          inv = []
-          for p in files:
-              rel = str(p.relative_to(root))
-              sz = p.stat().st_size
-              info = f"{rel} ({sz}B)"
-              if p.suffix.lower() in ('.html', '.htm'):
-                  txt = p.read_text(errors='replace')
-                  soup = BeautifulSoup(txt, 'html.parser')
-                  t = (soup.title.get_text(" ", strip=True) if soup.title else "")[:70]
-                  bc = " ".join(soup.body.get("class", [])) if soup.body else ""
-                  info += f" | title={t} | body={bc}"
-              inv.append(info)
-          # Emit inventory in chunks of 25 lines
-          for i in range(0, len(inv), 25):
-              notice(f"INV_{i//25}", "\n".join(inv[i:i+25]))
-              if i // 25 >= 3:
-                  notice("INV_MORE", f"Total files={len(files)}")
-                  break
+          # 1. Full Home structure
+          home = next(root.rglob('Películas y Series Online – Pelis182.html'))
+          hs = BeautifulSoup(home.read_text(errors='replace'), 'html.parser')
+          secs = []
+          for el in hs.select('header, main > *'):
+              tag = el.name
+              cls = " ".join(el.get('class', []))
+              eid = el.get('id', '')
+              h2 = el.select_one('h1,h2')
+              h2t = h2.get_text(' ', strip=True) if h2 else ''
+              cards = el.select('article.p182-card')
+              sample_badges = sorted({b.get_text(strip=True) for c in cards for b in c.select('span[class*=badge], .p182-card__image span') if '▶' not in b.get_text()})
+              more_links = [(a.get('href'), a.get_text(' ', strip=True)) for a in el.select('a.button, .section-heading a, header a')]
+              secs.append(f"<{tag} id='{eid}' class='{cls}'> h={h2t} cards={len(cards)} badges={sample_badges} links={more_links[:6]}")
+              if cards:
+                  secs.append("  SAMPLE_CARD=" + str(cards[0])[:650])
+                  for c in cards:
+                      if c.select('.p182-card__badge, [class*=badge]') or 'SERIE' in c.get_text():
+                          secs.append("  BADGED_CARD=" + str(c)[:650])
+                          break
+          notice("HOME_SECS", "\n".join(secs)[:3600])
+          if len("\n".join(secs)) > 3600:
+              notice("HOME_SECS_2", "\n".join(secs)[3600:7200])
 
-          # Find homepage HTML
-          htmls = [p for p in files if p.suffix.lower() in ('.html', '.htm')]
-          home = min(htmls, key=lambda p: (0 if 'index' in p.name.lower() or 'películas y series' in p.name.lower() else 1, len(p.name)))
-          for p in htmls:
-              txt = p.read_text(errors='replace')
-              if 'hero' in txt.lower() and ('blade-runner' in txt.lower() or 'street-fighter' in txt.lower() or 'pelis182' in p.name.lower()):
-                  if '<nav' in txt or 'main-content' in txt:
-                      pass
-          # Print nav/header/filter links across ALL html files (unique hrefs on pelis182.net)
-          nav_links = {}
-          for p in htmls:
-              soup = BeautifulSoup(p.read_text(errors='replace'), 'html.parser')
-              for sel in ['header a', 'nav a', '.menu a', '[class*=filter] a', '[class*=genre] a', '[class*=nav] a', 'form', 'select']:
-                  for el in soup.select(sel):
-                      if el.name == 'a':
-                          href = el.get('href', '')
-                          txt = el.get_text(" ", strip=True)
-                          if href:
-                              nav_links[href] = txt
-                      elif el.name == 'form':
-                          nav_links[f"FORM:{el.get('action','')}:{el.get('method','')}"] = " ".join(
-                              f"{i.get('name')}={i.get('type')}" for i in el.select('input,select')
-                          )
-                      elif el.name == 'select':
-                          opts = [f"{o.get('value')}:{o.get_text(strip=True)}" for o in el.select('option')[:25]]
-                          nav_links[f"SELECT:{el.get('id','')}:{el.get('name','')}:{el.get('class','')}"] = ", ".join(opts)
-          items = [f"{k} => {v}" for k, v in sorted(nav_links.items())]
-          for i in range(0, min(len(items), 150), 30):
-              notice(f"NAV_{i//30}", "\n".join(items[i:i+30]))
+          # 2. Full Catalog page HTML filters + forms
+          cat = next(root.rglob('Películas online_ catálogo completo _ Pelis182.html'))
+          cs = BeautifulSoup(cat.read_text(errors='replace'), 'html.parser')
+          cat_main = cs.select_one('main, #main-content')
+          cat_header = "\n".join(str(el) for el in cat_main.select('header, nav, form, select, .catalog-filters, .catalog-toolbar, [class*=filter], [class*=sort], .pagination'))
+          notice("CATALOG_UI", cat_header[:3600])
+          if len(cat_header) > 3600:
+              notice("CATALOG_UI_2", cat_header[3600:7200])
+
+          # 3. Search page with query params and ?tipo=...
+          for tag, url in [
+              ("ANIME_CAT", "https://pelis182.net/category/anime/"),
+              ("CATALOG_SORT", "https://pelis182.net/catalogo/?orden=tendencias"),
+              ("SEARCH_EMPTY", "https://pelis182.net/?s=zzzzzzzzzz"),
+              ("SEARCH_MULTI", "https://pelis182.net/?s=el"),
+          ]:
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                  html = urllib.request.urlopen(req, timeout=15).read().decode('utf-8', 'replace')
+                  s = BeautifulSoup(html, 'html.parser')
+                  cards = s.select('article.p182-card')
+                  sample = str(cards[0])[:500] if cards else 'NO_CARDS'
+                  pag = str(s.select_one('.pagination'))[:400] if s.select_one('.pagination') else 'NO_PAG'
+                  notice(tag, f"cards={len(cards)} h1={s.select_one('h1').get_text(' ', strip=True) if s.select_one('h1') else ''}\nSAMPLE={sample}\nPAG={pag}")
+              except Exception as e:
+                  notice(tag, f"ERR {e}")
           PY
 
-      - name: Step 2 - Home, Archive, Search and Pagination HTML
+      - name: Deep 2 - Series The Boys DOM, saved_resource.html, juicycodes.js, entry.js, main.js
         shell: bash
         run: |
           python3 - <<'PY'
-          import pathlib, re
+          import pathlib
           from bs4 import BeautifulSoup
 
           def notice(tag, msg):
@@ -102,196 +102,30 @@ jobs:
               print("::notice::" + s[:3800])
 
           root = pathlib.Path('/tmp/pelis182_zip')
-          htmls = sorted([p for p in root.rglob('*.htm*')])
-          for idx, p in enumerate(htmls):
-              txt = p.read_text(errors='replace')
-              soup = BeautifulSoup(txt, 'html.parser')
-              canonical = (soup.select_one('link[rel=canonical]') or {}).get('href', '')
-              # Identify page kind
-              has_ep = bool(re.search(r'T\d+X\d+', txt))
-              has_sinopsis = 'Sinopsis' in txt or 'sinopsis' in txt
-              cards = soup.select('article, .card, a[href] img[alt*="Póster"]')
-              # Grab pagination elements
-              pag = [str(el)[:300] for el in soup.select('.pagination, .nav-links, a.page-numbers, [class*=pagin], [class*=load-more], [rel=next]')[:6]]
-              # Grab headings + section structure
-              secs = []
-              for h in soup.select('h1, h2, h3, section'):
-                  if h.name == 'section':
-                      secs.append(f"<section class='{' '.join(h.get('class',[]))}' id='{h.get('id','')}'> cards={len(h.select('a img'))}")
-                  else:
-                      secs.append(f"<{h.name} class='{' '.join(h.get('class',[]))}'>{h.get_text(' ', strip=True)[:60]}")
-              summary = f"FILE={p.name} | canon={canonical} | ep={has_ep} | sinopsis={has_sinopsis} | cardImgs={len(cards)}\nSECS:\n" + "\n".join(secs[:30]) + "\nPAG:\n" + "\n".join(pag)
-              notice(f"PAGE_{idx}", summary)
-              if idx >= 8:
-                  break
+          # 1. Full watch-page sections for The Boys
+          boys = next(root.rglob('The Boys - Temporada 5 (2026) online – Pelis182.html'))
+          bs = BeautifulSoup(boys.read_text(errors='replace'), 'html.parser')
+          bm = bs.select_one('article.watch-page')
+          bm_txt = str(bm)
+          notice("BOYS_1", bm_txt[:3600])
+          notice("BOYS_2", bm_txt[3600:7200])
+          notice("BOYS_3", bm_txt[7200:10800])
+
+          # 2. All saved_resource.html files!
+          for idx, sr in enumerate(sorted(root.rglob('saved_resource.html'))):
+              txt = sr.read_text(errors='replace')
+              notice(f"SAVED_RES_{idx}", f"{sr.relative_to(root)} ({len(txt)}B)\n" + txt[:3400])
+
+          # 3. Inspect juicycodes.js, entry.js, smg-front.js, uvpi.js
+          for idx, pat in enumerate(['*juicycodes*', '*entry.js*', '*uvpi.js*', '*smg-front.js*']):
+              matches = sorted(root.rglob(pat))
+              if matches:
+                  f = matches[0]
+                  t = f.read_text(errors='replace')
+                  notice(f"JS_{f.name}", f"({len(t)}B)\n" + t[:3400])
           PY
 
-      - name: Step 3 - Dump remaining HTML summaries and exact card/detail DOM
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, re
-          from bs4 import BeautifulSoup
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print("::notice::" + s[:3800])
-
-          root = pathlib.Path('/tmp/pelis182_zip')
-          htmls = sorted([p for p in root.rglob('*.htm*')])
-          # List canonical URL + card sample + detail HTML snippet for each file from index 8+ or distinct types
-          for idx, p in enumerate(htmls[9:], start=9):
-              txt = p.read_text(errors='replace')
-              soup = BeautifulSoup(txt, 'html.parser')
-              canon = (soup.select_one('link[rel=canonical]') or {}).get('href', '')
-              h1 = (soup.select_one('h1') or soup.title)
-              h1t = h1.get_text(' ', strip=True)[:80] if h1 else ''
-              notice(f"P_{idx}", f"{p.name} | canon={canon} | h1={h1t}")
-              if idx >= 14:
-                  break
-
-          # Inspect card markup from first page that has cards
-          for p in htmls:
-              txt = p.read_text(errors='replace')
-              soup = BeautifulSoup(txt, 'html.parser')
-              main = soup.select_one('main, #main-content, body')
-              if main and ('Póster de' in txt):
-                  # Find first container holding poster images
-                  img = main.select_one('img[alt*="Póster"]')
-                  if img:
-                      parent = img.parent
-                      for _ in range(3):
-                          if parent.parent and len(parent.parent.select('img[alt*="Póster"]')) <= 2:
-                              parent = parent.parent
-                      container = parent.parent
-                      notice("CARD_CONTAINER", f"file={p.name} | parent_tag={container.name} class={container.get('class')} | sample_cards=\n" + "\n---\n".join(str(c)[:900] for c in list(container.children)[:4] if getattr(c, 'name', None)))
-                      # Also show series card HTML specifically
-                      for c in soup.select('a, article, div'):
-                          if c.name == 'a' and 'SERIE' in c.get_text():
-                              notice("SERIE_CARD", str(c)[:1200])
-                              break
-                      break
-
-          # Inspect one Movie page & one Series page main content DOM
-          movie_done = False
-          series_done = False
-          for p in htmls:
-              txt = p.read_text(errors='replace')
-              soup = BeautifulSoup(txt, 'html.parser')
-              main = soup.select_one('#main-content, main')
-              if not main:
-                  continue
-              if not series_done and re.search(r'T\d+X\d+', txt):
-                  series_done = True
-                  notice("SERIES_MAIN_1", str(main)[:3600])
-                  notice("SERIES_MAIN_2", str(main)[3600:7200])
-              elif not movie_done and 'Sinopsis' in txt and not re.search(r'T\d+X\d+', txt):
-                  movie_done = True
-                  notice("MOVIE_MAIN_1", str(main)[:3600])
-                  notice("MOVIE_MAIN_2", str(main)[3600:7200])
-          PY
-
-      - name: Step 4 - Extract ALL scripts, player embeds, episode data, CSS/JS assets in zip
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, re
-          from bs4 import BeautifulSoup
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print("::notice::" + s[:3800])
-
-          root = pathlib.Path('/tmp/pelis182_zip')
-          htmls = sorted([p for p in root.rglob('*.htm*')])
-          # Collect all external JS/CSS URLs and local asset files
-          ext_js = set()
-          inline_scripts = {}
-          for p in htmls:
-              txt = p.read_text(errors='replace')
-              soup = BeautifulSoup(txt, 'html.parser')
-              for sc in soup.select('script'):
-                  src = sc.get('src')
-                  if src:
-                      ext_js.add(src)
-                  body = (sc.string or sc.get_text() or '').strip()
-                  if body and any(k in body.lower() for k in ['player', 'iframe', 'embed', 'episod', 'temporad', 'video', 'server', 'idioma', 'ajax', 'wp-json', 'pelis182', 't1x', 'stream', 'data-']):
-                      key = body[:120]
-                      if key not in inline_scripts:
-                          inline_scripts[key] = (p.name, body)
-          notice("EXT_JS", "\n".join(sorted(ext_js))[:3600])
-          for idx, (k, (fn, body)) in enumerate(inline_scripts.items()):
-              notice(f"INLINE_JS_{idx}", f"file={fn}\n" + body[:3500])
-              if len(body) > 3500:
-                  notice(f"INLINE_JS_{idx}B", f"file={fn} (cont)\n" + body[3500:7000])
-              if idx >= 4:
-                  break
-          # Check all iframes, data-src, data-embed, data-url, data-video across all HTMLs
-          attrs_hits = []
-          for p in htmls:
-              txt = p.read_text(errors='replace')
-              for m in re.finditer(r'(?:<iframe[^>]+>|data-(?:src|url|embed|video|server|lang|ep|season|id|post|player)[^=>]*=[\"\x27][^\"\x27]+[\"\x27]|<script[^>]*application/ld\+json[^>]*>.*?</script>)', txt, re.I | re.S):
-                  attrs_hits.append(f"{p.name}: {m.group(0)[:220]}")
-          dedup = []
-          seen = set()
-          for h in attrs_hits:
-              sig = re.sub(r'\d+', '#', h)[:120]
-              if sig not in seen:
-                  seen.add(sig)
-                  dedup.append(h)
-          notice("ATTR_IFRAME_LD", "\n".join(dedup[:40])[:3600])
-          # Also list any local .js files in zip
-          js_files = sorted([str(p.relative_to(root)) for p in root.rglob('*.js*')])
-          notice("ZIP_JS_FILES", f"count={len(js_files)}\n" + "\n".join(js_files[:50]))
-          PY
-
-      - name: Step 5 - Inspect theme JS and live pelis182.net structure
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, re, urllib.request, json
-          from bs4 import BeautifulSoup
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print("::notice::" + s[:3800])
-
-          def fetch(url):
-              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"})
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
-
-          root = pathlib.Path('/tmp/pelis182_zip')
-          # 1. Inspect local .js files inside zip if any match theme/player
-          js_files = [p for p in root.rglob('*.js') if any(w in p.name.lower() for w in ['theme', 'app', 'main', 'player', 'custom', 'pelis', 'script', 'single', 'episode', 'front'])]
-          for idx, jf in enumerate(js_files[:6]):
-              txt = jf.read_text(errors='replace')
-              notice(f"ZIP_JS_{idx}", f"{jf.relative_to(root)} ({len(txt)}B)\n" + txt[:3400])
-
-          # 2. Fetch live homepage HTML & theme scripts from pelis182.net
-          try:
-              st, hdr, home_html = fetch("https://pelis182.net/")
-              soup = BeautifulSoup(home_html, 'html.parser')
-              scripts = [s.get('src') for s in soup.select('script[src]') if s.get('src')]
-              links = [(a.get('href'), a.get_text(' ', strip=True)) for a in soup.select('header a, nav a, footer a, a[rel=next], .pagination a') if a.get('href')]
-              notice("LIVE_HOME", f"status={st} len={len(home_html)}\nSCRIPTS:\n" + "\n".join(scripts[:25]) + "\nNAV_LINKS:\n" + "\n".join(f"{h} | {t}" for h, t in links[:35]))
-              # Fetch live custom theme JS files
-              theme_scripts = [s for s in scripts if 'pelis182.net/wp-content/themes/' in s or 'pelis182.net/wp-content/plugins/' in s or 'pelis182' in s]
-              for idx, u in enumerate(theme_scripts[:5]):
-                  if 'jquery' in u.lower() or 'wpdiscuz' in u.lower() or 'litespeed' in u.lower():
-                      continue
-                  _, _, jtxt = fetch(u)
-                  notice(f"THEME_JS_{idx}", f"{u} ({len(jtxt)}B)\n" + jtxt[:3400])
-                  if len(jtxt) > 3400:
-                      notice(f"THEME_JS_{idx}B", jtxt[3400:6800])
-          except Exception as e:
-              notice("LIVE_HOME_ERR", repr(e))
-          PY
-
-      - name: Step 6 - Live endpoints, series multi-season, genres, search and player probe
+      - name: Deep 3 - Live paulinito.com player reverse engineering and host inventory
         shell: bash
         run: |
           python3 - <<'PY'
@@ -303,110 +137,134 @@ jobs:
               s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
               print("::notice::" + s[:3800])
 
-          def fetch(url):
-              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"})
-              try:
-                  with urllib.request.urlopen(req, timeout=20) as r:
-                      return r.status, r.geturl(), r.read().decode("utf-8", "replace")
-              except Exception as e:
-                  return getattr(e, 'code', -1), url, repr(e)
+          def fetch(url, headers=None):
+              hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
+              if headers:
+                  hdrs.update(headers)
+              req = urllib.request.Request(url, headers=hdrs)
+              with urllib.request.urlopen(req, timeout=20) as r:
+                  return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
 
-          endpoints = [
-              "https://pelis182.net/peliculas/",
-              "https://pelis182.net/series/",
-              "https://pelis182.net/anime/",
-              "https://pelis182.net/estrenos/",
-              "https://pelis182.net/page/2/",
-              "https://pelis182.net/?s=spider",
-              "https://pelis182.net/page/2/?s=la",
-              "https://pelis182.net/wp-json/",
-              "https://pelis182.net/sitemap_index.xml",
+          # 1. Inspect paulinito.com/player/... HTML + headers (with and without Referer!)
+          test_urls = [
+              "https://pelis182.net/street-fighter/",
+              "https://pelis182.net/blade/",
+              "https://pelis182.net/el-ultimo-gran-golpe/",
+              "https://pelis182.net/blade-runner-2099-temporada-1/",
+              "https://pelis182.net/the-boys-temporada-5/",
+              "https://pelis182.net/black-mirror-temporada-7/",
+              "https://pelis182.net/los-simpson-santa-homero/",
           ]
-          res_lines = []
-          for u in endpoints:
-              st, final_u, body = fetch(u)
-              soup = BeautifulSoup(body, 'html.parser')
-              title = soup.title.get_text(' ', strip=True) if soup.title else ''
-              cards = len(soup.select('img[alt*="Póster"], article, .movie-card, .card'))
-              res_lines.append(f"{u} => st={st} final={final_u} len={len(body)} cards={cards} title={title[:50]}")
-              if 'wp-json' in u and st == 200:
-                  try:
-                      j = json.loads(body)
-                      res_lines.append("  namespaces=" + str(j.get('namespaces')) + " routes=" + str(list((j.get('routes') or {}).keys())[:25]))
-                  except Exception:
-                      pass
-              if 'sitemap' in u and st == 200:
-                  res_lines.append("  sitemaps=" + ", ".join(re.findall(r'<loc>([^<]+)</loc>', body)[:15]))
-          notice("ENDPOINTS", "\n".join(res_lines))
+          # Also grab first 12 links from home + 6 from /category/anime/
+          _, _, _, home_html = fetch("https://pelis182.net/")
+          hs = BeautifulSoup(home_html, 'html.parser')
+          for a in hs.select('article.p182-card a[href]'):
+              u = a['href']
+              if u not in test_urls and len(test_urls) < 18:
+                  test_urls.append(u)
+          try:
+              _, _, _, ani_html = fetch("https://pelis182.net/category/anime/")
+              asoup = BeautifulSoup(ani_html, 'html.parser')
+              for a in asoup.select('article.p182-card a[href]')[:4]:
+                  if a['href'] not in test_urls:
+                      test_urls.append(a['href'])
+          except Exception:
+              pass
 
-          # Inspect live movie & series raw HTML player blocks & inline JSON/scripts
-          for tag, u in [
-              ("LIVE_MOVIE", "https://pelis182.net/street-fighter/"),
-              ("LIVE_SERIES", "https://pelis182.net/blade-runner-2099-temporada-1/"),
-              ("LIVE_DRAGON3", "https://pelis182.net/la-casa-del-dragon-temporada-3/"),
-          ]:
-              st, fu, html = fetch(u)
-              soup = BeautifulSoup(html, 'html.parser')
-              body_cls = " ".join(soup.body.get('class', [])) if soup.body else ''
-              # Find player container & episode buttons
-              player_html = ""
-              for sel in ['#player', '.player', '[class*=player]', '[id*=player]', '[class*=video]', '[class*=repro]', '[class*=episod]', '[data-embed]', '[data-src]', 'iframe']:
-                  els = soup.select(sel)
-                  if els:
-                      player_html += f"\nSEL({sel}) count={len(els)}: " + str(els[0])[:600]
-              # Extract all scripts containing player/episode/embed/http
-              sc_hits = []
-              for sc in soup.select('script'):
-                  t = (sc.string or sc.get_text() or '').strip()
-                  if t and any(k in t.lower() for k in ['iframe', 'embed', 'player', 't1x', 'video', 'server', 'http']):
-                      if 'wpdiscuz' in t.lower() or 'gtag' in t.lower():
-                          continue
-                      sc_hits.append(t[:1200])
-              notice(tag, f"st={st} body={body_cls}\nPLAYER_DOM:{player_html[:1800]}\nSCRIPTS:\n" + "\n---\n".join(sc_hits)[:1600])
+          embeds = []
+          server_summaries = []
+          for u in test_urls:
+              try:
+                  _, _, _, html = fetch(u)
+                  s = BeautifulSoup(html, 'html.parser')
+                  btns = s.select('[data-iframe]')
+                  iframes = [f.get('data-uvpi-src') or f.get('src') for f in s.select('.theater iframe') if (f.get('data-uvpi-src') or f.get('src'))]
+                  btn_samples = []
+                  for b in btns[:3]:
+                      m = re.search(r'src=["\x27]([^"\x27]+)', b.get('data-iframe', ''))
+                      src = m.group(1) if m else b.get('data-iframe', '')[:80]
+                      btn_samples.append(f"{b.get_text(strip=True)}={src}")
+                      if m and m.group(1) not in embeds:
+                          embeds.append((u, m.group(1)))
+                  for f in iframes:
+                      if f not in [e[1] for e in embeds]:
+                          embeds.append((u, f))
+                  # Also check non-episode server rows!
+                  rows = [f"row({r.get('class')}):btns={len(r.select('button'))}" for r in s.select('.server-row')]
+                  server_summaries.append(f"{u} => rows={rows} iframes={iframes} btns={len(btns)} {btn_samples[:2]}")
+              except Exception as e:
+                  server_summaries.append(f"{u} => ERR {e}")
+          notice("PAGES_SERVERS", "\n".join(server_summaries)[:3600])
+
+          # 2. Fetch paulinito.com player HTML (first 2 embeds) + all its JS!
+          for idx, (ref, emp) in enumerate(embeds[:2]):
+              try:
+                  st, fu, hdr, html = fetch(emp, {"Referer": ref})
+                  notice(f"PAULINITO_{idx}", f"url={emp} final={fu} st={st} len={len(html)}\n" + html[:3400])
+                  if len(html) > 3400:
+                      notice(f"PAULINITO_{idx}B", html[3400:6800])
+              except Exception as e:
+                  notice(f"PAULINITO_{idx}_ERR", f"{emp} => {e}")
+
+          # Check if ALL embeds are paulinito.com or other hosts exist!
+          hosts = {}
+          for ref, emp in embeds:
+              h = re.sub(r'^https?://([^/]+).*', r'\1', emp)
+              hosts[h] = hosts.get(h, 0) + 1
+          notice("EMBED_HOSTS", f"total={len(embeds)} counts={hosts}\nSAMPLE_EMBEDS=\n" + "\n".join(f"{r} -> {e}" for r, e in embeds[:25]))
           PY
 
-      - name: Step 7 - Icon and favicon inspection
+      - name: Deep 4 - Live probe paulinito.com JS & stream resolution + Icon PNG bytes
         shell: bash
         run: |
           python3 - <<'PY'
-          import urllib.request, base64, struct
-          from bs4 import BeautifulSoup
+          import urllib.request, urllib.parse, re, json, base64, io
+          from PIL import Image
 
           def notice(tag, msg):
               s = f"[{tag}] " + msg
               s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
               print("::notice::" + s[:3800])
 
-          req = urllib.request.Request("https://pelis182.net/", headers={"User-Agent": "Mozilla/5.0"})
-          html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
-          soup = BeautifulSoup(html, 'html.parser')
-          icons = []
-          for l in soup.select('link[rel*=icon], meta[property="og:image"], header img, .logo img, a.navbar-brand img'):
-              icons.append(str(l)[:220])
-          notice("ICON_TAGS", "\n".join(icons[:20]))
-          # Check sizes of discovered URLs
-          urls = set()
-          for l in soup.select('link[rel*=icon]'):
-              if l.get('href'): urls.add(l['href'])
-          for im in soup.select('header img, .logo img'):
-              if im.get('src'): urls.add(im['src'])
-          urls.add("https://pelis182.net/wp-content/uploads/2024/04/PELIS182.png")
-          urls.add("https://pelis182.net/favicon.ico")
-          res = []
-          for u in sorted(urls):
+          def fetch(url, headers=None, data=None):
+              hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
+              if headers:
+                  hdrs.update(headers)
+              req = urllib.request.Request(url, data=data, headers=hdrs)
+              with urllib.request.urlopen(req, timeout=20) as r:
+                  return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
+
+          # Probe paulinito.com player page from Street Fighter + its entry.js / juicycodes
+          for emp in ["https://paulinito.com/player/f2pHbAiudhy6id3/", "https://paulinito.com/player/9kLWLT8pzTnerzx/"]:
               try:
-                  r = urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=15)
-                  data = r.read()
-                  wh = ""
-                  if data[:8] == b'\x89PNG\r\n\x1a\n' and len(data) >= 24:
-                      w, h = struct.unpack('>II', data[16:24])
-                      wh = f"PNG {w}x{h} colortype={data[25]} bitdepth={data[24]}"
-                  res.append(f"{u} => len={len(data)} magic={data[:8].hex()} {wh}")
-                  if len(data) <= 22000 and data[:8] == b'\x89PNG\r\n\x1a\n':
-                      b64 = base64.b64encode(data).decode()
-                      for ci in range(0, len(b64), 3200):
-                          notice(f"ICON_B64_{ci//3200}", f"{u}\n" + b64[ci:ci+3200])
+                  st, fu, hdr, html = fetch(emp, {"Referer": "https://pelis182.net/"})
+                  scripts = re.findall(r'<script[^>]*src=["\x27]([^"\x27]+)', html, re.I)
+                  notice("PAUL_SCRIPTS", f"{emp} => scripts={scripts}\nHTML_HEAD={html[:1200]}")
+                  for sc in scripts:
+                      sc_url = urllib.parse.urljoin(fu, sc)
+                      if any(k in sc_url.lower() for k in ['entry', 'juicy', 'player', 'app', 'main']) and 'jw' not in sc_url.lower():
+                          _, _, _, jtxt = fetch(sc_url, {"Referer": fu})
+                          notice(f"PAUL_JS_{sc_url.split('/')[-1][:20]}", f"{sc_url} ({len(jtxt)}B)\n" + jtxt[:3400])
+                  break
               except Exception as e:
-                  res.append(f"{u} => ERR {e}")
-          notice("ICON_FILES", "\n".join(res))
+                  notice("PAUL_PROBE_ERR", f"{emp} => {e}")
+
+          # Also export resized 96x96 PNG thumbnail of cropped-p182-192x192.png AND raw 192x192 info
+          try:
+              raw = urllib.request.urlopen(urllib.request.Request("https://pelis182.net/wp-content/uploads/2026/08/cropped-p182-192x192.png", headers={"User-Agent": "Mozilla/5.0"}), timeout=15).read()
+              im = Image.open(io.BytesIO(raw)).convert("RGBA")
+              # Preview 96x96 quantized to check cleanly visually!
+              prev = im.resize((96, 96), Image.LANCZOS).quantize(colors=64)
+              buf = io.BytesIO()
+              prev.save(buf, format="PNG", optimize=True)
+              b64 = base64.b64encode(buf.getvalue()).decode()
+              notice("ICON_192_PREVIEW", f"orig_size={len(raw)} orig_mode={im.mode} orig_dims={im.size} prev_b64_len={len(b64)}\n{b64[:3400]}")
+              if len(b64) > 3400:
+                  notice("ICON_192_PREVIEW_2", b64[3400:6800])
+              # Also check raw PELIS182.png dimensions & bounding box
+              raw_logo = urllib.request.urlopen(urllib.request.Request("https://pelis182.net/wp-content/uploads/2024/04/PELIS182.png", headers={"User-Agent": "Mozilla/5.0"}), timeout=15).read()
+              iml = Image.open(io.BytesIO(raw_logo)).convert("RGBA")
+              notice("LOGO_INFO", f"size={len(raw_logo)} dims={iml.size} bbox={iml.getbbox()}")
+          except Exception as e:
+              notice("ICON_ERR", repr(e))
           PY
