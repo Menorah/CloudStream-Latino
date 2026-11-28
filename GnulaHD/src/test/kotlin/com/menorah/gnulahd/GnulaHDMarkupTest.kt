@@ -252,6 +252,7 @@ class GnulaHDMarkupTest {
               <div class="gnrd-eyebrow">Serie · 2016</div>
               <h1>The Crown 6x10</h1>
               <a class="gnrd-btn gnrd-btn-play" href="https://ww3.gnulahd.nu/ver/the-crown/">▶ Ver toda la serie</a>
+              <a class="gnrd-epc" data-e="10" data-id="526798" data-s="6" data-t="19b2dbca009b009d015ddc2b45d96cb7" href="https://ww3.gnulahd.nu/the-crown-6x10/"></a>
               <script>var _gnrdPid=526798,_gnrdTok="19b2dbca009b009d015ddc2b45d96cb7";</script>
             </body></html>
         """.trimIndent()

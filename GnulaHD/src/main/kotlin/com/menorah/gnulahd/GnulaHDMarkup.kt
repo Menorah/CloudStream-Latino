@@ -691,12 +691,10 @@ internal object GnulaHDMarkup {
 
         val episodes = parseEpisodeCards(doc, mainUrl)
         val inlineCreds = extractInlinePlayerCredentials(html)
-        val parentSeriesUrl = if (episodes.isEmpty()) {
-            doc.selectFirst("a.gnrd-btn-play[href*='/ver/'], .gnrd-epbar a[href*='/ver/']")
-                ?.attr("href")?.let { resolveUrl(mainUrl, it) }
-        } else {
-            null
-        }
+        val parentSeriesUrl = doc.selectFirst("a.gnrd-btn-play[href*='/ver/'], .gnrd-epbar a[href*='/ver/']")
+            ?.attr("href")
+            ?.let { resolveUrl(mainUrl, it) }
+            ?.takeIf { it.trimEnd('/') != pageUrl.trimEnd('/') }
 
         val isAnime = eyebrowNorm.contains("anime") ||
             doc.select(".gnrd-crumb a[href*='/ver/anime/'], .breadcrumb a[href*='/ver/anime/']").isNotEmpty() ||

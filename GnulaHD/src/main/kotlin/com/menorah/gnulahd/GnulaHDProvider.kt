@@ -254,7 +254,7 @@ class GnulaHDProvider : MainAPI() {
         val detail = GnulaHDMarkup.parseDetail(doc, resolved, mainUrl) ?: return null
 
         val parentUrl = detail.parentSeriesUrl
-        if (allowParentRedirect && detail.episodes.isEmpty() && !parentUrl.isNullOrBlank() &&
+        if (allowParentRedirect && !parentUrl.isNullOrBlank() &&
             parentUrl.trimEnd('/') != resolved.trimEnd('/')
         ) {
             val parentResp = runCatching { loadInternal(parentUrl, allowParentRedirect = false) }.getOrNull()
