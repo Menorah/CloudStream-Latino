@@ -53,6 +53,36 @@ object PlaybackProbe {
                     Log.i("CSPlaybackProbe", "LIVE_SITE reachable=$siteReachable code=${siteProbe.code} len=${siteProbe.text.length}")
 
                     // 2. Live Embed69 + Host extractors + Media3 ExoPlayer playback (with real Android client!)
+                    val e69SfFetch = withContext(Dispatchers.IO) {
+                        provider.client.fetchExternalHtml(
+                            "https://embed69.org/f/tt45368240",
+                            "https://sololatino.net/pelicula/street-fighter",
+                        ) { target ->
+                            val h = SoloLatinoMarkup.hostOf(target)
+                            h == "embed69.org" || h.endsWith(".embed69.org")
+                        }
+                    }
+                    val e69SfMirrors = SoloLatinoMarkup.decryptEmbed69Page(e69SfFetch.text)
+                    Log.i(
+                        "CSPlaybackProbe",
+                        "LIVE_E69_SF_FETCH code=${e69SfFetch.code} len=${e69SfFetch.text.length} dl=${e69SfFetch.text.contains("dataLink")} mirrors=${e69SfMirrors.map { "${it.langCode}:${it.serverName}:${it.url}" }}",
+                    )
+
+                    val e69BoysFetch = withContext(Dispatchers.IO) {
+                        provider.client.fetchExternalHtml(
+                            "https://embed69.org/f/tt1190634-5x08",
+                            "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                        ) { target ->
+                            val h = SoloLatinoMarkup.hostOf(target)
+                            h == "embed69.org" || h.endsWith(".embed69.org")
+                        }
+                    }
+                    val e69BoysMirrors = SoloLatinoMarkup.decryptEmbed69Page(e69BoysFetch.text)
+                    Log.i(
+                        "CSPlaybackProbe",
+                        "LIVE_E69_BOYS_FETCH code=${e69BoysFetch.code} len=${e69BoysFetch.text.length} dl=${e69BoysFetch.text.contains("dataLink")} mirrors=${e69BoysMirrors.take(6).map { "${it.langCode}:${it.serverName}:${it.url}" }}",
+                    )
+
                     val e69MovieLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
                     val e69MovieOk = withContext(Dispatchers.IO) {
                         SoloLatinoEmbed69Resolver.extract(
@@ -65,7 +95,6 @@ object PlaybackProbe {
                         )
                     }
                     Log.i("CSPlaybackProbe", "LIVE_E69_SF ok=$e69MovieOk count=${e69MovieLinks.size} names=${e69MovieLinks.map { it.name }}")
-                    check(e69MovieOk && e69MovieLinks.isNotEmpty()) { "Embed69 Street Fighter returned no links" }
 
                     val e69BoysLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
                     val e69BoysOk = withContext(Dispatchers.IO) {
@@ -79,6 +108,7 @@ object PlaybackProbe {
                         )
                     }
                     Log.i("CSPlaybackProbe", "LIVE_E69_BOYS ok=$e69BoysOk count=${e69BoysLinks.size} names=${e69BoysLinks.take(6).map { it.name }}")
+                    check(e69MovieOk && e69MovieLinks.isNotEmpty()) { "Embed69 Street Fighter returned no links" }
                     check(e69BoysOk && e69BoysLinks.isNotEmpty()) { "Embed69 The Boys S5E8 returned no links" }
 
                     // Verify live Media3 video frame decoding on extracted Embed69 streams
