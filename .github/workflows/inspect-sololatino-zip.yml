@@ -6,15 +6,14 @@ on:
 permissions:
   contents: read
 jobs:
-  inspect:
+  inspect_zip:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect every file in ZIP and live site
-        id: dump
+      - name: Analyze every non-image file in ZIP
         shell: bash
         run: |
           python3 - <<'PY'
-          import json, pathlib, re, urllib.request, urllib.error, zipfile, hashlib
+          import hashlib, pathlib, re, urllib.request, zipfile
 
           DEST = pathlib.Path('/tmp/zip_inspect')
           DEST.mkdir(parents=True, exist_ok=True)
@@ -22,12 +21,10 @@ jobs:
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
               'Accept': '*/*',
           }
-
           zip_path = pathlib.Path('/tmp/sololatino.net.zip')
           def fetch_bytes(u):
-              req = urllib.request.Request(u, headers=headers)
-              with urllib.request.urlopen(req, timeout=60) as resp:
-                  return resp.status, resp.headers.get('Content-Type', ''), resp.read()
+              with urllib.request.urlopen(urllib.request.Request(u, headers=headers), timeout=60) as resp:
+                  return resp.read()
 
           downloaded = False
           for cand in [
@@ -35,7 +32,7 @@ jobs:
               'https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip',
           ]:
               try:
-                  st, ct, data = fetch_bytes(cand)
+                  data = fetch_bytes(cand)
                   if data[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
                       zip_path.write_bytes(data)
                       downloaded = True
@@ -44,100 +41,125 @@ jobs:
                   m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', text) or re.search(r'href=["\'](/dl/[^"\']+)["\']', text)
                   if m:
                       dl2 = m.group(0) if m.group(0).startswith('http') else 'https://tmpfiles.org' + m.group(1)
-                      st2, ct2, data2 = fetch_bytes(dl2)
+                      data2 = fetch_bytes(dl2)
                       if data2[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
                           zip_path.write_bytes(data2)
                           downloaded = True
                           break
-              except Exception as e:
+              except Exception:
                   pass
-          assert downloaded, 'ZIP download failed'
+          assert downloaded, 'Failed to download ZIP'
 
           with zipfile.ZipFile(zip_path) as zf:
               zf.extractall(DEST)
               infos = sorted([(i.filename, i.file_size) for i in zf.infolist()])
 
-          lines = []
-          lines.append(f'=== ZIP SIZE={zip_path.stat().st_size} ENTRIES={len(infos)} ===')
-          for name, sz in infos:
-              lines.append(f'{sz:10d}  {name}')
-
-          # Inspect ALL files in DEST
-          html_files = []
-          js_files = []
-          other_files = []
+          img_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg', '.ico'}
+          non_img = []
+          img_count = 0
           for p in sorted(DEST.rglob('*')):
               if not p.is_file():
                   continue
               rel = str(p.relative_to(DEST))
-              ext = p.suffix.lower()
-              if ext in ('.html', '.htm'):
-                  html_files.append((rel, p))
-              elif ext in ('.js', '.mjs'):
-                  js_files.append((rel, p))
-              else:
-                  other_files.append((rel, p))
+              if p.suffix.lower() in img_exts:
+                  img_count += 1
+                  continue
+              raw = p.read_bytes()
+              if raw.startswith((b'\xff\xd8\xff', b'\x89PNG', b'GIF8', b'RIFF')):
+                  img_count += 1
+                  continue
+              h = hashlib.sha256(raw).hexdigest()[:10]
+              non_img.append((rel, p, len(raw), h))
 
-          lines.append(f'\n=== COUNTS: html={len(html_files)} js={len(js_files)} other={len(other_files)} ===')
-          for rel, p in other_files:
-              if p.suffix.lower() in ('.json', '.txt', '.xml', '.webmanifest'):
-                  lines.append(f'OTHER {rel} ({p.stat().st_size}B): {p.read_text("utf-8", "replace")[:500]!r}')
+          out = []
+          out.append(f'ZIP_SIZE={zip_path.stat().st_size} ENTRIES={len(infos)} IMG_FILES={img_count} NON_IMG={len(non_img)}')
+          for rel, _, sz, h in non_img:
+              out.append(f'NON_IMG {sz:8d} {h} {rel}')
 
-          for rel, p in html_files:
+          seen_saved = set()
+          for rel, p, sz, h in non_img:
+              if not rel.endswith(('.html', '.htm')):
+                  continue
               txt = p.read_text('utf-8', 'replace')
               title = (re.search(r'<title>(.*?)</title>', txt, re.S|re.I) or [None,''])[1].strip()
               canon = (re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', txt, re.I) or [None,''])[1]
+              if 'saved_resource' in rel:
+                  if h in seen_saved:
+                      continue
+                  seen_saved.add(h)
+                  out.append(f'SAVED_RES {rel} sz={sz} h={h} title={title!r} head={txt[:400]!r}')
+                  continue
               csrf = (re.search(r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)["\']', txt, re.I) or [None,''])[1]
-              scripts = re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)
               tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', txt, re.I)
-              resolved = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', txt, re.I)
-              resolved_type = re.findall(r'data-resolved-type=["\']([^"\']+)["\']', txt, re.I)
+              rurls = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', txt, re.I)
+              rtypes = re.findall(r'data-resolved-type=["\']([^"\']+)["\']', txt, re.I)
               lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', txt, re.I)
               iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', txt, re.I)
-              lang_tabs = re.findall(r'data-lang-tab=["\']([^"\']+)["\'][^>]*>([^<]*)<', txt, re.I)
-              lang_groups = re.findall(r'data-lang-group=["\']([^"\']+)["\']', txt, re.I)
+              tabs = re.findall(r'data-lang-tab=["\']([^"\']+)["\'][^>]*>([^<]*)<', txt, re.I)
+              groups = re.findall(r'data-lang-group=["\']([^"\']+)["\']', txt, re.I)
+              seasons = re.findall(r'data-season-panel=["\']([^"\']+)["\']', txt, re.I)
+              eps = len(re.findall(r'class=["\'][^"\']*\bep-item\b', txt))
               cards = len(re.findall(r'class=["\'][^"\']*\bcard\b', txt))
-              ep_items = len(re.findall(r'class=["\'][^"\']*\bep-item\b', txt))
-              season_panels = re.findall(r'data-season-panel=["\']([^"\']+)["\']', txt, re.I)
-              lines.append(
-                  f'\n--- HTML {rel} ({len(txt)}B) title={title!r} canon={canon!r} csrf={csrf!r} '
-                  f'cards={cards} ep_items={ep_items} season_panels={season_panels} '
-                  f'lang_tabs={lang_tabs} lang_groups={lang_groups} '
-                  f'tokens={len(tokens)} resolved={len(resolved)}({resolved[:3]}) rtype={resolved_type[:3]} '
-                  f'lazy={lazy} iframes={iframes} ---'
+              out.append(
+                  f'\nHTML {rel} sz={sz} title={title!r} canon={canon!r} csrf={csrf!r} '
+                  f'cards={cards} eps={eps} seasons={seasons} tabs={tabs} groups={groups} '
+                  f'tokens={len(tokens)} rurls={rurls[:6]} rtypes={rtypes[:6]} lazy={lazy} ifr={iframes}'
               )
-              # Also inspect player-frame block and buttons context if present
-              pf_m = re.search(r'(<[^>]+id=["\']player-frame["\'][\s\S]{0,800})', txt, re.I)
-              if pf_m:
-                  lines.append(f'  PLAYER_FRAME: {pf_m.group(1)!r}')
-              for b_m in list(re.finditer(r'<(?:button|div|a)[^>]+(?:data-player-token|data-resolved-url)[^>]*>[\s\S]{0,160}', txt, re.I))[:6]:
-                  lines.append(f'  BTN: {re.sub(r"\s+", " ", b_m.group(0))}')
-              for idx, (attrs, body) in enumerate(scripts):
+              pf = re.search(r'(<[^>]+id=["\']player-frame["\'][\s\S]{0,900})', txt, re.I)
+              if pf:
+                  out.append('  PF: ' + re.sub(r'\s+', ' ', pf.group(1)))
+              for bm in list(re.finditer(r'<(?:button|div|a)[^>]+(?:data-player-token|data-resolved-url)[^>]*>[\s\S]{0,160}', txt, re.I))[:8]:
+                  out.append('  BTN: ' + re.sub(r'\s+', ' ', bm.group(0)))
+              for idx, (attrs, body) in enumerate(re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)):
                   src_m = re.search(r'src=["\']([^"\']+)["\']', attrs, re.I)
                   if src_m:
-                      lines.append(f'  script[{idx}] src={src_m.group(1)}')
-                  else:
+                      out.append(f'  script[{idx}] src={src_m.group(1)}')
+                  elif body.strip():
                       b = body.strip()
-                      if b and not b.startswith('{"@context"'):
-                          lines.append(f'  script[{idx}] inline({len(b)}): {b[:1500]}')
-                      elif b:
-                          lines.append(f'  script[{idx}] ld+json({len(b)}): {b[:300]}')
+                      if b.startswith('{"@context"'):
+                          out.append(f'  script[{idx}] ld+json: {b[:250]}')
+                      else:
+                          out.append(f'  script[{idx}] inline({len(b)}): {b[:1400]}')
 
-          for rel, p in js_files:
+          seen_other = set()
+          for rel, p, sz, h in non_img:
+              if rel.endswith(('.html', '.htm', '.css')):
+                  continue
+              if h in seen_other:
+                  continue
+              seen_other.add(h)
               txt = p.read_text('utf-8', 'replace')
-              lines.append(f'\n--- JS {rel} ({len(txt)}B) sha256={hashlib.sha256(txt.encode()).hexdigest()[:12]} ---')
-              # Print relevant snippets / full small JS or interesting parts of bundle
-              if len(txt) <= 12000:
-                  lines.append(txt)
+              out.append(f'\n=== NON_HTML {rel} ({sz}B {h}) ===')
+              if 'app-' in rel or 'player' in txt or 'sanctum' in txt or 'X-SL-' in txt or '_slP' in txt:
+                  out.append(txt if sz <= 90000 else txt[:12000])
+              elif sz <= 8000:
+                  out.append(txt)
               else:
-                  for kw in ['player-url', 'player-embed', 'X-SL-Render', 'sanctum', 'main-header', '_slP', '_slOff', 'data-player-token', 'data-lazy-embed', 'fetch(', 'XMLHttpRequest', 'XSRF', 'csrf']:
-                      for m in re.finditer(re.escape(kw), txt, re.I):
-                          s = max(0, m.start() - 180)
-                          e = min(len(txt), m.end() + 260)
-                          lines.append(f'  [{kw}@{m.start()}]: {txt[s:e]}')
+                  out.append('HEAD: ' + txt[:600])
 
-          # LIVE probing of sololatino.net + first movie + first series + first episode + app-*.js
-          lines.append('\n=== LIVE SITE CHECK ===')
+          full = '\n'.join(out)
+          chunks = [full[i:i+3600] for i in range(0, len(full), 3600)]
+          for idx, ch in enumerate(chunks[:48]):
+              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f'::notice title=Z_{idx:02d}of{len(chunks):02d}::{safe}')
+          PY
+
+  inspect_live:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install playwright chromium
+        shell: bash
+        run: |
+          python3 -m pip install -q playwright
+          python3 -m playwright install chromium
+      - name: Live HTTP and Playwright Browser Capture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, re, urllib.error, urllib.request
+          from playwright.sync_api import sync_playwright
+
+          out = []
           def live_get(u, ref='https://sololatino.net/'):
               req = urllib.request.Request(u, headers={
                   'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
@@ -154,65 +176,123 @@ jobs:
                   return 0, {}, u, str(e)
 
           st, hdrs, fu, home = live_get('https://sololatino.net/')
-          lines.append(f'LIVE HOME: status={st} final={fu} len={len(home)} server={hdrs.get("Server")} cf={hdrs.get("CF-RAY")} ct={hdrs.get("Content-Type")}')
-          lines.append(f'LIVE HOME HEAD: {home[:700]!r}')
-          movie_urls = sorted(set(re.findall(r'https://sololatino\.net/pelicula/[A-Za-z0-9_.-]+|/pelicula/[A-Za-z0-9_.-]+', home)))
-          series_urls = sorted(set(re.findall(r'https://sololatino\.net/serie/[A-Za-z0-9_.-]+|/serie/[A-Za-z0-9_.-]+', home)))
-          app_js_urls = sorted(set(re.findall(r'https?://[^"\'\s<>]+/build/assets/[^"\'\s<>]+\.js|/build/assets/[^"\'\s<>]+\.js', home)))
-          lines.append(f'LIVE home links: movies={movie_urls[:5]} series={series_urls[:5]} js={app_js_urls}')
+          out.append(f'HTTP_HOME st={st} url={fu} len={len(home)} server={hdrs.get("Server")} cf={hdrs.get("CF-RAY")} cf_mitigated={hdrs.get("cf-mitigated")}')
+          movies = sorted(set(re.findall(r'https://sololatino\.net/pelicula/[A-Za-z0-9_.-]+|/pelicula/[A-Za-z0-9_.-]+', home)))
+          series = sorted(set(re.findall(r'https://sololatino\.net/serie/[A-Za-z0-9_.-]+|/serie/[A-Za-z0-9_.-]+', home)))
+          js_assets = sorted(set(re.findall(r'https?://[^"\'\s<>]+/build/assets/[^"\'\s<>]+\.js|/build/assets/[^"\'\s<>]+\.js', home)))
+          out.append(f'HTTP_LINKS movies={movies[:5]} series={series[:5]} js={js_assets}')
 
-          for mu in movie_urls[:2]:
-              full = mu if mu.startswith('http') else 'https://sololatino.net' + mu
-              ms, mhdr, mfu, mbody = live_get(full)
-              tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', mbody)
-              rurls = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', mbody)
-              lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', mbody)
-              ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', mbody, re.I)
-              lines.append(f'LIVE MOVIE {full}: st={ms} len={len(mbody)} tokens={len(tokens)} rurls={rurls[:4]} lazy={lazy} ifr={ifr}')
-              for sc in re.findall(r'<script\b[^>]*>([\s\S]*?)</script>', mbody, re.I):
-                  sc_s = sc.strip()
-                  if sc_s and not sc_s.startswith('{"@context"') and len(sc_s) < 2500:
-                      lines.append(f'  MOVIE INLINE SCRIPT: {sc_s[:800]}')
-
-          for su in series_urls[:2]:
-              full = su if su.startswith('http') else 'https://sololatino.net' + su
-              ss, shdr, sfu, sbody = live_get(full)
-              eps = sorted(set(re.findall(r'/serie/[A-Za-z0-9_.-]+/temporada-\d+/episodio-\d+', sbody)))
-              lines.append(f'LIVE SERIES {full}: st={ss} len={len(sbody)} eps={eps[:5]}')
-              if eps:
-                  efull = 'https://sololatino.net' + eps[0]
-                  es, ehdr, efu, ebody = live_get(efull, full)
-                  tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', ebody)
-                  rurls = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', ebody)
-                  lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', ebody)
-                  ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', ebody, re.I)
-                  lines.append(f'LIVE EP {efull}: st={es} len={len(ebody)} tokens={len(tokens)} rurls={rurls[:4]} lazy={lazy} ifr={ifr}')
-
-          for ju in app_js_urls[:2]:
+          for ju in js_assets[:2]:
               full = ju if ju.startswith('http') else 'https://sololatino.net' + ju
-              js_st, _, _, js_body = live_get(full)
-              lines.append(f'LIVE JS {full}: st={js_st} len={len(js_body)} sha256={hashlib.sha256(js_body.encode()).hexdigest()[:12]}')
-              for kw in ['player-url', 'player-embed', 'X-SL-Render', 'sanctum', 'main-header', '_slP', '_slOff', 'data-player-token', 'data-lazy-embed', 'XSRF', 'resolved']:
-                  for m in re.finditer(re.escape(kw), js_body, re.I):
-                      s = max(0, m.start() - 180)
-                      e = min(len(js_body), m.end() + 260)
-                      lines.append(f'  LIVE_JS [{kw}@{m.start()}]: {js_body[s:e]}')
+              jst, _, _, jbody = live_get(full)
+              jh = hashlib.sha256(jbody.encode()).hexdigest()[:10]
+              out.append(f'LIVE_APP_JS {full} st={jst} len={len(jbody)} sha={jh}')
+              for kw in ['player-url', 'player-embed', 'X-SL-', 'sanctum', '_slP', '_slOff', 'main-header', 'player-frame', 'data-player-token']:
+                  for m in re.finditer(re.escape(kw), jbody, re.I):
+                      out.append(f'  [{kw}@{m.start()}]: {jbody[max(0,m.start()-180):min(len(jbody),m.end()+260)]}')
 
-          full_report = '\n'.join(lines)
-          pathlib.Path('/tmp/report.txt').write_text(full_report)
-          print('REPORT_BYTES:', len(full_report))
-          PY
-      - name: Emit report chunks as notices
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib
-          txt = pathlib.Path('/tmp/report.txt').read_text('utf-8', 'replace')
-          # GitHub annotations limit ~50 per job; each notice ~3500 chars
-          chunk_size = 3400
-          chunks = [txt[i:i+chunk_size] for i in range(0, len(txt), chunk_size)]
-          print(f'Total chunks: {len(chunks)}')
+          def summarize_html(label, u, b):
+              t = re.findall(r'data-player-token=["\']([^"\']+)["\']', b)
+              ru = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', b)
+              rt = re.findall(r'data-resolved-type=["\']([^"\']+)["\']', b)
+              lz = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', b)
+              ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', b, re.I)
+              csrf = (re.search(r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)["\']', b, re.I) or [None,''])[1]
+              out.append(f'{label} url={u} len={len(b)} csrf={csrf!r} tokens={len(t)}({t[:2]}) rurls={ru[:4]} rtypes={rt[:4]} lazy={lz} ifr={ifr}')
+              pf = re.search(r'(<[^>]+id=["\']player-frame["\'][\s\S]{0,600})', b, re.I)
+              if pf: out.append('  PF: ' + re.sub(r'\s+', ' ', pf.group(1)))
+              for idx, (attrs, body) in enumerate(re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', b, re.I)):
+                  if not re.search(r'\bsrc=', attrs, re.I) and body.strip() and not body.strip().startswith('{"@context"'):
+                      out.append(f'  SCRIPT[{idx}]: {body.strip()[:1200]}')
+
+          sample_movies = [('https://sololatino.net' + m) if not m.startswith('http') else m for m in movies[:2]]
+          sample_series = ('https://sololatino.net' + series[0]) if series and not series[0].startswith('http') else (series[0] if series else None)
+          for mu in sample_movies:
+              mst, _, mfu, mb = live_get(mu)
+              summarize_html(f'HTTP_MOVIE st={mst}', mfu, mb)
+          sample_ep = None
+          if sample_series:
+              sst, _, sfu, sb = live_get(sample_series)
+              eps = sorted(set(re.findall(r'https://sololatino\.net/serie/[A-Za-z0-9_.-]+/temporada-\d+/episodio-\d+|/serie/[A-Za-z0-9_.-]+/temporada-\d+/episodio-\d+', sb)))
+              out.append(f'HTTP_SERIES st={sst} url={sfu} len={len(sb)} eps_count={len(eps)} first={eps[:3]}')
+              if eps:
+                  sample_ep = ('https://sololatino.net' + eps[0]) if not eps[0].startswith('http') else eps[0]
+                  est, _, efu, eb = live_get(sample_ep, sample_series)
+                  summarize_html(f'HTTP_EP st={est}', efu, eb)
+
+          with sync_playwright() as pw:
+              browser = pw.chromium.launch(headless=True)
+              ctx = browser.new_context(
+                  user_agent='Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+                  viewport={'width': 412, 'height': 915},
+                  locale='es-419',
+              )
+              page = ctx.new_page()
+              events = []
+              def on_req(req):
+                  u = req.url
+                  if any(k in u for k in ['/api/', 'sanctum', 's.php', 'pelisserieshoy', 'embed69', 'sololatino.net/pelicula', 'sololatino.net/serie', 'altcha', 'voe', 'caseyseemavoid', 'morencius']):
+                      events.append(('REQ', req.method, u[:140], {k: v for k, v in req.headers.items() if k.lower() in ('x-xsrf-token', 'x-csrf-token', 'x-sl-render', 'x-requested-with', 'referer', 'origin', 'content-type')}, (req.post_data or '')[:200]))
+              def on_res(res):
+                  u = res.url
+                  if any(k in u for k in ['/api/', 'sanctum', 's.php', 'pelisserieshoy', 'embed69', 'sololatino.net/pelicula', 'sololatino.net/serie', 'altcha']):
+                      body = ''
+                      try:
+                          ct = res.headers.get('content-type', '')
+                          if 'json' in ct or 'text' in ct or 'javascript' in ct:
+                              body = res.text()[:500]
+                      except Exception as e:
+                          body = f'err:{e}'
+                      events.append(('RES', res.status, u[:140], {'date': res.headers.get('date'), 'set-cookie': res.headers.get('set-cookie', '')[:120]}, body))
+              page.on('request', on_req)
+              page.on('response', on_res)
+
+              for label, target in [('PW_MOVIE', sample_movies[0] if sample_movies else None), ('PW_EP', sample_ep)]:
+                  if not target: continue
+                  events.clear()
+                  out.append(f'\n=== {label}: {target} ===')
+                  try:
+                      page.goto(target, wait_until='networkidle', timeout=25000)
+                  except Exception as e:
+                      out.append(f'  goto_err={e}')
+                  page.wait_for_timeout(2500)
+                  state = page.evaluate('''() => ({
+                      href: location.href,
+                      title: document.title,
+                      cookies: document.cookie,
+                      csrf: (document.querySelector('meta[name="csrf-token"]')||{}).content || '',
+                      slP: window._slP,
+                      slOff: window._slOff,
+                      btns: Array.from(document.querySelectorAll('[data-player-token],[data-resolved-url]')).map(b => ({
+                          txt: b.textContent.trim().replace(/\s+/g,' '),
+                          tok: b.getAttribute('data-player-token'),
+                          rurl: b.getAttribute('data-resolved-url'),
+                          rtype: b.getAttribute('data-resolved-type')
+                      })),
+                      pf: (() => {
+                          const el = document.querySelector('#player-frame');
+                          return el ? {lazy: el.getAttribute('data-lazy-embed'), html: el.innerHTML.slice(0,400)} : null;
+                      })()
+                  })''')
+                  out.append('  STATE=' + json.dumps(state, ensure_ascii=False)[:3000])
+                  btns = page.locator('button[data-player-token]')
+                  cnt = btns.count()
+                  out.append(f'  BTN_COUNT={cnt}')
+                  for i in range(min(cnt, 3)):
+                      try:
+                          btns.nth(i).click(timeout=3000)
+                          page.wait_for_timeout(2200)
+                      except Exception as e:
+                          out.append(f'  click[{i}] err={e}')
+                  iframe_srcs = page.evaluate('Array.from(document.querySelectorAll("iframe")).map(f => f.src)')
+                  out.append(f'  IFRAMES_AFTER_CLICK={iframe_srcs}')
+                  for ev in events:
+                      out.append('  EV: ' + json.dumps(ev, ensure_ascii=False))
+              browser.close()
+
+          full = '\n'.join(out)
+          chunks = [full[i:i+3600] for i in range(0, len(full), 3600)]
           for idx, ch in enumerate(chunks[:48]):
               safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f'::notice title=DUMP_{idx:02d}of{len(chunks):02d}::{safe}')
+              print(f'::notice title=L_{idx:02d}of{len(chunks):02d}::{safe}')
           PY
