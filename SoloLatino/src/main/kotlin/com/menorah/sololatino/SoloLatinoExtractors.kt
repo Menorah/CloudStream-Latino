@@ -11,7 +11,6 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.JwPlayerHelper
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
@@ -681,7 +680,7 @@ open class SoloLatinoPelisSeriesHoyExtractor : ExtractorApi() {
     }
 
     companion object {
-        suspend fun extractWithClient(
+        internal suspend fun extractWithClient(
             client: SoloLatinoClient,
             url: String,
             referer: String?,
@@ -1221,17 +1220,10 @@ open class SoloLatinoStreamWishExtractor : ExtractorApi() {
                 .firstOrNull { it.data().contains("sources:") || it.data().contains("jwplayer(") }
                 ?.data()
             if (!scriptData.isNullOrBlank()) {
-                val origin = SoloLatinoHostHttp.originOf(res.url)
-                var jwOk = false
-                JwPlayerHelper.extractStreamLinks(
-                    scriptData,
-                    sourceLabel,
-                    origin,
-                    { jwOk = true; callback(it) },
-                    subtitleCallback,
-                    mapOf("Origin" to origin, "Referer" to "$origin/", "user-agent" to SoloLatinoHostHttp.MOBILE_UA),
-                )
-                if (jwOk) return true
+                val jwParsed = SoloLatinoVidHideParser.parse(scriptData, res.url)
+                if (jwParsed.streams.isNotEmpty() && emitParsed(jwParsed, sourceLabel, subtitleCallback, callback)) {
+                    return true
+                }
             }
             return false
         }
@@ -1900,7 +1892,7 @@ open class SoloLatinoGDriveExtractor : ExtractorApi() {
                     val dlForm: Element? = doc.selectFirst("form#download-form")
                     val action = (dlForm?.attr("abs:action")?.takeIf { it.isNotBlank() } ?: dlForm?.attr("action"))?.trim()
                     if (!action.isNullOrBlank()) {
-                        val params = dlForm.select("input[name]").mapNotNull { inp ->
+                        val params = dlForm?.select("input[name]").orEmpty().mapNotNull { inp ->
                             val n = inp.attr("name").trim()
                             val v = inp.attr("value").trim()
                             if (n.isNotEmpty()) "$n=${java.net.URLEncoder.encode(v, StandardCharsets.UTF_8.name())}" else null
