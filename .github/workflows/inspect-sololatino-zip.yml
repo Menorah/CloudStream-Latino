@@ -1,4 +1,4 @@
-name: Inspect SoloLatino ZIP Part 3
+name: Inspect SoloLatino PSH & Live
 on:
   push:
     branches:
@@ -6,19 +6,18 @@ on:
 permissions:
   contents: read
 jobs:
-  zip_part3:
+  psh_scripts:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        part: [psh_player, e69_player_js, home_and_theboys]
     steps:
-      - name: Emit ${{ matrix.part }}
+      - name: Extract tt1190634-5x08 scripts & test e69 decryption
         shell: bash
         run: |
+          python3 -m pip install -q cryptography
           python3 - <<'PY'
-          import os, pathlib, re, urllib.request, zipfile
+          import base64, hashlib, pathlib, re, urllib.request, zipfile
+          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+          from cryptography.hazmat.primitives import padding
 
-          PART = os.environ['PART']
           DEST = pathlib.Path('/tmp/zip_inspect')
           DEST.mkdir(parents=True, exist_ok=True)
           headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36', 'Accept': '*/*'}
@@ -45,47 +44,97 @@ jobs:
           all_files = sorted(p for p in DEST.rglob('*') if p.is_file())
           out = []
 
-          if PART == 'psh_player':
-              p = next(x for x in all_files if x.name == 'tt1190634-5x08.html')
-              txt = p.read_text('utf-8', 'replace')
-              out.append(f'=== PSH_PLAYER {p.relative_to(DEST)} len={len(txt)} ===')
-              out.append(txt[:33000])
+          p = next(x for x in all_files if x.name == 'tt1190634-5x08.html')
+          txt = p.read_text('utf-8', 'replace')
+          cleaned = re.sub(r'<style\b[^>]*>[\s\S]*?</style>', '', txt, flags=re.I)
+          out.append(f'=== PSH_NO_STYLE len={len(cleaned)} ===')
+          out.append(cleaned)
 
-          elif PART == 'e69_player_js':
-              p = next(x for x in all_files if x.name == 'tt45368240.html')
-              txt = p.read_text('utf-8', 'replace')
-              out.append(f'=== E69_FULL len={len(txt)} ===')
-              for idx, (attrs, body) in enumerate(re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)):
-                  if idx == 3:
-                      out.append(f'sc[3] len={len(body)}:\n' + body)
-              # Also show body HTML (excluding style/script)
-              cleaned = re.sub(r'<(script|style)\b[\s\S]*?</\1>', '', txt, flags=re.I)
-              out.append('=== E69 BODY_HTML ===\n' + re.sub(r'\s+', ' ', cleaned)[:8000])
-
-          elif PART == 'home_and_theboys':
-              tb = next(x for x in all_files if 'Ver The Boys' in x.name and x.suffix == '.html').read_text('utf-8', 'replace')
-              out.append('=== THE_BOYS_SEASON_5 ===')
-              m = re.search(r'data-season-panel=["\']5["\'][\s\S]{0,12000}', tb)
-              if m:
-                  out.append(m.group(0)[:10000])
-              home = next(x for x in all_files if 'Ver películas y series' in x.name and x.suffix == '.html').read_text('utf-8', 'replace')
-              out.append('=== HOME SECTIONS ===')
-              secs = re.findall(r'<h2[^>]*>[\s\S]{0,120}', home)
-              out.append('H2: ' + str([re.sub(r'\s+', ' ', s) for s in secs]))
-              m_ep = re.search(r'id=["\']scroll-episodios["\'][\s\S]{0,6000}', home)
-              if m_ep:
-                  out.append('EP_CAROUSEL: ' + m_ep.group(0)[:5500])
-              m_grid = re.search(r'id=["\']ep-grid-wrapper["\'][\s\S]{0,4000}', home)
-              if m_grid:
-                  out.append('EP_GRID: ' + m_grid.group(0)[:3500])
-              m_cards = re.findall(r'<div[^>]*class=["\']card["\'][\s\S]{0,900}', home)
-              out.append('FIRST_3_CARDS:\n' + '\n---\n'.join(m_cards[:3]))
+          # Decrypt tt45368240 dataLink
+          e69 = next(x for x in all_files if x.name == 'tt45368240.html').read_text('utf-8', 'replace')
+          key = hashlib.sha256(b'3cd48b9b8c8c63eb3ac7cf3837cca0d36d07665b9850a0db').digest()
+          for tok in [
+              'wVBFKjxIcb4101hgPHWfZ3HCXKdwBiBzUXIuMX7nFo5rKtrpYcNBjjk7Ne+RWZ4adVDsQ06eoEuu+mQhRqSBPQ==',
+              'VSPBVtRb1Ck1JSN6qzhHLwmiUgy4UG3RK/DqCjiGMSkq8vsadzIfMSUPtc/ODn0W',
+              'KFvRVLBnuL7LuCxP90xnHObJ1to6u7t/sIuJnecIWGT3Y36V6+/d9EJK6HQEaBQ11HNFfIgOGMcBXM9ZK/f76Q==',
+          ]:
+              raw = base64.b64decode(tok)
+              dec = Cipher(algorithms.AES(key), modes.CBC(raw[:16])).decryptor()
+              pt = dec.update(raw[16:]) + dec.finalize()
+              unpadder = padding.PKCS7(128).unpadder()
+              pt = unpadder.update(pt) + unpadder.finalize()
+              out.append('E69_DEC: ' + pt.decode('utf-8', 'replace'))
 
           full = '\n'.join(out)
           chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
           for idx, ch in enumerate(chunks[:10]):
               safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f'::notice title={PART}_{idx:02d}of{len(chunks):02d}::{safe}')
+              print(f'::notice title=PSH_{idx:02d}of{len(chunks):02d}::{safe}')
           PY
-        env:
-          PART: ${{ matrix.part }}
+
+  probe_cf_real:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check live PSH & SoloLatino responses + curl_cffi + xvfb playwright
+        shell: bash
+        run: |
+          python3 -m pip install -q curl_cffi playwright
+          python3 -m playwright install chromium
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb >/dev/null 2>&1 || true
+          python3 - <<'PY'
+          import re
+          from curl_cffi import requests as cfreq
+          from playwright.sync_api import sync_playwright
+
+          out = []
+          for imp in ['chrome131', 'chrome124', 'safari17_0']:
+              for u in [
+                  'https://sololatino.net/',
+                  'https://sololatino.net/peliculas',
+                  'https://player.pelisserieshoy.com/',
+                  'https://player.pelisserieshoy.com/f/tt45368240',
+                  'https://embed69.org/f/tt45368240',
+              ]:
+                  try:
+                      r = cfreq.get(u, impersonate=imp, headers={'Referer': 'https://sololatino.net/', 'Accept-Language': 'es-419,es;q=0.9'}, timeout=12)
+                      snip = re.sub(r'\s+', ' ', r.text)[:240]
+                      out.append(f'CF[{imp}] {u} -> {r.status_code} len={len(r.text)} cf_mit={r.headers.get("cf-mitigated")} snip={snip!r}')
+                  except Exception as e:
+                      out.append(f'CF[{imp}] {u} -> ERR {e}')
+              break
+
+          # Try Xvfb headed chromium!
+          import subprocess, os
+          xvfb = subprocess.Popen(['Xvfb', ':99', '-screen', '0', '412x915x24'])
+          os.environ['DISPLAY'] = ':99'
+          try:
+              with sync_playwright() as pw:
+                  browser = pw.chromium.launch(headless=False, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
+                  ctx = browser.new_context(
+                      user_agent='Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+                      viewport={'width': 412, 'height': 915},
+                      locale='es-419',
+                  )
+                  ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                  page = ctx.new_page()
+                  r = page.goto('https://sololatino.net/', wait_until='domcontentloaded', timeout=25000)
+                  for i in range(12):
+                      t = page.title()
+                      if 'moment' not in t.lower() and len(page.content()) > 20000:
+                          break
+                      page.wait_for_timeout(1000)
+                  html = page.content()
+                  out.append(f'XVFB_HOME st={r.status if r else None} url={page.url} title={page.title()!r} len={len(html)} cookies={[(c["name"],c["value"][:18]) for c in ctx.cookies()]}')
+                  out.append('XVFB_HEAD: ' + re.sub(r'\s+', ' ', html)[:400])
+                  browser.close()
+          except Exception as e:
+              out.append(f'XVFB_ERR: {e}')
+          finally:
+              xvfb.terminate()
+
+          full = '\n'.join(out)
+          chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
+          for idx, ch in enumerate(chunks[:10]):
+              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f'::notice title=LIVE3_{idx:02d}of{len(chunks):02d}::{safe}')
+          PY
