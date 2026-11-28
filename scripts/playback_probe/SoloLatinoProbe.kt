@@ -79,6 +79,7 @@ object PlaybackProbe {
                         withContext(Dispatchers.IO) {
                             val hdr = mapOf("User-Agent" to SoloLatinoHostHttp.MOBILE_UA)
                             val ck = linkedMapOf<String, String>()
+                            val r0 = runCatching { com.lagradost.cloudstream3.app.get("https://voe.sx/e/84emedzn9bzh", referer = "https://embed69.org/", headers = hdr, cookies = ck, timeout = 6L) }.getOrNull()
                             val r1 = runCatching { com.lagradost.cloudstream3.app.get("https://caseyseemavoid.com/e/84emedzn9bzh", referer = "https://embed69.org/", headers = hdr, cookies = ck, timeout = 8L) }.getOrNull()
                             r1?.let { ck.putAll(it.cookies) }
                             val doc = r1?.text?.let { Jsoup.parse(it, r1.url) }
@@ -94,14 +95,19 @@ object PlaybackProbe {
                                 com.lagradost.cloudstream3.app.post(
                                     act,
                                     referer = r1!!.url,
-                                    headers = hdr + mapOf("Origin" to "https://caseyseemavoid.com"),
+                                    headers = hdr + mapOf("Origin" to "https://caseyseemavoid.com", "Content-Type" to "application/x-www-form-urlencoded"),
                                     cookies = ck,
                                     data = mapOf("_token" to tok, "access" to "0", "altcha" to sol),
                                     timeout = 10L,
                                 )
                             }.getOrNull() else null
-                            val pSnip = pRes?.text?.replace(Regex("\\s+"), " ")?.take(180).orEmpty()
-                            Log.i("CSPlaybackProbe", "VOE_DIAG r1=${r1?.code}:ck=${ck.keys} ch=${chRes?.code}:${chRes?.text?.take(90)} sol=${sol != null}(${solveMs}ms) post=${pRes?.code}:hasJson=${pRes?.text?.contains("application/json")}:snip=$pSnip")
+                            val pDoc = pRes?.text?.let { Jsoup.parse(it, pRes.url) }
+                            val rawJs = pDoc?.selectFirst("script[type=application/json]")?.data()?.trim().orEmpty()
+                            val enc = Regex("""\[\s*"([^"]+)"\s*]""").find(rawJs)?.groupValues?.getOrNull(1)
+                                ?: rawJs.substringAfter("[\"", "").substringBeforeLast("\"]", "")
+                            val dec = if (enc.isNotBlank()) SoloLatinoVoeCrypto.decryptF7(enc) else null
+                            val directOk = SoloLatinoVoeExtractor.extract("https://caseyseemavoid.com/e/84emedzn9bzh", "https://embed69.org/", "VoeTest", {}, { }, client = null)
+                            Log.i("CSPlaybackProbe", "VOE_DIAG r0=${r0?.code}:${r0?.url}:${r0?.text?.length} r1=${r1?.code} post=${pRes?.code}:rawLen=${rawJs.length}:rawHead=${rawJs.take(60)}:dec=${dec?.get("source")?.asText()?.take(60)} directOk=$directOk")
                         }
                         error("VOE failed - inspect VOE_DIAG")
                     }
