@@ -52,8 +52,9 @@ set -e
 curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cloudstream.apk
 adb install -r /tmp/cloudstream.apk
 package=com.lagradost.cloudstream3.prerelease
-adb shell pm grant "$package" android.permission.READ_EXTERNAL_STORAGE
-adb shell pm grant "$package" android.permission.WRITE_EXTERNAL_STORAGE
+adb shell pm grant "$package" android.permission.READ_EXTERNAL_STORAGE || true
+adb shell pm grant "$package" android.permission.WRITE_EXTERNAL_STORAGE || true
+adb shell appops set "$package" MANAGE_EXTERNAL_STORAGE allow || true
 adb shell mkdir -p /sdcard/Cloudstream3/plugins
 adb push SoloLatino/build/SoloLatino.cs3 /sdcard/Cloudstream3/plugins/SoloLatino.cs3
 echo "::notice::APK+CS3 installed, launching $package"
