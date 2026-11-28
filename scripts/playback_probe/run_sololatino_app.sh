@@ -65,7 +65,7 @@ for i in $(seq 1 120); do
   log=$(adb logcat -d -s CSPlaybackProbe:V '*:S' || true)
   if echo "$log" | grep -q 'PASS all'; then
     echo "$log"
-    summary=$(echo "$log" | grep -E 'STAGE |LIVE_|HOST_|PASS coil|PASS webview|PASS cancel|PASS playback|PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g' || true)
+    summary=$(echo "$log" | grep -E 'STAGE |LIVE_|HOST_|VOE_DIAG |PASS coil|PASS webview|PASS cancel|PASS playback|PASS all' | sed -e 's/.*CSPlaybackProbe: //' | tr '\n' '|' | sed -e 's/%/%25/g' -e 's/|/; /g' || true)
     echo "::notice::$summary"
     echo '::notice::CloudStream comprobó SoloLatino v4 y reprodujo las muestras con Media3'
     exit 0

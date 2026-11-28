@@ -68,12 +68,37 @@ object PlaybackProbe {
                             }.awaitAll()
                         }
                     }
-                    Log.i("CSPlaybackProbe", "HOST_DIRECT count=${directHostLinks.size} names=${directHostLinks.map { it.name }}")
+                    Log.i("CSPlaybackProbe", "HOST_DIRECT count=${directHostLinks.size} names=${directHostLinks.map { it.name }} urls=${directHostLinks.take(4).map { it.url.take(60) }}")
                     check(directHostLinks.isNotEmpty()) { "HOST_DIRECT returned no links" }
-                    val voeLink = directHostLinks.firstOrNull { it.name.contains("Voe", ignoreCase = true) }
+                    val voeLink = directHostLinks.firstOrNull { it.name.contains("Voe", ignoreCase = true) || it.url.contains("voe", ignoreCase = true) }
                     val vidhideLink = directHostLinks.firstOrNull { !it.name.contains("Voe", ignoreCase = true) }
                     if (vidhideLink != null) playFirstWorking(context, "host-vidhide", listOf(vidhideLink))
-                    if (voeLink != null) playFirstWorking(context, "host-voe-altcha", listOf(voeLink))
+                    if (voeLink != null) {
+                        playFirstWorking(context, "host-voe-altcha", listOf(voeLink))
+                    } else {
+                        // Diagnose exact VOE behavior in Android emulator
+                        withContext(Dispatchers.IO) {
+                            val r1 = runCatching {
+                                com.lagradost.cloudstream3.app.get(
+                                    "https://voe.sx/e/84emedzn9bzh",
+                                    referer = "https://embed69.org/",
+                                    headers = mapOf("User-Agent" to sysUa),
+                                    timeout = 10L,
+                                )
+                            }.getOrNull()
+                            val r2 = runCatching {
+                                com.lagradost.cloudstream3.app.get(
+                                    "https://caseyseemavoid.com/e/84emedzn9bzh",
+                                    referer = "https://voe.sx/e/84emedzn9bzh",
+                                    headers = mapOf("User-Agent" to SoloLatinoHostHttp.MOBILE_UA),
+                                    timeout = 10L,
+                                )
+                            }.getOrNull()
+                            val r1Snip = r1?.text?.replace(Regex("\\s+"), " ")?.take(220).orEmpty()
+                            val r2Snip = r2?.text?.replace(Regex("\\s+"), " ")?.take(220).orEmpty()
+                            Log.i("CSPlaybackProbe", "VOE_DIAG r1=${r1?.code}:${r1?.url}:${r1Snip} || r2=${r2?.code}:${r2?.url}:altcha=${r2?.text?.contains("altcha")}:json=${r2?.text?.contains("application/json")}:${r2Snip}")
+                        }
+                    }
 
                     // 2. Verify Coil 3 image loading across TMDB w500 / w1280 / w400 URLs
                     verifyCoilImage(context, "tmdb-poster-w500", "https://image.tmdb.org/t/p/w500/zDE9hd1SG9695YncbZGjSf7Z9Jk.jpg", null)
