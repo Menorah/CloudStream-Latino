@@ -1,0 +1,245 @@
+name: Inspect SoloLatino ZIP
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/inspect-sololatino-zip.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect_tree_and_subframes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download, list, and summarize ZIP
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, os, pathlib, re, urllib.request, zipfile
+
+          def emit(tag, text, max_ann=10, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+
+          req = urllib.request.Request(
+              "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip",
+              headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"},
+          )
+          page = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+          m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', page)
+          dl_url = m.group(0) if m else "https://tmpfiles.org/dl/1795841645.e782f0f73a74db6e/wLAXvg4SCnBj/sololatino.net.zip"
+          dl_req = urllib.request.Request(
+              dl_url,
+              headers={
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+                  "Referer": "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip",
+              },
+          )
+          with urllib.request.urlopen(dl_req, timeout=180) as r, open("/tmp/sl.zip", "wb") as f:
+              while True:
+                  buf = r.read(65536)
+                  if not buf:
+                      break
+                  f.write(buf)
+          with zipfile.ZipFile("/tmp/sl.zip") as zf:
+              zf.extractall("/tmp/sl_zip")
+
+          root = pathlib.Path("/tmp/sl_zip")
+          htmls, js_files, other_nonimg = [], [], []
+          for p in sorted(root.rglob("*")):
+              if not p.is_file():
+                  continue
+              rel = str(p.relative_to(root))
+              sz = p.stat().st_size
+              low = p.name.lower()
+              if low.endswith((".html", ".htm")):
+                  htmls.append(f"{rel} ({sz} B)")
+              elif low.endswith(".js") or ".js." in low or "download" in low:
+                  js_files.append(f"{rel} ({sz} B)")
+              elif not low.endswith((".png", ".jpg", ".jpeg", ".webp", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".css")):
+                  other_nonimg.append(f"{rel} ({sz} B)")
+
+          emit("TREE_HTML", f"count={len(htmls)}\n" + "\n".join(htmls), max_ann=6)
+          emit("TREE_JS", f"js={len(js_files)} other={len(other_nonimg)}\n" + "\n".join(js_files[:80] + ["---OTHER---"] + other_nonimg[:80]), max_ann=6)
+          PY
+
+      - name: Summarize every HTML file
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, re
+
+          def emit(tag, text, max_ann=10, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+
+          root = pathlib.Path("/tmp/sl_zip")
+          lines = []
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or p.suffix.lower() not in (".html", ".htm"):
+                  continue
+              rel = str(p.relative_to(root))
+              txt = p.read_text(errors="replace")
+              tokens = re.findall(r'data-player-token=["\']([^"\']+)', txt)
+              lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)', txt)
+              iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)', txt, re.I)
+              apis = sorted(set(re.findall(r'(?:https?://[^"\'\s<>]+)?/(?:api|sanctum)/[A-Za-z0-9_./-]+', txt)))
+              player_words = [w for w in ("PLAYER+", "player+", "player-plus", "pelisserieshoy", "embed69", "dataLink", "_qc", "_qk", "_qsrc", "X-SL-Render", "data-resolved-url") if w in txt]
+              lines.append(f"{rel} ({len(txt)}B) sha={hashlib.sha1(txt.encode()).hexdigest()[:8]} kw={player_words} tok={tokens[:8]} lazy={lazy} ifr={iframes[:8]} api={apis[:12]}")
+          emit("HTML_SUMMARY", "\n".join(lines), max_ann=10)
+          PY
+
+      - name: Dump unique _files subframes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, re
+
+          def emit(tag, text, max_ann=10, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+
+          root = pathlib.Path("/tmp/sl_zip")
+          seen = set()
+          out = []
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or p.suffix.lower() not in (".html", ".htm"):
+                  continue
+              rel = str(p.relative_to(root))
+              if "_files/" not in rel:
+                  continue
+              txt = p.read_text(errors="replace")
+              h = hashlib.sha1(txt.encode()).hexdigest()[:10]
+              if h in seen:
+                  out.append(f"=== SUBFRAME {rel} DUPLICATE sha={h} ===")
+                  continue
+              seen.add(h)
+              scripts = "\n---INLINE_JS---\n".join(re.findall(r'<script[^>]*>([\s\S]*?)</script>', txt, re.I))
+              body = txt if len(txt) < 12000 else (txt[:4000] + "\n...[MID]...\n" + scripts[:22000])
+              out.append(f"=== SUBFRAME {rel} ({len(txt)} B, sha={h}) ===\n{body}")
+          emit("SUBFRAMES", "\n\n".join(out), max_ann=10)
+          PY
+
+  inspect_pages_and_js:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and extract ZIP
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re, urllib.request, zipfile
+          req = urllib.request.Request("https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip", headers={"User-Agent": "Mozilla/5.0 Chrome/131.0.0.0"})
+          page = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+          m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', page)
+          dl_url = m.group(0) if m else "https://tmpfiles.org/dl/1795841645.e782f0f73a74db6e/wLAXvg4SCnBj/sololatino.net.zip"
+          dl_req = urllib.request.Request(dl_url, headers={"User-Agent": "Mozilla/5.0 Chrome/131.0.0.0", "Referer": "https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip"})
+          with urllib.request.urlopen(dl_req, timeout=180) as r, open("/tmp/sl.zip", "wb") as f:
+              while True:
+                  buf = r.read(65536)
+                  if not buf:
+                      break
+                  f.write(buf)
+          with zipfile.ZipFile("/tmp/sl.zip") as zf:
+              zf.extractall("/tmp/sl_zip")
+          PY
+
+      - name: Dump player DOM and inline JS from detail/episode HTMLs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+
+          def emit(tag, text, max_ann=10, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+
+          root = pathlib.Path("/tmp/sl_zip")
+          out = []
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or p.suffix.lower() not in (".html", ".htm"):
+                  continue
+              rel = str(p.relative_to(root))
+              if "_files/" in rel:
+                  continue
+              txt = p.read_text(errors="replace")
+              if any(k in txt for k in ("data-player-token", "data-lazy-embed", "player-frame", "PLAYER+", "data-lang-group")):
+                  m_player = re.search(r'(<(?:div|section)[^>]*(?:id=["\']player|data-lang-tab|data-lang-group|data-player-token)[\s\S]{0,16000})', txt, re.I)
+                  inline_scripts = [s for s in re.findall(r'<script[^>]*>([\s\S]*?)</script>', txt, re.I) if any(k in s for k in ("player", "token", "shield", "RENDER", "sanctum", "csrf", "PLAYER", "_sl", "embed", "lazy", "fetch("))]
+                  out.append(
+                      f"=== PAGE {rel} ({len(txt)} B) ===\n"
+                      f"--PLAYER_DOM--\n{m_player.group(1)[:9000] if m_player else 'NONE'}\n"
+                      f"--INLINE_JS--\n" + "\n---JS---\n".join(inline_scripts)[:16000]
+                  )
+          emit("PAGE_PLAYERS", "\n\n".join(out), max_ann=10)
+          PY
+
+      - name: Dump unique site and player JS bundles (part 1)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib
+
+          def emit(tag, text, max_ann=10, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+
+          root = pathlib.Path("/tmp/sl_zip")
+          by_sha = {}
+          for p in sorted(root.rglob("*")):
+              if not p.is_file():
+                  continue
+              name = p.name.lower()
+              if not (name.endswith(".js") or ".js." in name or "download" in name):
+                  continue
+              data = p.read_bytes()
+              sha = hashlib.sha1(data).hexdigest()[:10]
+              if sha in by_sha:
+                  continue
+              txt = data.decode("utf-8", "replace")
+              is_vendor = any(v in name for v in ("jquery", "bootstrap", "fontawesome", "gtag", "analytics", "vast", "video.min", "hls.min", "oxserver"))
+              if not is_vendor and len(txt) < 150000:
+                  by_sha[sha] = (str(p.relative_to(root)), txt)
+          out = [f"=== JS {rel} sha={sha} len={len(txt)} ===\n{txt}" for sha, (rel, txt) in by_sha.items()]
+          emit("JS_ALL", "\n\n".join(out), max_ann=10)
+          PY
+
+      - name: Dump any remaining large or second-half JS
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib
+
+          def emit(tag, text, max_ann=10, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+
+          root = pathlib.Path("/tmp/sl_zip")
+          by_sha = {}
+          for p in sorted(root.rglob("*")):
+              if not p.is_file():
+                  continue
+              name = p.name.lower()
+              if not (name.endswith(".js") or ".js." in name or "download" in name):
+                  continue
+              data = p.read_bytes()
+              sha = hashlib.sha1(data).hexdigest()[:10]
+              if sha in by_sha:
+                  continue
+              txt = data.decode("utf-8", "replace")
+              is_vendor = any(v in name for v in ("jquery", "bootstrap", "fontawesome", "gtag", "analytics", "vast", "video.min", "hls.min", "oxserver"))
+              if not is_vendor and len(txt) < 150000:
+                  by_sha[sha] = (str(p.relative_to(root)), txt)
+          full = "\n\n".join(f"=== JS {rel} sha={sha} len={len(txt)} ===\n{txt}" for sha, (rel, txt) in by_sha.items())
+          emit("JS_PART2", full[55000:], max_ann=10)
+          PY
