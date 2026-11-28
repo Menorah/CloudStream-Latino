@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Latanime:testDebugUnitTest :Repelis24CZ:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :PeliCineHD:testDebugUnitTest :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest :PelisJuanita:testDebugUnitTest :GnulaHD:testDebugUnitTest :Pelis182:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
+          ./gradlew :AnimeOnlineNinja:testDebugUnitTest :VerAni:testDebugUnitTest :Latanime:testDebugUnitTest :Repelis24CZ:testDebugUnitTest :RePelis24Shop:testDebugUnitTest :CinecalidadAM:testDebugUnitTest :CinecalidadMY:testDebugUnitTest :RePelisHD:testDebugUnitTest :PoseidonHD2:testDebugUnitTest :PeliCineHD:testDebugUnitTest :CinecalidadOrg:testDebugUnitTest :Cuevana3v:testDebugUnitTest :PelisJuanita:testDebugUnitTest :GnulaHD:testDebugUnitTest :Pelis182:testDebugUnitTest :SoloLatino:testDebugUnitTest make makePluginsJson --stacktrace > build-log.txt 2>&1
           status=$?
           cat build-log.txt
           if [ "$status" -ne 0 ]; then
@@ -63,6 +63,7 @@ jobs:
           cp PelisJuanita/build/PelisJuanita.cs3 output/
           cp GnulaHD/build/GnulaHD.cs3 output/
           cp Pelis182/build/Pelis182.cs3 output/
+          cp SoloLatino/build/SoloLatino.cs3 output/
           cp build/plugins.json output/
           cp repo.json output/
           cp assets/repo-icon.png output/repo-icon.png
@@ -75,6 +76,7 @@ jobs:
               'AnimeOnlineNinja.cs3', 'VerAni.cs3', 'Latanime.cs3', 'Repelis24CZ.cs3', 'CinecalidadAM.cs3',
               'CinecalidadMY.cs3', 'RePelisHD.cs3', 'PoseidonHD2.cs3', 'RePelis24Shop.cs3',
               'PeliCineHD.cs3', 'CinecalidadOrg.cs3', 'Cuevana3v.cs3', 'PelisJuanita.cs3', 'GnulaHD.cs3', 'Pelis182.cs3',
+              'SoloLatino.cs3',
           }
           assert names == expected, (sorted(names), sorted(expected))
           for name in expected:

@@ -19,6 +19,7 @@ Repositorio de extensiones no oficiales en **español latino (`es-419`)** para C
 - **Repelis24CZ** (películas y series)
 - **RePelis24Shop** (películas y series)
 - **RePelisHD** (películas y series)
+- **SoloLatino** (películas, series, animes y doramas)
 
 ## Instalación
 
