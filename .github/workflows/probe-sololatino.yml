@@ -1,4 +1,4 @@
-name: Probe SoloLatino Details And Players
+name: Probe SoloLatino Players And Details 3
 on:
   workflow_dispatch:
   push:
@@ -9,74 +9,12 @@ on:
 permissions:
   contents: read
 jobs:
-  job_series_and_episode:
+  job_psh_js:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect The Boys series and T5E08 episode HTMLs completely
+      - name: Dump player.pelisserieshoy.com full player script from zip
         shell: bash
         run: |
-          python3 -m pip install -q beautifulsoup4
-          python3 - <<'PY'
-          import urllib.request, zipfile, pathlib
-          from bs4 import BeautifulSoup
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              chunk_size = 3500
-              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
-              for idx, part in enumerate(parts):
-                  body = part if idx > 0 else part[len(f"[{tag}] "):]
-                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
-                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print("::notice::" + out[:3900])
-
-          def clean(soup):
-              for el in soup.find_all(True):
-                  for k in list(el.attrs):
-                      if 'darkreader' in k:
-                          del el.attrs[k]
-                  if 'style' in el.attrs and 'darkreader' in str(el.attrs['style']):
-                      del el.attrs['style']
-              return soup
-
-          zip_url = "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
-          with urllib.request.urlopen(urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"}), timeout=60) as r:
-              pathlib.Path("/tmp/sl.zip").write_bytes(r.read())
-          d = pathlib.Path("/tmp/sl_unzip")
-          d.mkdir(parents=True, exist_ok=True)
-          with zipfile.ZipFile("/tmp/sl.zip") as zf:
-              zf.extractall(d)
-
-          # 1. Series detail: The Boys
-          s_path = next(d.rglob("*The Boys (2019)*.html"))
-          s_soup = clean(BeautifulSoup(s_path.read_text(encoding='utf-8', errors='replace'), 'html.parser'))
-          s_lds = [sc.get_text(strip=True)[:1500] for sc in s_soup.select('script[type="application/ld+json"]')]
-          s_main = s_soup.select_one('main')
-          s_tabs = [f"{b.get_text(strip=True)} ({b.get('data-tab-btn')})" for b in s_soup.select('[data-tab-btn]')]
-          s_panels = [(p.get('data-tab-panel'), str(p)[:3000]) for p in s_soup.select('[data-tab-panel]')]
-          # Inspect full main structure excluding head/nav/footer
-          s_hero_info = str(s_main)[:5000] if s_main else ''
-          notice("SERIES_INFO", f"LDS={s_lds}\nTABS={s_tabs}\nHERO_INFO:\n{s_hero_info}")
-          for pname, phtml in s_panels:
-              notice(f"SERIES_PANEL_{pname}", phtml)
-
-          # 2. Episode detail: The Boys T5E08
-          e_path = next(d.rglob("*The Boys T5E08 Online en Latino*.html"))
-          e_soup = clean(BeautifulSoup(e_path.read_text(encoding='utf-8', errors='replace'), 'html.parser'))
-          e_lds = [sc.get_text(strip=True)[:1500] for sc in e_soup.select('script[type="application/ld+json"]')]
-          e_main = e_soup.select_one('main')
-          e_player = str(e_soup.select_one('#player-section')) if e_soup.select_one('#player-section') else 'NONE'
-          e_inlines = [sc.get_text() for sc in e_soup.select('script:not([src])') if any(w in sc.get_text().lower() for w in ['sl_', 'token', 'player', 'episode', 'movie', 'hist'])]
-          notice("EP_DETAIL", f"LDS={e_lds}\nPLAYER_FULL:\n{e_player}\nMAIN_HTML:\n{str(e_main)[:6000]}\nINLINES:\n" + "\n---\n".join(e_inlines))
-          PY
-
-  job_player_iframes:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Inspect saved embed iframes (pelisserieshoy, embed69, caseyseemavoid)
-        shell: bash
-        run: |
-          python3 -m pip install -q beautifulsoup4
           python3 - <<'PY'
           import urllib.request, zipfile, pathlib
           from bs4 import BeautifulSoup
@@ -99,25 +37,25 @@ jobs:
           with zipfile.ZipFile("/tmp/sl.zip") as zf:
               zf.extractall(d)
 
-          for name in ["tt1190634-5x08.html", "tt45368240.html"]:
-              p = next(d.rglob(name))
-              txt = p.read_text(encoding='utf-8', errors='replace')
-              sp = BeautifulSoup(txt, 'html.parser')
-              scripts = [sc.get('src') for sc in sp.select('script[src]')]
-              inlines = [sc.get_text() for sc in sp.select('script:not([src])') if sc.get_text(strip=True)]
-              notice(f"IFRAME_{name}", f"len={len(txt)} scripts={scripts}\nBODY_SAMPLE:\n{str(sp.body)[:2500]}\nINLINES:\n" + "\n===\n".join(inlines)[:12000])
+          txt = next(d.rglob("tt1190634-5x08.html")).read_text(encoding='utf-8', errors='replace')
+          idx = txt.find("const _t =")
+          if idx == -1:
+              idx = txt.find("_dlOptions")
+          tail = txt[max(0, idx - 200):]
+          notice("PSH_FULL_TAIL_1", tail[:33000])
           PY
 
-  job_home_header_and_movie_links:
+  job_embed69_and_decrypt:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect header logo, all home sections, movie detail full HTML, and remaining app.js
+      - name: Inspect embed69 full script and test live AES decrypt on embed69.org
         shell: bash
         run: |
-          python3 -m pip install -q beautifulsoup4 pillow
+          python3 -m pip install -q cryptography beautifulsoup4
           python3 - <<'PY'
-          import urllib.request, zipfile, pathlib, base64
-          from bs4 import BeautifulSoup
+          import urllib.request, zipfile, pathlib, re, json, hashlib, base64
+          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+          from cryptography.hazmat.primitives import padding
 
           def notice(tag, msg):
               s = f"[{tag}] " + msg
@@ -137,63 +75,104 @@ jobs:
           with zipfile.ZipFile("/tmp/sl.zip") as zf:
               zf.extractall(d)
 
-          # 1. Home header & ALL sections
-          hp = next(d.rglob("*Ver películas y series completas*.html"))
-          hs = BeautifulSoup(hp.read_text(encoding='utf-8', errors='replace'), 'html.parser')
-          header_html = str(hs.select_one('header'))[:3500] if hs.select_one('header') else ''
-          secs = []
-          for sec in hs.select('section'):
-              h = sec.select_one('h2, h3')
-              a_all = [a.get('href') for a in sec.select('a[href]') if 'ver ' in a.get_text(strip=True).lower() or 'más' in a.get_text(strip=True).lower() or '/red/' in (a.get('href') or '') or a.get('class') and 'text-' in str(a.get('class'))]
-              cards = sec.select('.card, .ep-card')
-              secs.append(f"h='{h.get_text(strip=True) if h else ''}' cards={len(cards)} links={a_all[:5]} cls={sec.get('class')}")
-          # Inspect all links inside main header dropdowns (genres, platforms)
-          nav_links = [(a.get_text(strip=True), a.get('href')) for a in hs.select('header a[href]')]
-          notice("HOME_SECTIONS_HEADER", f"HEADER:\n{header_html}\nSECTIONS({len(secs)}):\n" + "\n".join(secs) + f"\nNAV_LINKS({len(nav_links)}):\n{nav_links}")
+          txt = next(d.rglob("tt45368240.html")).read_text(encoding='utf-8', errors='replace')
+          idx = txt.find("changeLanguage(")
+          notice("E69_TAIL", txt[idx:idx+32000])
 
-          # 2. Movie detail (Puedes verlo todo) full metadata + player
-          mp = next(d.rglob("*Ver Puedes verlo todo*.html"))
-          ms = BeautifulSoup(mp.read_text(encoding='utf-8', errors='replace'), 'html.parser')
-          m_player = str(ms.select_one('#player-section')) if ms.select_one('#player-section') else ''
-          m_info = str(ms.select_one('[data-tab-panel="informacion"]'))
-          m_cast = str(ms.select_one('[data-tab-panel="reparto"]'))[:1800]
-          m_rec = str(ms.select('section')[-1])[:1200] if ms.select('section') else ''
-          m_top = str(ms.select_one('main'))[:3500]
-          notice("MOVIE_DETAIL", f"TOP:\n{m_top}\nPLAYER:\n{m_player}\nINFO:\n{m_info}\nCAST:\n{m_cast}\nREC:\n{m_rec}")
-
-          # 3. app.js end tail (63000..end)
-          app_js = next(d.rglob("app-*.js.download"))
-          atxt = app_js.read_text(encoding='utf-8', errors='replace')
-          notice("APP_JS_END", atxt[63000:])
-          PY
-
-  job_test_players_live:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Test live embed69 and player.pelisserieshoy.com directly from Actions
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import urllib.request, urllib.parse, json, re
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print("::notice::" + s[:3900])
-
+          # Test live decrypt on embed69.org for movie and episode!
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          for name, u, ref in [
-              ("EMBED69_MOVIE", "https://embed69.org/f/tt45368240", "https://sololatino.net/"),
-              ("EMBED69_THEBOYS", "https://embed69.org/f/tt1190634-5x08", "https://sololatino.net/"),
-              ("PSH_MOVIE", "https://player.pelisserieshoy.com/f/tt45368240", "https://sololatino.net/"),
-              ("PSH_THEBOYS", "https://player.pelisserieshoy.com/f/tt1190634-5x08", "https://sololatino.net/"),
-          ]:
-              try:
-                  r = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": ref})
-                  with urllib.request.urlopen(r, timeout=20) as resp:
-                      b = resp.read().decode('utf-8', 'replace')
-                      m_dl = re.search(r'dataLink\s*=\s*(\[.*?\]);', b, re.S)
-                      notice(name, f"st={resp.status} len={len(b)} has_dataLink={bool(m_dl)} sample={b[:1200]}")
-              except Exception as e:
-                  notice(name, f"err={e}")
+          results = []
+          for u in ["https://embed69.org/f/tt45368240", "https://embed69.org/f/tt1190634-5x08"]:
+              req = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": "https://sololatino.net/"})
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  html = resp.read().decode('utf-8', 'replace')
+              dl_m = re.search(r'let\s+dataLink\s*=\s*(\[.*?\]);', html, re.S)
+              ch_m = re.search(r"LINK_CHALLENGE\s*=\s*['\"]([^'\"]+)['\"]", html)
+              sa_m = re.search(r"LINK_SALT\s*=\s*['\"]([^'\"]+)['\"]", html)
+              if dl_m and ch_m and sa_m:
+                  key = hashlib.sha256((ch_m.group(1) + sa_m.group(1)).encode('utf-8')).digest()
+                  dl = json.loads(dl_m.group(1))
+                  dec_out = []
+                  for item in dl:
+                      lang = item.get('video_language')
+                      for srv in item.get('sortedEmbeds', []):
+                          enc = srv.get('link')
+                          if isinstance(enc, dict):
+                              enc = enc.get('link')
+                          raw = base64.b64decode(enc)
+                          iv, ct = raw[:16], raw[16:]
+                          dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+                          padded = dec.update(ct) + dec.finalize()
+                          unp = padding.PKCS7(128).unpadder()
+                          plain = (unp.update(padded) + unp.finalize()).decode('utf-8', 'replace')
+                          dec_out.append((lang, srv.get('servername'), plain))
+                  results.append(f"{u} -> {dec_out}")
+              else:
+                  results.append(f"{u} -> missing parts dl={bool(dl_m)} ch={bool(ch_m)} sa={bool(sa_m)}")
+          notice("E69_LIVE_DECRYPT", "\n".join(results))
+          PY
+
+  job_zip_remaining_details:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Home genres/platforms, The Boys seasons/ep pagination, Movie recommendations, and main.js diffs
+        shell: bash
+        run: |
+          python3 -m pip install -q beautifulsoup4
+          python3 - <<'PY'
+          import urllib.request, zipfile, pathlib, re
+          from bs4 import BeautifulSoup
+
+          def notice(tag, msg):
+              s = f"[{tag}] " + msg
+              chunk_size = 3500
+              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
+              for idx, part in enumerate(parts):
+                  body = part if idx > 0 else part[len(f"[{tag}] "):]
+                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
+                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print("::notice::" + out[:3900])
+
+          zip_url = "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
+          with urllib.request.urlopen(urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"}), timeout=60) as r:
+              pathlib.Path("/tmp/sl.zip").write_bytes(r.read())
+          d = pathlib.Path("/tmp/sl_unzip")
+          d.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile("/tmp/sl.zip") as zf:
+              zf.extractall(d)
+
+          # 1. Home: check "Explorar por Género", "Últimos Episodios" sample, "Recién Añadidos", "Películas Recientes", and all platform/genre URLs
+          hs = BeautifulSoup(next(d.rglob("*Ver películas y series completas*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
+          gen_links = [(a.get_text(strip=True), a.get('href')) for a in hs.select('a[href*="/genero/"]')]
+          red_links = [(a.get_text(strip=True), a.get('href')) for a in hs.select('a[href*="/red/"]')]
+          ep_cards = [str(x)[:450] for x in hs.select('.ep-card')[:2]]
+          # Check the actual movie/series cards on home sections
+          sec_samples = []
+          for sec in hs.select('main section'):
+              h = sec.select_one('h2, h3')
+              ht = h.get_text(strip=True) if h else '(hero)'
+              cards = sec.select('.card')
+              eps = sec.select('.ep-card')
+              sec_samples.append(f"'{ht}': .card={len(cards)}, .ep-card={len(eps)}")
+          notice("HOME_MAP", f"SECS={sec_samples}\nGENRES={sorted(set(gen_links))}\nREDS={sorted(set(red_links))}\nEP_CARD_SAMPLE={ep_cards}")
+
+          # 2. The Boys series: check all data-season-panel, recommendations, and inline JS
+          ss = BeautifulSoup(next(d.rglob("*The Boys (2019)*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
+          spanels = [(p.get('data-season-panel'), len(p.select('.ep-item')), str(p.select_one('.ep-item'))[:400]) for p in ss.select('[data-season-panel]')]
+          s_recs = [a.get('href') for a in ss.select('.card a[href]')]
+          s_inlines = [sc.get_text()[:1200] for sc in ss.select('script:not([src])') if 'season' in sc.get_text().lower() or 'player' in sc.get_text().lower()]
+          notice("SERIES_PANELS_AND_RECS", f"PANELS={spanels}\nRECS={s_recs[:15]}\nINLINES={s_inlines}")
+
+          # 3. The Boys T5E08 episode: check prev/next episode links, episode selector list, breadcrumbs, recommendations
+          es = BeautifulSoup(next(d.rglob("*The Boys T5E08 Online en Latino*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
+          e_links = [(a.get_text(strip=True)[:40], a.get('href')) for a in es.select('main a[href]')]
+          e_inlines = [sc.get_text() for sc in es.select('script:not([src])') if 'SL_' in sc.get_text() or 'player' in sc.get_text().lower()]
+          notice("EP_LINKS_AND_INLINES", f"MAIN_LINKS={e_links[:40]}\nINLINES={e_inlines}")
+
+          # 4. Movie detail: check recommendations & genres & trailer & player tabs
+          ms = BeautifulSoup(next(d.rglob("*Ver Puedes verlo todo*.html")).read_text(encoding='utf-8', errors='replace'), 'html.parser')
+          m_recs = [(a.get_text(strip=True)[:40], a.get('href')) for a in ms.select('.card a[href]')]
+          m_btns = [(b.get_text(strip=True), b.get('data-trailer'), b.get('data-lang-tab'), b.get('data-lang-group')) for b in ms.select('button, [data-lang-group]')]
+          m_inlines = [sc.get_text() for sc in ms.select('script:not([src])') if 'SL_' in sc.get_text() or 'trailer' in sc.get_text().lower() or 'player' in sc.get_text().lower()]
+          notice("MOVIE_EXTRA", f"RECS={m_recs[:15]}\nBTNS={m_btns[:20]}\nINLINES={m_inlines}")
           PY
