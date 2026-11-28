@@ -9,131 +9,210 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Download, unzip, and inspect SoloLatino ZIP + Live site
+      - name: Inspect every file in ZIP and live site
+        id: dump
         shell: bash
         run: |
-          mkdir -p /tmp/zip_inspect /tmp/zip_out
           python3 - <<'PY'
-          import json, os, pathlib, re, urllib.request, zipfile
+          import json, pathlib, re, urllib.request, urllib.error, zipfile, hashlib
 
-          OUT = pathlib.Path('/tmp/zip_out')
           DEST = pathlib.Path('/tmp/zip_inspect')
-
+          DEST.mkdir(parents=True, exist_ok=True)
           headers = {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
               'Accept': '*/*',
           }
 
-          url = 'https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip'
-          dl_candidates = [
-              'https://tmpfiles.org/dl/wLAXvg4SCnBj/sololatino.net.zip',
-              url,
-          ]
           zip_path = pathlib.Path('/tmp/sololatino.net.zip')
-
           def fetch_bytes(u):
               req = urllib.request.Request(u, headers=headers)
               with urllib.request.urlopen(req, timeout=60) as resp:
-                  ct = resp.headers.get('Content-Type', '')
-                  data = resp.read()
-                  return resp.status, ct, resp.geturl(), data
+                  return resp.status, resp.headers.get('Content-Type', ''), resp.read()
 
           downloaded = False
-          for cand in dl_candidates:
+          for cand in [
+              'https://tmpfiles.org/dl/wLAXvg4SCnBj/sololatino.net.zip',
+              'https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip',
+          ]:
               try:
-                  st, ct, final_u, data = fetch_bytes(cand)
-                  print(f'Tried {cand} -> status={st} ct={ct} len={len(data)} head={data[:8]!r}')
+                  st, ct, data = fetch_bytes(cand)
                   if data[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
                       zip_path.write_bytes(data)
                       downloaded = True
                       break
-                  # Try extracting dl link from HTML if tmpfiles returned an HTML interstitial
                   text = data.decode('utf-8', 'replace')
                   m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', text) or re.search(r'href=["\'](/dl/[^"\']+)["\']', text)
                   if m:
                       dl2 = m.group(0) if m.group(0).startswith('http') else 'https://tmpfiles.org' + m.group(1)
-                      st2, ct2, _, data2 = fetch_bytes(dl2)
-                      print(f'Follow HTML link {dl2} -> status={st2} len={len(data2)} head={data2[:8]!r}')
+                      st2, ct2, data2 = fetch_bytes(dl2)
                       if data2[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
                           zip_path.write_bytes(data2)
                           downloaded = True
                           break
               except Exception as e:
-                  print(f'Error on {cand}: {e}')
-
-          assert downloaded, 'Could not download valid ZIP'
+                  pass
+          assert downloaded, 'ZIP download failed'
 
           with zipfile.ZipFile(zip_path) as zf:
               zf.extractall(DEST)
               infos = sorted([(i.filename, i.file_size) for i in zf.infolist()])
 
-          (OUT / 'manifest.txt').write_text('\n'.join(f'{sz:10d}  {name}' for name, sz in infos))
-          print('Total entries:', len(infos))
+          lines = []
+          lines.append(f'=== ZIP SIZE={zip_path.stat().st_size} ENTRIES={len(infos)} ===')
+          for name, sz in infos:
+              lines.append(f'{sz:10d}  {name}')
 
-          # Inspect every HTML, JS, CSS, JSON, TXT file in the ZIP
-          summary = []
+          # Inspect ALL files in DEST
+          html_files = []
+          js_files = []
+          other_files = []
           for p in sorted(DEST.rglob('*')):
               if not p.is_file():
                   continue
               rel = str(p.relative_to(DEST))
-              sz = p.stat().st_size
               ext = p.suffix.lower()
-              summary.append(f'=== FILE: {rel} ({sz} bytes) ===')
-              if ext in ('.html', '.htm', '.js', '.mjs', '.json', '.txt', '.css', '.xml', '.svg') or sz < 4096:
-                  try:
-                      txt = p.read_text('utf-8', 'replace')
-                  except Exception:
-                      continue
-                  if ext in ('.html', '.htm'):
-                      # Save full HTML text (or up to 1.5MB) cleanly under zip_out/html/
-                      hdir = OUT / 'files' / pathlib.Path(rel).parent
-                      hdir.mkdir(parents=True, exist_ok=True)
-                      (OUT / 'files' / rel).write_text(txt)
-                      # Also extract key patterns into summary
-                      scripts = re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)
-                      tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', txt, re.I)
-                      resolved = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', txt, re.I)
-                      lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', txt, re.I)
-                      iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', txt, re.I)
-                      apis = sorted(set(re.findall(r'/api/[A-Za-z0-9_./-]+', txt)))
-                      summary.append(f'  scripts={len(scripts)} tokens={len(tokens)} resolved={len(resolved)} lazy={lazy} iframes={iframes} apis={apis}')
-                      for idx, (attrs, body) in enumerate(scripts):
-                          src_m = re.search(r'src=["\']([^"\']+)["\']', attrs, re.I)
-                          if src_m:
-                              summary.append(f'  script[{idx}] src={src_m.group(1)}')
-                          elif body.strip():
-                              summary.append(f'  script[{idx}] inline({len(body)}): {body.strip()[:400]}')
-                  elif ext in ('.js', '.mjs', '.json', '.txt'):
-                      hdir = OUT / 'files' / pathlib.Path(rel).parent
-                      hdir.mkdir(parents=True, exist_ok=True)
-                      (OUT / 'files' / rel).write_text(txt)
-                      summary.append(f'  saved {rel}')
-                  else:
-                      summary.append(f'  skip css/svg len={len(txt)}')
-          (OUT / 'summary.txt').write_text('\n'.join(summary))
+              if ext in ('.html', '.htm'):
+                  html_files.append((rel, p))
+              elif ext in ('.js', '.mjs'):
+                  js_files.append((rel, p))
+              else:
+                  other_files.append((rel, p))
 
-          # Also test live https://sololatino.net/ + sample movie/series endpoints from runner
-          live_lines = []
-          for u in ['https://sololatino.net/', 'https://sololatino.net/peliculas', 'https://sololatino.net/series', 'https://sololatino.net/sanctum/csrf-cookie']:
+          lines.append(f'\n=== COUNTS: html={len(html_files)} js={len(js_files)} other={len(other_files)} ===')
+          for rel, p in other_files:
+              if p.suffix.lower() in ('.json', '.txt', '.xml', '.webmanifest'):
+                  lines.append(f'OTHER {rel} ({p.stat().st_size}B): {p.read_text("utf-8", "replace")[:500]!r}')
+
+          for rel, p in html_files:
+              txt = p.read_text('utf-8', 'replace')
+              title = (re.search(r'<title>(.*?)</title>', txt, re.S|re.I) or [None,''])[1].strip()
+              canon = (re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', txt, re.I) or [None,''])[1]
+              csrf = (re.search(r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)["\']', txt, re.I) or [None,''])[1]
+              scripts = re.findall(r'<script\b([^>]*)>([\s\S]*?)</script>', txt, re.I)
+              tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', txt, re.I)
+              resolved = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', txt, re.I)
+              resolved_type = re.findall(r'data-resolved-type=["\']([^"\']+)["\']', txt, re.I)
+              lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', txt, re.I)
+              iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', txt, re.I)
+              lang_tabs = re.findall(r'data-lang-tab=["\']([^"\']+)["\'][^>]*>([^<]*)<', txt, re.I)
+              lang_groups = re.findall(r'data-lang-group=["\']([^"\']+)["\']', txt, re.I)
+              cards = len(re.findall(r'class=["\'][^"\']*\bcard\b', txt))
+              ep_items = len(re.findall(r'class=["\'][^"\']*\bep-item\b', txt))
+              season_panels = re.findall(r'data-season-panel=["\']([^"\']+)["\']', txt, re.I)
+              lines.append(
+                  f'\n--- HTML {rel} ({len(txt)}B) title={title!r} canon={canon!r} csrf={csrf!r} '
+                  f'cards={cards} ep_items={ep_items} season_panels={season_panels} '
+                  f'lang_tabs={lang_tabs} lang_groups={lang_groups} '
+                  f'tokens={len(tokens)} resolved={len(resolved)}({resolved[:3]}) rtype={resolved_type[:3]} '
+                  f'lazy={lazy} iframes={iframes} ---'
+              )
+              # Also inspect player-frame block and buttons context if present
+              pf_m = re.search(r'(<[^>]+id=["\']player-frame["\'][\s\S]{0,800})', txt, re.I)
+              if pf_m:
+                  lines.append(f'  PLAYER_FRAME: {pf_m.group(1)!r}')
+              for b_m in list(re.finditer(r'<(?:button|div|a)[^>]+(?:data-player-token|data-resolved-url)[^>]*>[\s\S]{0,160}', txt, re.I))[:6]:
+                  lines.append(f'  BTN: {re.sub(r"\s+", " ", b_m.group(0))}')
+              for idx, (attrs, body) in enumerate(scripts):
+                  src_m = re.search(r'src=["\']([^"\']+)["\']', attrs, re.I)
+                  if src_m:
+                      lines.append(f'  script[{idx}] src={src_m.group(1)}')
+                  else:
+                      b = body.strip()
+                      if b and not b.startswith('{"@context"'):
+                          lines.append(f'  script[{idx}] inline({len(b)}): {b[:1500]}')
+                      elif b:
+                          lines.append(f'  script[{idx}] ld+json({len(b)}): {b[:300]}')
+
+          for rel, p in js_files:
+              txt = p.read_text('utf-8', 'replace')
+              lines.append(f'\n--- JS {rel} ({len(txt)}B) sha256={hashlib.sha256(txt.encode()).hexdigest()[:12]} ---')
+              # Print relevant snippets / full small JS or interesting parts of bundle
+              if len(txt) <= 12000:
+                  lines.append(txt)
+              else:
+                  for kw in ['player-url', 'player-embed', 'X-SL-Render', 'sanctum', 'main-header', '_slP', '_slOff', 'data-player-token', 'data-lazy-embed', 'fetch(', 'XMLHttpRequest', 'XSRF', 'csrf']:
+                      for m in re.finditer(re.escape(kw), txt, re.I):
+                          s = max(0, m.start() - 180)
+                          e = min(len(txt), m.end() + 260)
+                          lines.append(f'  [{kw}@{m.start()}]: {txt[s:e]}')
+
+          # LIVE probing of sololatino.net + first movie + first series + first episode + app-*.js
+          lines.append('\n=== LIVE SITE CHECK ===')
+          def live_get(u, ref='https://sololatino.net/'):
+              req = urllib.request.Request(u, headers={
+                  'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
+                  'Referer': ref,
+              })
               try:
-                  req = urllib.request.Request(u, headers={
-                      'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-                      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                      'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
-                  })
                   with urllib.request.urlopen(req, timeout=20) as r:
-                      b = r.read().decode('utf-8', 'replace')
-                      live_lines.append(f'LIVE {u} -> {r.status} len={len(b)} hdrs={dict(r.headers)}')
-                      (OUT / ('live_' + (u.rstrip('/').split('/')[-1] or 'home') + '.txt')).write_text(b[:300000])
+                      return r.status, dict(r.headers), r.geturl(), r.read().decode('utf-8', 'replace')
               except urllib.error.HTTPError as e:
-                  b = e.read().decode('utf-8', 'replace')
-                  live_lines.append(f'LIVE {u} -> HTTP {e.code} hdrs={dict(e.headers)} head={b[:600]!r}')
+                  return e.code, dict(e.headers), u, e.read().decode('utf-8', 'replace')
               except Exception as e:
-                  live_lines.append(f'LIVE {u} -> ERR {e}')
-          (OUT / 'live.txt').write_text('\n'.join(live_lines))
+                  return 0, {}, u, str(e)
+
+          st, hdrs, fu, home = live_get('https://sololatino.net/')
+          lines.append(f'LIVE HOME: status={st} final={fu} len={len(home)} server={hdrs.get("Server")} cf={hdrs.get("CF-RAY")} ct={hdrs.get("Content-Type")}')
+          lines.append(f'LIVE HOME HEAD: {home[:700]!r}')
+          movie_urls = sorted(set(re.findall(r'https://sololatino\.net/pelicula/[A-Za-z0-9_.-]+|/pelicula/[A-Za-z0-9_.-]+', home)))
+          series_urls = sorted(set(re.findall(r'https://sololatino\.net/serie/[A-Za-z0-9_.-]+|/serie/[A-Za-z0-9_.-]+', home)))
+          app_js_urls = sorted(set(re.findall(r'https?://[^"\'\s<>]+/build/assets/[^"\'\s<>]+\.js|/build/assets/[^"\'\s<>]+\.js', home)))
+          lines.append(f'LIVE home links: movies={movie_urls[:5]} series={series_urls[:5]} js={app_js_urls}')
+
+          for mu in movie_urls[:2]:
+              full = mu if mu.startswith('http') else 'https://sololatino.net' + mu
+              ms, mhdr, mfu, mbody = live_get(full)
+              tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', mbody)
+              rurls = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', mbody)
+              lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', mbody)
+              ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', mbody, re.I)
+              lines.append(f'LIVE MOVIE {full}: st={ms} len={len(mbody)} tokens={len(tokens)} rurls={rurls[:4]} lazy={lazy} ifr={ifr}')
+              for sc in re.findall(r'<script\b[^>]*>([\s\S]*?)</script>', mbody, re.I):
+                  sc_s = sc.strip()
+                  if sc_s and not sc_s.startswith('{"@context"') and len(sc_s) < 2500:
+                      lines.append(f'  MOVIE INLINE SCRIPT: {sc_s[:800]}')
+
+          for su in series_urls[:2]:
+              full = su if su.startswith('http') else 'https://sololatino.net' + su
+              ss, shdr, sfu, sbody = live_get(full)
+              eps = sorted(set(re.findall(r'/serie/[A-Za-z0-9_.-]+/temporada-\d+/episodio-\d+', sbody)))
+              lines.append(f'LIVE SERIES {full}: st={ss} len={len(sbody)} eps={eps[:5]}')
+              if eps:
+                  efull = 'https://sololatino.net' + eps[0]
+                  es, ehdr, efu, ebody = live_get(efull, full)
+                  tokens = re.findall(r'data-player-token=["\']([^"\']+)["\']', ebody)
+                  rurls = re.findall(r'data-resolved-url=["\']([^"\']+)["\']', ebody)
+                  lazy = re.findall(r'data-lazy-embed=["\']([^"\']+)["\']', ebody)
+                  ifr = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', ebody, re.I)
+                  lines.append(f'LIVE EP {efull}: st={es} len={len(ebody)} tokens={len(tokens)} rurls={rurls[:4]} lazy={lazy} ifr={ifr}')
+
+          for ju in app_js_urls[:2]:
+              full = ju if ju.startswith('http') else 'https://sololatino.net' + ju
+              js_st, _, _, js_body = live_get(full)
+              lines.append(f'LIVE JS {full}: st={js_st} len={len(js_body)} sha256={hashlib.sha256(js_body.encode()).hexdigest()[:12]}')
+              for kw in ['player-url', 'player-embed', 'X-SL-Render', 'sanctum', 'main-header', '_slP', '_slOff', 'data-player-token', 'data-lazy-embed', 'XSRF', 'resolved']:
+                  for m in re.finditer(re.escape(kw), js_body, re.I):
+                      s = max(0, m.start() - 180)
+                      e = min(len(js_body), m.end() + 260)
+                      lines.append(f'  LIVE_JS [{kw}@{m.start()}]: {js_body[s:e]}')
+
+          full_report = '\n'.join(lines)
+          pathlib.Path('/tmp/report.txt').write_text(full_report)
+          print('REPORT_BYTES:', len(full_report))
           PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sololatino-zip-dump
-          path: /tmp/zip_out/
-          if-no-files-found: error
+      - name: Emit report chunks as notices
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          txt = pathlib.Path('/tmp/report.txt').read_text('utf-8', 'replace')
+          # GitHub annotations limit ~50 per job; each notice ~3500 chars
+          chunk_size = 3400
+          chunks = [txt[i:i+chunk_size] for i in range(0, len(txt), chunk_size)]
+          print(f'Total chunks: {len(chunks)}')
+          for idx, ch in enumerate(chunks[:48]):
+              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f'::notice title=DUMP_{idx:02d}of{len(chunks):02d}::{safe}')
+          PY
