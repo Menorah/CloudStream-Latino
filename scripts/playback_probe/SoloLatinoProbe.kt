@@ -79,35 +79,37 @@ object PlaybackProbe {
                         withContext(Dispatchers.IO) {
                             val hdr = mapOf("User-Agent" to SoloLatinoHostHttp.MOBILE_UA)
                             val ck = linkedMapOf<String, String>()
-                            val r0 = runCatching { com.lagradost.cloudstream3.app.get("https://voe.sx/e/84emedzn9bzh", referer = "https://embed69.org/", headers = hdr, cookies = ck, timeout = 6L) }.getOrNull()
-                            val r1 = runCatching { com.lagradost.cloudstream3.app.get("https://caseyseemavoid.com/e/84emedzn9bzh", referer = "https://embed69.org/", headers = hdr, cookies = ck, timeout = 8L) }.getOrNull()
-                            r1?.let { ck.putAll(it.cookies) }
-                            val doc = r1?.text?.let { Jsoup.parse(it, r1.url) }
+                            val r1 = runCatching { com.lagradost.cloudstream3.app.get("https://caseyseemavoid.com/e/84emedzn9bzh", referer = "https://embed69.org/", headers = hdr, cookies = ck, timeout = 8L) }
+                            val r1Res = r1.getOrNull()
+                            r1Res?.let { ck.putAll(it.cookies) }
+                            val doc = r1Res?.text?.let { Jsoup.parse(it, r1Res.url) }
                             val chAttr = doc?.selectFirst("altcha-widget")?.attr("challenge").orEmpty()
                             val tok = doc?.selectFirst("input[name=_token]")?.attr("value").orEmpty()
                             val act = doc?.selectFirst("form.access-form, form[action]")?.attr("abs:action").orEmpty()
-                            val chRes = if (chAttr.isNotBlank()) runCatching { com.lagradost.cloudstream3.app.get(chAttr, referer = r1!!.url, headers = hdr, cookies = ck, timeout = 8L) }.getOrNull() else null
+                            val ch = if (chAttr.isNotBlank()) runCatching { com.lagradost.cloudstream3.app.get(chAttr, referer = r1Res!!.url, headers = hdr, cookies = ck, timeout = 8L) } else null
+                            val chRes = ch?.getOrNull()
                             chRes?.let { ck.putAll(it.cookies) }
                             val t0 = System.currentTimeMillis()
                             val sol = chRes?.text?.let { SoloLatinoVoeCrypto.solveAltchaSuspend(it) }
                             val solveMs = System.currentTimeMillis() - t0
-                            val pRes = if (sol != null) runCatching {
+                            val p = if (sol != null) runCatching {
                                 com.lagradost.cloudstream3.app.post(
                                     act,
-                                    referer = r1!!.url,
+                                    referer = r1Res!!.url,
                                     headers = hdr + mapOf("Origin" to "https://caseyseemavoid.com", "Content-Type" to "application/x-www-form-urlencoded"),
                                     cookies = ck,
                                     data = mapOf("_token" to tok, "access" to "0", "altcha" to sol),
                                     timeout = 10L,
                                 )
-                            }.getOrNull() else null
-                            val pDoc = pRes?.text?.let { Jsoup.parse(it, pRes.url) }
-                            val rawJs = pDoc?.selectFirst("script[type=application/json]")?.data()?.trim().orEmpty()
-                            val enc = Regex("""\[\s*"([^"]+)"\s*]""").find(rawJs)?.groupValues?.getOrNull(1)
-                                ?: rawJs.substringAfter("[\"", "").substringBeforeLast("\"]", "")
-                            val dec = if (enc.isNotBlank()) SoloLatinoVoeCrypto.decryptF7(enc) else null
-                            val directOk = SoloLatinoVoeExtractor.extract("https://caseyseemavoid.com/e/84emedzn9bzh", "https://embed69.org/", "VoeTest", {}, { }, client = null)
-                            Log.i("CSPlaybackProbe", "VOE_DIAG r0=${r0?.code}:${r0?.url}:${r0?.text?.length} r1=${r1?.code} post=${pRes?.code}:rawLen=${rawJs.length}:rawHead=${rawJs.take(60)}:dec=${dec?.get("source")?.asText()?.take(60)} directOk=$directOk")
+                            } else null
+                            val pRes = p?.getOrNull()
+                            val pErr = p?.exceptionOrNull()?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"
+                            val chErr = ch?.exceptionOrNull()?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"
+                            val r1Err = r1.exceptionOrNull()?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"
+                            Log.i(
+                                "CSPlaybackProbe",
+                                "VOE_DIAG r1=${r1Res?.code}($r1Err) ch=${chRes?.code}($chErr):${chRes?.text?.take(120)} sol=${sol != null}(${solveMs}ms) post=${pRes?.code}($pErr):hasJson=${pRes?.text?.contains("application/json")}",
+                            )
                         }
                         error("VOE failed - inspect VOE_DIAG")
                     }
