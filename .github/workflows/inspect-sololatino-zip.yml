@@ -1,4 +1,4 @@
-name: Inspect SoloLatino PSH & Live
+name: Inspect PSH Tail & Repro Android
 on:
   push:
     branches:
@@ -6,21 +6,22 @@ on:
 permissions:
   contents: read
 jobs:
-  psh_scripts:
+  psh_tail:
     runs-on: ubuntu-latest
     steps:
-      - name: Extract tt1190634-5x08 scripts & test e69 decryption
+      - name: Dump tail of tt1190634-5x08.html, E69 decrypted links, PSH 403 body
         shell: bash
         run: |
-          python3 -m pip install -q cryptography
+          python3 -m pip install -q cryptography curl_cffi
           python3 - <<'PY'
           import base64, hashlib, pathlib, re, urllib.request, zipfile
           from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
           from cryptography.hazmat.primitives import padding
+          from curl_cffi import requests as cfreq
 
           DEST = pathlib.Path('/tmp/zip_inspect')
           DEST.mkdir(parents=True, exist_ok=True)
-          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36', 'Accept': '*/*'}
+          headers = {'User-Agent': 'Mozilla/5.0 Chrome/131.0.0.0', 'Accept': '*/*'}
           zip_path = pathlib.Path('/tmp/sololatino.net.zip')
           def fetch_bytes(u):
               with urllib.request.urlopen(urllib.request.Request(u, headers=headers), timeout=60) as resp:
@@ -30,28 +31,23 @@ jobs:
                   data = fetch_bytes(cand)
                   if data[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
                       zip_path.write_bytes(data); break
-                  text = data.decode('utf-8', 'replace')
-                  m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', text) or re.search(r'href=["\'](/dl/[^"\']+)["\']', text)
+                  m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', data.decode('utf-8','replace'))
                   if m:
-                      dl2 = m.group(0) if m.group(0).startswith('http') else 'https://tmpfiles.org' + m.group(1)
-                      data2 = fetch_bytes(dl2)
+                      data2 = fetch_bytes(m.group(0))
                       if data2[:4] in (b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'):
                           zip_path.write_bytes(data2); break
               except Exception:
                   pass
           with zipfile.ZipFile(zip_path) as zf:
               zf.extractall(DEST)
-          all_files = sorted(p for p in DEST.rglob('*') if p.is_file())
-          out = []
-
-          p = next(x for x in all_files if x.name == 'tt1190634-5x08.html')
+          p = next(x for x in DEST.rglob('tt1190634-5x08.html'))
           txt = p.read_text('utf-8', 'replace')
           cleaned = re.sub(r'<style\b[^>]*>[\s\S]*?</style>', '', txt, flags=re.I)
-          out.append(f'=== PSH_NO_STYLE len={len(cleaned)} ===')
-          out.append(cleaned)
+          idx = cleaned.find('_fetchFreeScan')
+          tail = cleaned[idx:] if idx >= 0 else cleaned[-32000:]
 
-          # Decrypt tt45368240 dataLink
-          e69 = next(x for x in all_files if x.name == 'tt45368240.html').read_text('utf-8', 'replace')
+          out = [f'=== PSH_TAIL from={idx} len={len(tail)} ===', tail]
+
           key = hashlib.sha256(b'3cd48b9b8c8c63eb3ac7cf3837cca0d36d07665b9850a0db').digest()
           for tok in [
               'wVBFKjxIcb4101hgPHWfZ3HCXKdwBiBzUXIuMX7nFo5rKtrpYcNBjjk7Ne+RWZ4adVDsQ06eoEuu+mQhRqSBPQ==',
@@ -63,78 +59,152 @@ jobs:
               pt = dec.update(raw[16:]) + dec.finalize()
               unpadder = padding.PKCS7(128).unpadder()
               pt = unpadder.update(pt) + unpadder.finalize()
-              out.append('E69_DEC: ' + pt.decode('utf-8', 'replace'))
+              u = pt.decode('utf-8', 'replace')
+              try:
+                  r = cfreq.get(u, impersonate='chrome131', headers={'Referer': 'https://embed69.org/'}, timeout=10)
+                  out.append(f'E69_DEC: {u} -> HTTP {r.status_code} len={len(r.text)} snip={re.sub(chr(92)+chr(115)+"+"," ",r.text)[:120]!r}')
+              except Exception as e:
+                  out.append(f'E69_DEC: {u} -> ERR {e}')
+
+          # Inspect PSH 403 len=8276
+          rpsh = cfreq.get('https://player.pelisserieshoy.com/f/tt45368240', impersonate='chrome131', headers={'Referer': 'https://sololatino.net/'}, timeout=12)
+          out.append(f'=== PSH_403 status={rpsh.status_code} headers={dict(rpsh.headers)} ===')
+          out.append(rpsh.text[:3500])
 
           full = '\n'.join(out)
           chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
-          for idx, ch in enumerate(chunks[:10]):
+          for i, ch in enumerate(chunks[:10]):
               safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f'::notice title=PSH_{idx:02d}of{len(chunks):02d}::{safe}')
+              print(f'::notice title=PSH_TAIL_{i:02d}of{len(chunks):02d}::{safe}')
           PY
 
-  probe_cf_real:
+  android_repro:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Check live PSH & SoloLatino responses + curl_cffi + xvfb playwright
-        shell: bash
-        run: |
-          python3 -m pip install -q curl_cffi playwright
-          python3 -m playwright install chromium
-          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb >/dev/null 2>&1 || true
-          python3 - <<'PY'
-          import re
-          from curl_cffi import requests as cfreq
-          from playwright.sync_api import sync_playwright
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build repro plugin & run on Android 13 CloudStream
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: |
+            set +e
+            cat > SoloLatino/src/main/kotlin/com/menorah/sololatino/ReproProbe.kt <<'KOTLIN'
+            package com.menorah.sololatino
 
-          out = []
-          for imp in ['chrome131', 'chrome124', 'safari17_0']:
-              for u in [
-                  'https://sololatino.net/',
-                  'https://sololatino.net/peliculas',
-                  'https://player.pelisserieshoy.com/',
-                  'https://player.pelisserieshoy.com/f/tt45368240',
-                  'https://embed69.org/f/tt45368240',
-              ]:
-                  try:
-                      r = cfreq.get(u, impersonate=imp, headers={'Referer': 'https://sololatino.net/', 'Accept-Language': 'es-419,es;q=0.9'}, timeout=12)
-                      snip = re.sub(r'\s+', ' ', r.text)[:240]
-                      out.append(f'CF[{imp}] {u} -> {r.status_code} len={len(r.text)} cf_mit={r.headers.get("cf-mitigated")} snip={snip!r}')
-                  except Exception as e:
-                      out.append(f'CF[{imp}] {u} -> ERR {e}')
-              break
+            import android.content.Context
+            import android.util.Log
+            import com.lagradost.cloudstream3.MainPageRequest
+            import kotlinx.coroutines.*
+            import java.util.Collections
 
-          # Try Xvfb headed chromium!
-          import subprocess, os
-          xvfb = subprocess.Popen(['Xvfb', ':99', '-screen', '0', '412x915x24'])
-          os.environ['DISPLAY'] = ':99'
-          try:
-              with sync_playwright() as pw:
-                  browser = pw.chromium.launch(headless=False, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
-                  ctx = browser.new_context(
-                      user_agent='Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-                      viewport={'width': 412, 'height': 915},
-                      locale='es-419',
-                  )
-                  ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                  page = ctx.new_page()
-                  r = page.goto('https://sololatino.net/', wait_until='domcontentloaded', timeout=25000)
-                  for i in range(12):
-                      t = page.title()
-                      if 'moment' not in t.lower() and len(page.content()) > 20000:
-                          break
-                      page.wait_for_timeout(1000)
-                  html = page.content()
-                  out.append(f'XVFB_HOME st={r.status if r else None} url={page.url} title={page.title()!r} len={len(html)} cookies={[(c["name"],c["value"][:18]) for c in ctx.cookies()]}')
-                  out.append('XVFB_HEAD: ' + re.sub(r'\s+', ' ', html)[:400])
-                  browser.close()
-          except Exception as e:
-              out.append(f'XVFB_ERR: {e}')
-          finally:
-              xvfb.terminate()
-
-          full = '\n'.join(out)
-          chunks = [full[i:i+3500] for i in range(0, len(full), 3500)]
-          for idx, ch in enumerate(chunks[:10]):
-              safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f'::notice title=LIVE3_{idx:02d}of{len(chunks):02d}::{safe}')
-          PY
+            object ReproProbe {
+                fun start(context: Context) {
+                    Log.i("SLRepro", "START sdk=${android.os.Build.VERSION.SDK_INT}")
+                    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                        delay(4000)
+                        val p = SoloLatinoProvider(context)
+                        Log.i("SLRepro", "UA=${p.client.currentUserAgent()}")
+                        // 1. Call getMainPage in parallel like CloudStream HomeViewModel!
+                        val cats = p.mainPage.take(6)
+                        val mainRes = coroutineScope {
+                            cats.map { mp ->
+                                async {
+                                    val t0 = System.currentTimeMillis()
+                                    val r = runCatching { p.getMainPage(1, MainPageRequest(mp.name, mp.data, mp.horizontalImages)) }
+                                    Log.i("SLRepro", "MAIN cat=${mp.name} ms=${System.currentTimeMillis()-t0} ok=${r.isSuccess} size=${r.getOrNull()?.items?.size} err=${r.exceptionOrNull()?.javaClass?.simpleName}:${r.exceptionOrNull()?.message}")
+                                    r.getOrNull()
+                                }
+                            }.awaitAll()
+                        }
+                        val firstItem = mainRes.filterNotNull().flatMap { it.items }.firstOrNull()
+                        Log.i("SLRepro", "MAIN_FIRST=${firstItem?.name} url=${firstItem?.url}")
+                        // 2. Call search
+                        val sr = runCatching { p.search("The Boys") }
+                        Log.i("SLRepro", "SEARCH ok=${sr.isSuccess} size=${sr.getOrNull()?.size} err=${sr.exceptionOrNull()?.message}")
+                        // 3. Call load & loadLinks on a movie and episode!
+                        val testUrls = listOfNotNull(
+                            firstItem?.url,
+                            "https://sololatino.net/pelicula/puedes-verlo-todo",
+                            "https://sololatino.net/serie/the-boys-2019",
+                            "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8"
+                        ).distinct()
+                        for (u in testUrls) {
+                            val t0 = System.currentTimeMillis()
+                            val lr = runCatching { p.load(u) }
+                            Log.i("SLRepro", "LOAD url=$u ms=${System.currentTimeMillis()-t0} ok=${lr.isSuccess} type=${lr.getOrNull()?.javaClass?.simpleName} dataUrl=${lr.getOrNull()?.let { (it as? com.lagradost.cloudstream3.MovieLoadResponse)?.dataUrl }} err=${lr.exceptionOrNull()?.message}")
+                        }
+                        val epData = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8"
+                        val movData = "https://sololatino.net/pelicula/puedes-verlo-todo"
+                        for (d in listOf(movData, epData)) {
+                            val links = Collections.synchronizedList(mutableListOf<String>())
+                            val subs = Collections.synchronizedList(mutableListOf<String>())
+                            val t0 = System.currentTimeMillis()
+                            val ll = runCatching {
+                                p.loadLinks(d, false, { subs.add(it.url) }) { links.add("${it.name}|${it.url}") }
+                            }
+                            Log.i("SLRepro", "LOADLINKS data=$d ms=${System.currentTimeMillis()-t0} ok=${ll.isSuccess} ret=${ll.getOrNull()} links=${links.size} subs=${subs.size} err=${ll.exceptionOrNull()?.javaClass?.simpleName}:${ll.exceptionOrNull()?.message}")
+                            links.take(10).forEach { Log.i("SLRepro", "LINK=$it") }
+                        }
+                        Log.i("SLRepro", "WAIT_30S_FOR_CRASH_CHECK")
+                        delay(30_000)
+                        Log.i("SLRepro", "DONE_STILL_ALIVE")
+                    }
+                }
+            }
+            KOTLIN
+            python3 - <<'PY'
+            p = 'SoloLatino/src/main/kotlin/com/menorah/sololatino/SoloLatinoPlugin.kt'
+            s = open(p).read().replace(
+                'registerExtractorAPI(SoloLatinoGDriveExtractor())',
+                'registerExtractorAPI(SoloLatinoGDriveExtractor()); ReproProbe.start(context)',
+            )
+            open(p, 'w').write(s)
+            PY
+            ./gradlew :SoloLatino:make --stacktrace > build.log 2>&1 || { sleep 8; ./gradlew :SoloLatino:make --stacktrace >> build.log 2>&1; }
+            curl -fL --retry 3 https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk -o /tmp/cs.apk
+            adb install -r /tmp/cs.apk
+            pkg=com.lagradost.cloudstream3.prerelease
+            adb shell pm grant "$pkg" android.permission.READ_EXTERNAL_STORAGE || true
+            adb shell pm grant "$pkg" android.permission.WRITE_EXTERNAL_STORAGE || true
+            adb shell appops set "$pkg" MANAGE_EXTERNAL_STORAGE allow || true
+            adb shell mkdir -p /sdcard/Cloudstream3/plugins
+            adb push SoloLatino/build/SoloLatino.cs3 /sdcard/Cloudstream3/plugins/SoloLatino.cs3
+            adb logcat -c
+            adb shell monkey -p "$pkg" 1
+            for i in $(seq 1 45); do
+              sleep 5
+              pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
+              log=$(adb logcat -d -s SLRepro:V AndroidRuntime:E chromium:W cr_Crash:E libc:F DEBUG:F ActivityManager:W '*:S' 2>/dev/null || true)
+              if echo "$log" | grep -q 'DONE_STILL_ALIVE'; then
+                break
+              fi
+              if [ "$i" -gt 3 ] && [ -z "$pid" ]; then
+                echo "PROCESS_DIED_AT_STEP_$i"
+                break
+              fi
+            done
+            pid_final=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
+            full_log=$(adb logcat -d -s SLRepro:V SoloLatino:V AndroidRuntime:E chromium:E libc:F DEBUG:F ActivityManager:E '*:S' 2>/dev/null | tail -n 160)
+            python3 - "$pid_final" "$full_log" <<'PY'
+            import sys
+            pid, text = sys.argv[1], f"PID_FINAL={sys.argv[1]}\n" + sys.argv[2]
+            chunks = [text[i:i+3500] for i in range(0, len(text), 3500)]
+            for idx, ch in enumerate(chunks[:10]):
+                safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                print(f'::notice title=REPRO_{idx:02d}of{len(chunks):02d}::{safe}')
+            PY
+            exit 0
