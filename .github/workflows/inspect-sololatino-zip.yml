@@ -67,7 +67,7 @@ jobs:
                       Log.e("SLReproFatal", "UNCAUGHT thread=${t.name}: ${e.javaClass.name}: ${e.message}", e)
                       prev?.uncaughtException(t, e)
                   }
-                  Log.i("SLRepro", "START sdk=${android.os.Build.VERSION.SDK_INT}")
+                  Log.i("SLRepro", "START sdk=${android.os.Build.VERSION.SDK_INT} wvPkg=${runCatching { WebView.getCurrentWebViewPackage()?.let { "${it.packageName}:${it.versionName}" } }.getOrNull()}")
                   CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                       delay(3500)
                       val p = SoloLatinoProvider(context)
@@ -285,12 +285,16 @@ jobs:
             fi
           done
           pid_final=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r' || true)
-          full_log=$(adb logcat -d -s SLRepro:V SLReproWV:V SLReproWV2:V SLReproFatal:V PluginManager:W AndroidRuntime:E chromium:E cr_Crash:E libc:F DEBUG:F ActivityManager:E '*:S' 2>/dev/null)
-          python3 - "$pid_final" "$full_log" <<'PY'
+          adb logcat -d -s SLRepro:V SLReproWV:V SLReproWV2:V SLReproFatal:V PluginManager:W AndroidRuntime:E chromium:E cr_Crash:E libc:F DEBUG:F ActivityManager:E '*:S' > /tmp/logcat.txt 2>/dev/null || true
+          python3 - "$pid_final" /tmp/logcat.txt <<'PY'
           import sys
-          lines = [ln for ln in sys.argv[2].splitlines() if 'tile_manager' not in ln]
-          text = f"PID_FINAL={sys.argv[1]}\n" + '\n'.join(lines[-220:])
-          chunks = [text[i:i+3500] for i in range(0, len(text), 3500)]
+          raw = open(sys.argv[2], errors='replace').read()
+          lines = [ln for ln in raw.splitlines() if 'tile_manager' not in ln]
+          # Put all SLRepro/SLReproWV2/Fatal/AndroidRuntime/PluginManager first, plus non-DIAG SLReproWV, plus tail
+          important = [ln for ln in lines if any(k in ln for k in ('SLRepro ', 'SLRepro:', 'SLReproWV2', 'SLReproFatal', 'TIMEOUT_', 'RENDER_GONE', 'AndroidRuntime', 'PluginManager', 'FATAL', 'DEBUG'))]
+          other = [ln for ln in lines if ln not in important and 'DIAG ' not in ln]
+          combined = f"PID_FINAL={sys.argv[1]} total_lines={len(lines)}\n--- IMPORTANT ---\n" + '\n'.join(important[-140:]) + "\n--- TAIL ---\n" + '\n'.join(other[-60:])
+          chunks = [combined[i:i+3500] for i in range(0, len(combined), 3500)]
           for idx, ch in enumerate(chunks[:10]):
               safe = ch.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
               print(f'::notice title=REPRO2_{idx:02d}of{len(chunks):02d}::{safe}')
