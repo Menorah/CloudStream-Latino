@@ -1,4 +1,4 @@
-name: Probe SoloLatino Deep Zip
+name: Probe SoloLatino Details And Players
 on:
   workflow_dispatch:
   push:
@@ -9,16 +9,16 @@ on:
 permissions:
   contents: read
 jobs:
-  job_inventory_and_logo:
+  job_series_and_episode:
     runs-on: ubuntu-latest
     steps:
-      - name: Unpack and list all HTMLs, JS, CSS, and logo assets
+      - name: Inspect The Boys series and T5E08 episode HTMLs completely
         shell: bash
         run: |
-          python3 -m pip install -q beautifulsoup4 pillow
+          python3 -m pip install -q beautifulsoup4
           python3 - <<'PY'
-          import urllib.request, zipfile, pathlib, hashlib, base64, io
-          from PIL import Image
+          import urllib.request, zipfile, pathlib
+          from bs4 import BeautifulSoup
 
           def notice(tag, msg):
               s = f"[{tag}] " + msg
@@ -30,52 +30,50 @@ jobs:
                   out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
                   print("::notice::" + out[:3900])
 
+          def clean(soup):
+              for el in soup.find_all(True):
+                  for k in list(el.attrs):
+                      if 'darkreader' in k:
+                          del el.attrs[k]
+                  if 'style' in el.attrs and 'darkreader' in str(el.attrs['style']):
+                      del el.attrs['style']
+              return soup
+
           zip_url = "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
-          req = urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"})
-          with urllib.request.urlopen(req, timeout=60) as r:
+          with urllib.request.urlopen(urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"}), timeout=60) as r:
               pathlib.Path("/tmp/sl.zip").write_bytes(r.read())
           d = pathlib.Path("/tmp/sl_unzip")
           d.mkdir(parents=True, exist_ok=True)
           with zipfile.ZipFile("/tmp/sl.zip") as zf:
               zf.extractall(d)
 
-          htmls = sorted([f"{p.relative_to(d)} ({p.stat().st_size} B)" for p in d.rglob("*.html") if p.name != "saved_resource.html"])
-          notice("ALL_HTMLS", f"count={len(htmls)}\n" + "\n".join(htmls))
+          # 1. Series detail: The Boys
+          s_path = next(d.rglob("*The Boys (2019)*.html"))
+          s_soup = clean(BeautifulSoup(s_path.read_text(encoding='utf-8', errors='replace'), 'html.parser'))
+          s_lds = [sc.get_text(strip=True)[:1500] for sc in s_soup.select('script[type="application/ld+json"]')]
+          s_main = s_soup.select_one('main')
+          s_tabs = [f"{b.get_text(strip=True)} ({b.get('data-tab-btn')})" for b in s_soup.select('[data-tab-btn]')]
+          s_panels = [(p.get('data-tab-panel'), str(p)[:3000]) for p in s_soup.select('[data-tab-panel]')]
+          # Inspect full main structure excluding head/nav/footer
+          s_hero_info = str(s_main)[:5000] if s_main else ''
+          notice("SERIES_INFO", f"LDS={s_lds}\nTABS={s_tabs}\nHERO_INFO:\n{s_hero_info}")
+          for pname, phtml in s_panels:
+              notice(f"SERIES_PANEL_{pname}", phtml)
 
-          # Also list all non-tmdb images (logos/favicons/banners) inside zip
-          other_assets = []
-          for p in sorted(d.rglob("*")):
-              if not p.is_file():
-                  continue
-              rel = str(p.relative_to(d))
-              if p.name.endswith('.png') or 'logo' in p.name.lower() or 'icon' in p.name.lower():
-                  b = p.read_bytes()
-                  h = hashlib.sha1(b).hexdigest()[:8]
-                  dim = ""
-                  try:
-                      im = Image.open(io.BytesIO(b))
-                      dim = f"{im.size} {im.mode}"
-                  except Exception:
-                      pass
-                  other_assets.append(f"{rel} ({len(b)} B {dim} sha1={h})")
-          notice("PNG_AND_LOGO_ASSETS", "\n".join(other_assets[:60]))
-
-          # Check if live logo.png works
-          for iu in ["https://sololatino.net/images/logo.png", "https://sololatino.net/favicon.ico"]:
-              try:
-                  ir = urllib.request.Request(iu, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"})
-                  with urllib.request.urlopen(ir, timeout=15) as r2:
-                      ib = r2.read()
-                      b64 = base64.b64encode(ib).decode('ascii')
-                      notice(f"LIVE_ICON_{pathlib.Path(iu).name}", f"st={r2.status} len={len(ib)} b64={b64}")
-              except Exception as e:
-                  notice(f"LIVE_ICON_{pathlib.Path(iu).name}", f"err={e}")
+          # 2. Episode detail: The Boys T5E08
+          e_path = next(d.rglob("*The Boys T5E08 Online en Latino*.html"))
+          e_soup = clean(BeautifulSoup(e_path.read_text(encoding='utf-8', errors='replace'), 'html.parser'))
+          e_lds = [sc.get_text(strip=True)[:1500] for sc in e_soup.select('script[type="application/ld+json"]')]
+          e_main = e_soup.select_one('main')
+          e_player = str(e_soup.select_one('#player-section')) if e_soup.select_one('#player-section') else 'NONE'
+          e_inlines = [sc.get_text() for sc in e_soup.select('script:not([src])') if any(w in sc.get_text().lower() for w in ['sl_', 'token', 'player', 'episode', 'movie', 'hist'])]
+          notice("EP_DETAIL", f"LDS={e_lds}\nPLAYER_FULL:\n{e_player}\nMAIN_HTML:\n{str(e_main)[:6000]}\nINLINES:\n" + "\n---\n".join(e_inlines))
           PY
 
-  job_html_catalogs:
+  job_player_iframes:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Home, Peliculas, Series, Anime, Doramas, Genero, Busqueda HTMLs
+      - name: Inspect saved embed iframes (pelisserieshoy, embed69, caseyseemavoid)
         shell: bash
         run: |
           python3 -m pip install -q beautifulsoup4
@@ -101,37 +99,24 @@ jobs:
           with zipfile.ZipFile("/tmp/sl.zip") as zf:
               zf.extractall(d)
 
-          # Analyze home + catalog list pages
-          for hp in sorted(d.rglob("*.html")):
-              if hp.name == "saved_resource.html":
-                  continue
-              rel = str(hp.relative_to(d))
-              if any(x in rel.lower() for x in ['ejemplo pelicula', 'ejemplo serie', 'ejemplo episodio', '/episodio/', '/pelicula/', '/serie/']):
-                  continue
-              soup = BeautifulSoup(hp.read_text(encoding='utf-8', errors='replace'), 'html.parser')
-              # Extract sections and filter options and navigation platforms/genres
-              sections = []
-              for sec in soup.select('main section, main > div'):
-                  h = sec.select_one('h1, h2, h3')
-                  cards = sec.select('.card, article, .ep-card, [class*="episode"]')
-                  more = sec.select_one('a[href*="/peliculas"], a[href*="/series"], a[href*="/animes"], a[href*="/doramas"], a[href*="/episodios"], a[href*="/estrenos"]')
-                  if h or len(cards) >= 2:
-                      sections.append(f"SEC h='{h.get_text(strip=True) if h else ''}' cards={len(cards)} more={more.get('href') if more else None} sample={str(cards[0])[:650] if cards else ''}")
-              selects = [(sl.get('name'), [(o.get('value'), o.get_text(strip=True)) for o in sl.select('option')]) for sl in soup.select('select')]
-              nav_all = [(a.get_text(strip=True), a.get('href')) for a in soup.select('header a[href], nav a[href], footer a[href]')]
-              pags = [str(p)[:600] for p in soup.select('nav.pagination, .pagination')[:2]]
-              notice(f"CAT_{hp.name[:25]}", f"rel={rel}\nSECTIONS({len(sections)}):\n" + "\n---\n".join(sections[:10]) + f"\nSELECTS={selects}\nNAV_ALL={nav_all[:45]}\nPAGS={pags}")
+          for name in ["tt1190634-5x08.html", "tt45368240.html"]:
+              p = next(d.rglob(name))
+              txt = p.read_text(encoding='utf-8', errors='replace')
+              sp = BeautifulSoup(txt, 'html.parser')
+              scripts = [sc.get('src') for sc in sp.select('script[src]')]
+              inlines = [sc.get_text() for sc in sp.select('script:not([src])') if sc.get_text(strip=True)]
+              notice(f"IFRAME_{name}", f"len={len(txt)} scripts={scripts}\nBODY_SAMPLE:\n{str(sp.body)[:2500]}\nINLINES:\n" + "\n===\n".join(inlines)[:12000])
           PY
 
-  job_html_details:
+  job_home_header_and_movie_links:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect every Detail & Series & Episode HTML in zip
+      - name: Inspect header logo, all home sections, movie detail full HTML, and remaining app.js
         shell: bash
         run: |
-          python3 -m pip install -q beautifulsoup4
+          python3 -m pip install -q beautifulsoup4 pillow
           python3 - <<'PY'
-          import urllib.request, zipfile, pathlib, re
+          import urllib.request, zipfile, pathlib, base64
           from bs4 import BeautifulSoup
 
           def notice(tag, msg):
@@ -152,76 +137,63 @@ jobs:
           with zipfile.ZipFile("/tmp/sl.zip") as zf:
               zf.extractall(d)
 
-          # Analyze ALL remaining HTMLs (and especially anything in peliculas/, series/, or detail pages)
-          for hp in sorted(d.rglob("*.html")):
-              if hp.name == "saved_resource.html":
-                  continue
-              rel = str(hp.relative_to(d))
-              if rel.startswith("sololatino.net/anime/") or rel.startswith("sololatino.net/doramas/") or rel.startswith("sololatino.net/busqueda ejemplo/") or rel.startswith("sololatino.net/genero ejemplo/") or rel.endswith("/Ver Películas Completas en Español Latino HD — SoloLatino.Net.html"):
-                  continue
-              raw = hp.read_text(encoding='utf-8', errors='replace')
-              soup = BeautifulSoup(raw, 'html.parser')
-              main = soup.select_one('main') or soup.body
-              # Extract player section, hero/info section, seasons/episodes, cast, related, json-ld, data-* attrs
-              player = soup.select_one('#player-section')
-              # Get clean player HTML (strip darkreader attrs)
-              for el in soup.find_all(True):
-                  for k in list(el.attrs):
-                      if 'darkreader' in k:
-                          del el.attrs[k]
-                  if 'style' in el.attrs and 'darkreader' in el.attrs['style']:
-                      del el.attrs['style']
-              player_html = str(soup.select_one('#player-section')) if soup.select_one('#player-section') else 'NONE'
-              main_children = []
-              if main:
-                  for ch in main.find_all(['section', 'div'], recursive=False):
-                      main_children.append(f"<{ch.name} id={ch.get('id')} class={ch.get('class')}> len={len(str(ch))} sample={str(ch)[:750]}")
-              lds = [sc.get_text(strip=True)[:1200] for sc in soup.select('script[type="application/ld+json"]')]
-              # Also specifically search for season/episode controls, player tokens, lazy embeds, tabs
-              ep_els = soup.select('[data-season], [data-episode], [data-tab-btn], [data-tab-panel], a[href*="/episodio"], a[href*="temporada"], #seasons-section, .episode-card, .ep-row, [class*="episod"], [class*="season"]')
-              ep_str = "\n".join(str(x)[:500] for x in ep_els[:16])
-              # Extract head/hero meta area
-              hero = soup.select_one('.hero, .detail-hero, section')
-              hero_str = str(hero)[:2500] if hero else ''
-              inlines = [sc.get_text() for sc in soup.select('script:not([src])') if any(w in sc.get_text().lower() for w in ['token', 'player', 'episode', 'season', 'trailer', 'sl_', 'api'])]
-              notice(f"DET_{hp.name[:25]}", f"rel={rel}\nLDS={lds}\nPLAYER_HTML:\n{player_html[:3200]}\nHERO:\n{hero_str}\nEP_ELEMENTS({len(ep_els)}):\n{ep_str}\nMAIN_BLOCKS:\n" + "\n".join(main_children[:8]) + "\nINLINES:\n" + "\n---\n".join(x[:1200] for x in inlines[:4]))
+          # 1. Home header & ALL sections
+          hp = next(d.rglob("*Ver películas y series completas*.html"))
+          hs = BeautifulSoup(hp.read_text(encoding='utf-8', errors='replace'), 'html.parser')
+          header_html = str(hs.select_one('header'))[:3500] if hs.select_one('header') else ''
+          secs = []
+          for sec in hs.select('section'):
+              h = sec.select_one('h2, h3')
+              a_all = [a.get('href') for a in sec.select('a[href]') if 'ver ' in a.get_text(strip=True).lower() or 'más' in a.get_text(strip=True).lower() or '/red/' in (a.get('href') or '') or a.get('class') and 'text-' in str(a.get('class'))]
+              cards = sec.select('.card, .ep-card')
+              secs.append(f"h='{h.get_text(strip=True) if h else ''}' cards={len(cards)} links={a_all[:5]} cls={sec.get('class')}")
+          # Inspect all links inside main header dropdowns (genres, platforms)
+          nav_links = [(a.get_text(strip=True), a.get('href')) for a in hs.select('header a[href]')]
+          notice("HOME_SECTIONS_HEADER", f"HEADER:\n{header_html}\nSECTIONS({len(secs)}):\n" + "\n".join(secs) + f"\nNAV_LINKS({len(nav_links)}):\n{nav_links}")
+
+          # 2. Movie detail (Puedes verlo todo) full metadata + player
+          mp = next(d.rglob("*Ver Puedes verlo todo*.html"))
+          ms = BeautifulSoup(mp.read_text(encoding='utf-8', errors='replace'), 'html.parser')
+          m_player = str(ms.select_one('#player-section')) if ms.select_one('#player-section') else ''
+          m_info = str(ms.select_one('[data-tab-panel="informacion"]'))
+          m_cast = str(ms.select_one('[data-tab-panel="reparto"]'))[:1800]
+          m_rec = str(ms.select('section')[-1])[:1200] if ms.select('section') else ''
+          m_top = str(ms.select_one('main'))[:3500]
+          notice("MOVIE_DETAIL", f"TOP:\n{m_top}\nPLAYER:\n{m_player}\nINFO:\n{m_info}\nCAST:\n{m_cast}\nREC:\n{m_rec}")
+
+          # 3. app.js end tail (63000..end)
+          app_js = next(d.rglob("app-*.js.download"))
+          atxt = app_js.read_text(encoding='utf-8', errors='replace')
+          notice("APP_JS_END", atxt[63000:])
           PY
 
-  job_js_full:
+  job_test_players_live:
     runs-on: ubuntu-latest
     steps:
-      - name: Extract full app JS logic for player, auth, CSRF, render shield, Embed69, pelisserieshoy
+      - name: Test live embed69 and player.pelisserieshoy.com directly from Actions
         shell: bash
         run: |
           python3 - <<'PY'
-          import urllib.request, zipfile, pathlib, hashlib
+          import urllib.request, urllib.parse, json, re
 
           def notice(tag, msg):
               s = f"[{tag}] " + msg
-              chunk_size = 3500
-              parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size)] or [s]
-              for idx, part in enumerate(parts):
-                  body = part if idx > 0 else part[len(f"[{tag}] "):]
-                  out = (f"[{tag}#{idx+1}/{len(parts)}] " + body) if len(parts) > 1 else part
-                  out = out.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print("::notice::" + out[:3900])
+              s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print("::notice::" + s[:3900])
 
-          zip_url = "https://tmpfiles.org/dl/1795829056.c4d746017bc67456/wLAXvg4SCnBj/sololatino.net.zip"
-          with urllib.request.urlopen(urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"}), timeout=60) as r:
-              pathlib.Path("/tmp/sl.zip").write_bytes(r.read())
-          d = pathlib.Path("/tmp/sl_unzip")
-          d.mkdir(parents=True, exist_ok=True)
-          with zipfile.ZipFile("/tmp/sl.zip") as zf:
-              zf.extractall(d)
-
-          app_js = next(d.rglob("app-*.js.download"))
-          txt = app_js.read_text(encoding='utf-8', errors='replace')
-          # Emit the custom application tail (offset 35000..end is ~37KB = 11 chunks!)
-          notice("APP_JS_HEAD_INFO", f"file={app_js.name} len={len(txt)} first500={txt[:500]}")
-          notice("APP_JS_TAIL", txt[34000:])
-
-          # Also inspect one main.js.download to understand what script that is
-          main_js = next(d.rglob("main.js.download"))
-          mtxt = main_js.read_text(encoding='utf-8', errors='replace')
-          notice("MAIN_JS_INFO", f"len={len(mtxt)} head={mtxt[:1500]} tail={mtxt[-1500:]}")
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          for name, u, ref in [
+              ("EMBED69_MOVIE", "https://embed69.org/f/tt45368240", "https://sololatino.net/"),
+              ("EMBED69_THEBOYS", "https://embed69.org/f/tt1190634-5x08", "https://sololatino.net/"),
+              ("PSH_MOVIE", "https://player.pelisserieshoy.com/f/tt45368240", "https://sololatino.net/"),
+              ("PSH_THEBOYS", "https://player.pelisserieshoy.com/f/tt1190634-5x08", "https://sololatino.net/"),
+          ]:
+              try:
+                  r = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": ref})
+                  with urllib.request.urlopen(r, timeout=20) as resp:
+                      b = resp.read().decode('utf-8', 'replace')
+                      m_dl = re.search(r'dataLink\s*=\s*(\[.*?\]);', b, re.S)
+                      notice(name, f"st={resp.status} len={len(b)} has_dataLink={bool(m_dl)} sample={b[:1200]}")
+              except Exception as e:
+                  notice(name, f"err={e}")
           PY
