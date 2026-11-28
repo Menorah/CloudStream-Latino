@@ -28,9 +28,11 @@ import java.util.Collections
 // Added to a temporary build only; never part of the published plugin.
 object PlaybackProbe {
     fun start(context: Context) {
+        Log.i("CSPlaybackProbe", "STAGE plugin_loaded sdk=${android.os.Build.VERSION.SDK_INT}")
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             try {
                 delay(4000)
+                Log.i("CSPlaybackProbe", "STAGE starting_probe")
                 withTimeout(600_000) {
                     val provider = SoloLatinoProvider(context)
                     val started = android.os.SystemClock.elapsedRealtime()
