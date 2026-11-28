@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.view.View
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.JsPromptResult
@@ -156,8 +157,12 @@ internal object SoloLatinoWebTransport {
     private val challengeHosts = listOf(
         "challenges.cloudflare.com",
         "cloudflare.com",
+        "cloudflare.net",
         "cloudflareinsights.com",
         "cdnjs.cloudflare.com",
+        "hcaptcha.com",
+        "gstatic.com",
+        "recaptcha.net",
     )
     private val IMAGE_EXT_REGEX = Regex("""\.(?:jpg|jpeg|png|webp|gif|avif|svg)(?:\?.*)?$""", RegexOption.IGNORE_CASE)
     private val TRANSPARENT_1PX_PNG = byteArrayOf(
@@ -194,7 +199,14 @@ internal object SoloLatinoWebTransport {
             WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
         }
 
-    private fun createSafeChromeClient(): WebChromeClient = object : WebChromeClient() {
+    private fun createSafeChromeClient(onConsoleErr: ((String) -> Unit)? = null): WebChromeClient = object : WebChromeClient() {
+        override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+            if (consoleMessage != null && consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                onConsoleErr?.invoke("${consoleMessage.message()}@${consoleMessage.lineNumber()}")
+            }
+            return super.onConsoleMessage(consoleMessage)
+        }
+
         override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
             result?.cancel()
             return true
@@ -233,7 +245,12 @@ internal object SoloLatinoWebTransport {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun configureWebView(view: WebView, userAgent: String?) {
+    private fun configureWebView(
+        view: WebView,
+        userAgent: String?,
+        blockImages: Boolean = false,
+        onConsoleErr: ((String) -> Unit)? = null,
+    ) {
         runCatching {
             val cm = CookieManager.getInstance()
             cm.setAcceptCookie(true)
@@ -246,14 +263,16 @@ internal object SoloLatinoWebTransport {
             allowContentAccess = false
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
-            loadsImagesAutomatically = false
-            blockNetworkImage = true
+            if (blockImages) {
+                loadsImagesAutomatically = false
+                blockNetworkImage = true
+            }
             mediaPlaybackRequiresUserGesture = true
             if (!userAgent.isNullOrBlank()) {
                 userAgentString = userAgent
             }
         }
-        view.webChromeClient = createSafeChromeClient()
+        view.webChromeClient = createSafeChromeClient(onConsoleErr)
         view.measure(
             View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY),
@@ -337,6 +356,9 @@ internal object SoloLatinoWebTransport {
         var resolvedUa = userAgent.orEmpty()
         var fallbackDomText = ""
         var fallbackDomUrl = targetUrl
+        var lastDiag = "init"
+        val blockedHosts = LinkedHashSet<String>()
+        var lastConsoleErr = ""
 
         val initialLoadUrl = if (fetchSameOriginEndpoint && referer.startsWith("http", ignoreCase = true) && allowedHost(referer)) {
             referer
@@ -398,7 +420,9 @@ internal object SoloLatinoWebTransport {
         }
 
         val timeoutTask = Runnable {
-            finish(Result.failure(IllegalStateException("WebView agotó el tiempo cargando SoloLatino")))
+            val blocked = synchronized(blockedHosts) { blockedHosts.take(6).joinToString(",") }
+            val jsErr = lastConsoleErr.take(120)
+            finish(Result.failure(IllegalStateException("WebView agotó el tiempo cargando SoloLatino [$lastDiag blocked=$blocked js=$jsErr]")))
         }
         continuation.invokeOnCancellation { finish(null) }
 
@@ -407,7 +431,9 @@ internal object SoloLatinoWebTransport {
             try {
                 val view = WebView(context.applicationContext)
                 webViewRef.set(view)
-                configureWebView(view, userAgent)
+                configureWebView(view, userAgent, blockImages = false) { err ->
+                    lastConsoleErr = err
+                }
                 resolvedUa = runCatching { view.settings.userAgentString }.getOrDefault(userAgent.orEmpty())
                 view.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
@@ -426,6 +452,7 @@ internal object SoloLatinoWebTransport {
                             if (allowed) {
                                 testResponse?.invoke(request)
                             } else {
+                                if (host.isNotBlank()) synchronized(blockedHosts) { if (blockedHosts.size < 12) blockedHosts.add(host) }
                                 blockedResourceResponse(request)
                             }
                         }.getOrElse { blockedResourceResponse(request) }
@@ -463,7 +490,7 @@ internal object SoloLatinoWebTransport {
 
                     private fun checkReady(view: WebView, url: String, expectedGen: Int) {
                         if (finished.get() || generation != expectedGen) return
-                        val inspect = "JSON.stringify({url:location.href,ready:document.readyState,text:(document.documentElement?document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1}):'')})"
+                        val inspect = "JSON.stringify({url:location.href,ready:document.readyState,title:document.title||'',text:(document.documentElement?document.documentElement.outerHTML.slice(0,${MAX_BODY_CHARS + 1}):'')})"
                         runCatching {
                             view.evaluateJavascript(inspect) { raw ->
                                 if (finished.get() || generation != expectedGen) return@evaluateJavascript
@@ -474,7 +501,10 @@ internal object SoloLatinoWebTransport {
                                 val pageUrl = page.optString("url").ifBlank { url }
                                 val pageText = page.optString("text")
                                 val readyState = page.optString("ready")
-                                if (SoloLatinoSessionHelper.looksLikeCloudflareChallenge(httpStatus, pageText)) {
+                                val title = page.optString("title")
+                                val isCf = SoloLatinoSessionHelper.looksLikeCloudflareChallenge(httpStatus, pageText)
+                                lastDiag = "status=$httpStatus ready=$readyState cf=$isCf title=${title.take(40)} url=${pageUrl.take(80)} len=${pageText.length}"
+                                if (isCf) {
                                     handler.postDelayed({ checkReady(view, url, expectedGen) }, 350L)
                                     return@evaluateJavascript
                                 }
@@ -1177,13 +1207,11 @@ internal class SoloLatinoClient(
     private fun readMergedCookies(url: String, localStore: ConcurrentHashMap<String, String>): LinkedHashMap<String, String> {
         val merged = linkedMapOf<String, String>()
         merged.putAll(localStore)
-        if (appContext == null) {
-            val host = SoloLatinoMarkup.hostOf(url)
-            runCatching {
-                cfKiller.savedCookies[host]?.let { merged.putAll(it) }
-                if (host.startsWith("www.")) {
-                    cfKiller.savedCookies[host.removePrefix("www.")]?.let { merged.putAll(it) }
-                }
+        val host = SoloLatinoMarkup.hostOf(url)
+        runCatching {
+            cfKiller.savedCookies[host]?.let { merged.putAll(it) }
+            if (host.startsWith("www.")) {
+                cfKiller.savedCookies[host.removePrefix("www.")]?.let { merged.putAll(it) }
             }
         }
         if (appContext != null) {
@@ -1315,6 +1343,29 @@ internal class SoloLatinoClient(
                     if (webRes.userAgent.isNotBlank()) preferredUserAgent = webRes.userAgent
                     webRes.serverOffsetMs?.let { serverTimeOffsetMs.set(it) }
                     saveCookiesFromResponse(siteCookies, emptyMap(), webRes.cookieHeader)
+                }
+
+                if (activeTestResponse == null && (code !in 200..299 || SoloLatinoSessionHelper.looksLikeCloudflareChallenge(code, text))) {
+                    val cfRes = runCatching {
+                        app.get(
+                            url,
+                            headers = SoloLatinoSessionHelper.buildBrowserHeaders(currentUserAgent(), referer, isAjax),
+                            cookies = readMergedCookies(url, siteCookies),
+                            interceptor = cfKiller,
+                            timeout = 30L,
+                        )
+                    }.getOrNull()
+                    if (cfRes != null && cfRes.code in 200..299 &&
+                        !SoloLatinoSessionHelper.looksLikeCloudflareChallenge(cfRes.code, cfRes.text)
+                    ) {
+                        code = cfRes.code
+                        finalUrl = cfRes.url
+                        text = cfRes.text
+                        dateHeader = cfRes.headers["date"] ?: cfRes.headers["Date"]
+                        updateServerOffset(dateHeader)
+                        WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }?.let { preferredUserAgent = it }
+                        saveCookiesFromResponse(siteCookies, cfRes.cookies)
+                    }
                 }
             }
         }

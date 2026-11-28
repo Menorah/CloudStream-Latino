@@ -35,14 +35,15 @@ object PlaybackProbe {
                 Log.i("CSPlaybackProbe", "STAGE starting_probe")
                 withTimeout(600_000) {
                     val provider = SoloLatinoProvider(context)
+                    val sysUa = provider.client.currentUserAgent()
                     val preOkHttp = withContext(Dispatchers.IO) {
                         runCatching {
                             val r = com.lagradost.cloudstream3.app.get(
                                 "${SoloLatinoMarkup.MAIN_URL}/",
-                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(provider.client.currentUserAgent(), "${SoloLatinoMarkup.MAIN_URL}/"),
+                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(sysUa, "${SoloLatinoMarkup.MAIN_URL}/"),
                                 timeout = 15L,
                             )
-                            "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} head=${r.text.take(120).replace(Regex("\\s+"), " ")}"
+                            "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)}"
                         }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
                     }
                     val preWebView = withContext(Dispatchers.IO) {
@@ -51,12 +52,25 @@ object PlaybackProbe {
                                 context = context,
                                 url = "${SoloLatinoMarkup.MAIN_URL}/",
                                 referer = "${SoloLatinoMarkup.MAIN_URL}/",
-                                userAgent = provider.client.currentUserAgent(),
+                                userAgent = sysUa,
                             )
-                            "code=${w.code} url=${w.url} len=${w.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(w.code, w.text)} head=${w.text.take(120).replace(Regex("\\s+"), " ")}"
+                            "code=${w.code} url=${w.url} len=${w.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(w.code, w.text)}"
                         }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
                     }
-                    Log.i("CSPlaybackProbe", "PRECHECK okhttp=[$preOkHttp] webview=[$preWebView]")
+                    val preCfKiller = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val killer = com.lagradost.cloudstream3.network.CloudflareKiller()
+                            val r = com.lagradost.cloudstream3.app.get(
+                                "${SoloLatinoMarkup.MAIN_URL}/",
+                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(sysUa, "${SoloLatinoMarkup.MAIN_URL}/"),
+                                interceptor = killer,
+                                timeout = 25L,
+                            )
+                            val ckKeys = killer.savedCookies["sololatino.net"]?.keys.orEmpty()
+                            "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} ck=$ckKeys"
+                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
+                    }
+                    Log.i("CSPlaybackProbe", "PRECHECK ua=[${sysUa.take(90)}] okhttp=[$preOkHttp] webview=[$preWebView] cfk=[$preCfKiller]")
                     val started = android.os.SystemClock.elapsedRealtime()
 
                     val coreSectionData = setOf(
