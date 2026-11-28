@@ -24,7 +24,7 @@ class GnulaHDCryptoAndExtractorTest {
     @Test
     fun `decodeVidsonicUrl decodes hex reversed player URL`() {
         val target = "https://cdn.example.net/master.m3u8?s=1"
-        val reversedHex = target.reversed().map { "%02x".format(it.code) }.chunked(5).joinToString("|")
+        val reversedHex = target.reversed().map { "%02x".format(it.code) }.joinToString("").chunked(10).joinToString("|")
         val html = "<script>const _0x1 = '$reversedHex';</script>"
         assertEquals(target, GnulaHostParsers.decodeVidsonicUrl(html))
     }

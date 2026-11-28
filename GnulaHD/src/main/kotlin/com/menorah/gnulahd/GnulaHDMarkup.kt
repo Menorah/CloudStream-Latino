@@ -357,12 +357,9 @@ internal object GnulaHDMarkup {
             ?.toDoubleOrNull()
             ?.takeIf { it in 0.1..10.0 }
 
-        val yearSource = listOfNotNull(
-            el.selectFirst(".gnrd-card-metaline")?.text(),
-            el.selectFirst(".gnest-ecard-date")?.text(),
-            el.selectFirst(".gnrd-card-year")?.text(),
-        ).joinToString(" ")
-        val year = YEAR_REGEX.find(yearSource)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val yearTokens = el.select(".gnrd-card-metaline span, .gnrd-card-metaline, .gnest-ecard-date, .gnrd-card-year")
+            .joinToString(" ") { it.text() }
+        val year = YEAR_REGEX.find(yearTokens)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
         val langs = el.select(".gnrd-langs span.gnrd-lang")
             .mapNotNull { it.text().trim().uppercase().takeIf { t -> t.isNotEmpty() } }
