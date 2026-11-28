@@ -15,6 +15,7 @@ jobs:
       - name: Download zip and unpack
         shell: bash
         run: |
+          python3 -m pip install -q beautifulsoup4
           mkdir -p /tmp/pelis182_zip
           curl -fsSL -A "Mozilla/5.0" "https://tmpfiles.org/dl/1795826677.9fd718905ea26ff7/wBAlvykFhc8v/pelis182.net.zip" -o /tmp/pelis182.zip || {
             PAGE=$(curl -fsSL -A "Mozilla/5.0" "https://tmpfiles.org/wBAlvykFhc8v/pelis182.net.zip")
