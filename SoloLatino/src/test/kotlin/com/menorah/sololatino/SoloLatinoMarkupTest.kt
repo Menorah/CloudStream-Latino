@@ -422,7 +422,7 @@ class SoloLatinoMarkupTest {
         assertEquals("https://cdn.byse.sx/v.m3u8", dec.get("sources").get(0).get("url").asText())
 
         // Google Drive file id + Cloudflare challenge detection
-        assertEquals("1AbCDefGhIjKlMnOpQrStUvWxYz", SoloLatinoGDriveExtractor.extractFileId("https://drive.google.com/file/d/1AbCDefGhIjKlMnOpQrStUvWxYz/view"))
+        assertEquals("1AbCDefGhIjKlMnOpQrStUvWxYz", SoloLatinoMarkup.extractGDriveFileId("https://drive.google.com/file/d/1AbCDefGhIjKlMnOpQrStUvWxYz/view"))
         assertTrue(SoloLatinoSessionHelper.looksLikeCloudflareChallenge(403, "<title>Just a moment...</title><script>window._cf_chl_opt={};</script>"))
         assertFalse(SoloLatinoSessionHelper.looksLikeCloudflareChallenge(200, "<html><body><div class='card'></div></body></html>"))
     }

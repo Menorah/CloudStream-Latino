@@ -1858,10 +1858,7 @@ open class SoloLatinoGDriveExtractor : ExtractorApi() {
     }
 
     companion object {
-        private val FILE_ID_REGEX = Regex("""(?:/file/d/|/d/|[?&]id=)([A-Za-z0-9_-]{12,})""")
-
-        fun extractFileId(url: String): String? =
-            FILE_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
+        fun extractFileId(url: String): String? = SoloLatinoMarkup.extractGDriveFileId(url)
 
         suspend fun extract(
             url: String,

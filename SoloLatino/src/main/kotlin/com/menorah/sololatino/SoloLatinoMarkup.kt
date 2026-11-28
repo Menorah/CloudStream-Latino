@@ -2,6 +2,7 @@ package com.menorah.sololatino
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
@@ -171,6 +172,8 @@ internal object SoloLatinoMarkup {
     val jsonMapper: ObjectMapper = ObjectMapper()
         .registerModule(KotlinModule.Builder().build())
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+        .configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true)
+        .configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true)
 
     private val YEAR_REGEX = Regex("""\b(19\d{2}|20\d{2})\b""")
     private val FLOAT_REGEX = Regex("""(\d+(?:[.,]\d+)?)""")
@@ -1230,4 +1233,9 @@ internal object SoloLatinoMarkup {
         val encSig = URLEncoder.encode(sig, StandardCharsets.UTF_8.name())
         return "$cleanOrigin/p.php?url=$encU&sig=$encSig"
     }
+
+    private val GDRIVE_FILE_ID_REGEX = Regex("""(?:/file/d/|/d/|[?&]id=)([A-Za-z0-9_-]{12,})""")
+
+    fun extractGDriveFileId(url: String): String? =
+        GDRIVE_FILE_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
 }
