@@ -17,7 +17,7 @@ crearon cuentas, no se resolvieron CAPTCHAs y no se solicitaron cookies ni token
 | AnimeOnlineNinja | **Reconstruido y verificado (v9)** | Sustituye por completo al complemento antiguo; catálogo completo, portadas Coil + respaldo WebView y reproducción Media3 verificada. |
 | Cuevana3v | **Creado desde cero y verificado (v1)** | Catálogo completo HTML SSR (`/peliculas`, `/series`, `/episodios/recientes`, `/explorar?s=`, géneros, estrenos), descifrado XOR/Base64 de `tungtungsahur.cuevana3v.pro`, extractores propios VidHide para Hyper (`lkhjerbhye3wikhoduh5xiczuvd.lol`) y Nebula (`vibuxer.com`), portadas Coil y reproducción Media3 verificada. |
 | VerAni | Publicado (tareas previas) | Mantiene su módulo propio para VerAni.me. |
-| SoloLatino | **Descartado** (decisión del usuario, 24-nov) | En la red del usuario siempre mostró «Enlaces no encontrados»: los botones `data-player-token` los inserta JavaScript y el sitio va tras Cloudflare; el usuario decidió retirarlo tras varias rondas de arreglos. |
+| SoloLatino | **Creado y verificado (v3)** | Reconstrucción completa sobre HTML SSR de `sololatino.net` (catálogos paginados, últimos episodios, búsqueda y sugerencias JSON, pósters TMDB `w500`/`w1280`/`w400`), handshake Sanctum + `X-SL-Render` SHA-256, flujo `player.pelisserieshoy.com` (bypass anti-top-level `window.stop()`, `_ao`/`_qsrc`, FNV-1a sin padding y proxy `/p.php` con `ctx`), descifrado AES-256-CBC de `embed69.org` (petición HTTP no-`wv` y filtro de error Chromium) y extractores nativos verificados en CloudStream + Media3 + Coil. |
 | PoseidonHD2 | **Reconstruido y verificado (v2)** | Sustituye por completo al complemento antiguo sobre el SSR `__NEXT_DATA__` de `poseidonhd2.co`: 27 secciones paginadas (`/page/<n>`), búsqueda, promoción episodio→serie, extractores propios para VOE (ALTCHA v2 PBKDF2 + descifrado), StreamWish (`medixiru.com` → `vsembed.com` AES-128-CBC), VidHide (cascada de espejos `hls2`), `bysejikuar.com`, más extractores integrados (`Vidara`, `DoodStream`) y reproducción Media3 verificada. |
 | pelissmart.com | **Sin complemento viable** | Muro de teasers (abajo): todas las fuentes públicas son clips de 4-20 s con duración falseada. |
 | pelisplus.fit | **Sin complemento viable** | Ídem. |
@@ -122,24 +122,19 @@ de imagen + casilla de términos + honeypot `empresa_hp`) que emite la cookie de
     `Vidara`).
   - Los canales de TV en vivo con claves DRM quedan fuera del complemento.
 
-## SoloLatino.net
+## SoloLatino.net (v3)
 
-Cadena completa documentada (implementaciones MiPlugin y CS_latino + investigación):
-1. `GET /sanctum/csrf-cookie` → cookies + `XSRF-TOKEN`;
-2. `button.server-btn[data-player-token]` por idioma (`div[data-lang-group]`);
-3. `POST /api/player-url` `{"t":token}` con `X-XSRF-TOKEN` y `X-SL-Render`
-   (sha256 de `token:minuto:sololatino_render_shield_2026`, 16 hex) → `{url,type}`:
+Cadena completa implementada y verificada en Android 13 (API 33):
+1. `GET /sanctum/csrf-cookie` → cookies + `XSRF-TOKEN` (sincronizando el reloj vía header `Date`);
+2. `button[data-player-token]` por idioma (`div[data-lang-group]`) y `#player-frame[data-lazy-embed]`;
+3. `POST /api/player-url` y `/api/player-embed` `{"t":token}` con `X-XSRF-TOKEN` y `X-SL-Render`
+   (`sha256(token:minuto:sololatino_render_shield_2026)` truncado a 16 hex) → `{url,type}`:
    - `mp4` → directo;
-   - `player.pelisserieshoy.com` → handshake `_t/_qc/_qk` → `s.php` (`a=1`, `a=click`,
-     `a=2&v=`) → `{u,sig}` → HLS firmado en `p.php?url=&sig=` (el m3u8 directo da 403);
-   - Embed69 → `dataLink` descifrado localmente (AES-256-CBC, clave
-     `sha256(LINK_CHALLENGE+LINK_SALT)` o PoW local) o vía `POST https://embed69.org/api/decrypt`.
-- Búsqueda `/buscar?q=`; catálogos `/peliculas`, `/series`, `/animes`.
+   - `player.pelisserieshoy.com` → `_t/_qc/_qk/_ao/_qsrc`, `fnv1a32` sin zero-padding (`(h >>> 0).toString(16)`), `s.php` (`a=click`, `a=1`, `a=2&v=`) y proxy `/p.php?url=&sig=&ctx=` manteniendo sesión en WebView aun tras `window.stop()`;
+   - `embed69.org` → petición directa con UA móvil estándar (sin `; wv)`), filtro de página interna Chromium ante `window.stop()` y descifrado AES-256-CBC de `dataLink` (`sha256(LINK_CHALLENGE+LINK_SALT)`).
+- Búsqueda `/buscar?q=` y sugerencias `/api/search/suggest`; catálogos `/peliculas`, `/series`, `/animes`, `/doramas`, plataformas (`/red/...`) y géneros (`/genero/...`).
 
-Implementación: módulo `SoloLatino` (parsers con fixtures reales Apache-2.0 +
-proveedor con la cadena completa + pruebas JVM/Android). El sitio bloquea la red de
-(Black Clover T1E1) y CloudStream está en esa misma red. Pendiente: verificación de
-reproducción desde esa red (la release es el único canal de instalación del usuario).
+Implementación: módulo `SoloLatino` (`SoloLatinoMarkup`, `SoloLatinoSession`, `SoloLatinoExtractors`, `SoloLatinoProvider`, `SoloLatinoPlugin`) con suite de pruebas JVM (`SoloLatinoMarkupTest`) y verificación en emulador Android 13 con CloudStream + Coil + Media3 ExoPlayer.
 
 ## PoseidonHD2.co (v2) — reconstruido desde cero y verificado con Media3
 

@@ -567,5 +567,19 @@ class SoloLatinoMarkupTest {
         val solNode = v2Json.get("solution")
         assertTrue(solNode.get("derivedKey").asText().startsWith(prefix4))
         assertTrue(solNode.get("counter").asInt() in 0..5)
+
+        // Session guard helpers: cdnjs script tags must NOT false-positive as CF challenges; CF 1020 and Chromium error pages must be caught
+        val normalHtmlWithCdn = "<html><head><script src=\"https://cdnjs.cloudflare.com/ajax/libs/video.js/8.0.0/video.min.js\"></script></head><body>OK</body></html>"
+        assertFalse(SoloLatinoSessionHelper.looksLikeCloudflareChallenge(200, normalHtmlWithCdn))
+        assertFalse(SoloLatinoSessionHelper.looksLikeCloudflareAccessDenied(200, normalHtmlWithCdn))
+        assertFalse(SoloLatinoSessionHelper.isChromiumErrorPage(normalHtmlWithCdn))
+
+        val cf1020 = "<html><title>Access denied | embed69.org used Cloudflare to restrict access</title><body>Error code: 1020</body></html>"
+        assertTrue(SoloLatinoSessionHelper.looksLikeCloudflareAccessDenied(200, cf1020))
+        assertTrue(SoloLatinoSessionHelper.looksLikeCloudflareAccessDenied(403, cf1020))
+        assertTrue(SoloLatinoSessionHelper.looksLikeCloudflareChallenge(403, cf1020))
+
+        val chromiumErr = "<html><head><title>Webpage not available</title></head><!-- Upside down Android --></html>"
+        assertTrue(SoloLatinoSessionHelper.isChromiumErrorPage(chromiumErr))
     }
 }
