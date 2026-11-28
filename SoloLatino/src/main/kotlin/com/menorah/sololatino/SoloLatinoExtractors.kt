@@ -947,6 +947,11 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
     }
 
     companion object {
+        private val VOE_MIRROR_ORIGINS = listOf(
+            "https://caseyseemavoid.com",
+            "https://crystaltreatmente.com",
+        )
+
         internal suspend fun extract(
             url: String,
             referer: String?,
@@ -954,8 +959,9 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit,
             client: SoloLatinoClient? = null,
-        ): Boolean = withTimeoutOrNull(22_000L) {
-            val activeUa = client?.currentUserAgent(url) ?: SoloLatinoHostHttp.MOBILE_UA
+        ): Boolean = withTimeoutOrNull(25_000L) {
+            // Prefer a clean mobile Chrome UA for VOE / DDoS-Guard HTTP requests (avoids "; wv)" filters)
+            val activeUa = SoloLatinoHostHttp.MOBILE_UA
             val baseHeaders = mapOf(
                 "User-Agent" to activeUa,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -967,15 +973,34 @@ open class SoloLatinoVoeExtractor : ExtractorApi() {
             var resCode = 0
             var resUrl = currentUrl
             var resText = ""
-            val initialRes = runCatching {
-                app.get(currentUrl, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = 10L)
-            }.getOrNull()
-            if (initialRes != null) {
-                cookies.putAll(initialRes.cookies)
-                resCode = initialRes.code
-                resUrl = initialRes.url
-                resText = initialRes.text
-            } else if (client == null) {
+
+            val fileCode = SoloLatinoHostHttp.fileCodeFromPath(url)
+            val candidateStarts = buildList {
+                add(url)
+                val origOrigin = SoloLatinoHostHttp.originOf(url)
+                if (fileCode.isNotBlank()) {
+                    for (mirror in VOE_MIRROR_ORIGINS) {
+                        if (!mirror.equals(origOrigin, ignoreCase = true)) {
+                            add("$mirror/e/$fileCode")
+                        }
+                    }
+                }
+            }
+
+            for ((idx, candidate) in candidateStarts.withIndex()) {
+                val attempt = runCatching {
+                    app.get(candidate, referer = currentRef, headers = baseHeaders, cookies = cookies, timeout = if (idx == 0) 6L else 8L)
+                }.getOrNull()
+                if (attempt != null && attempt.code in 200..399 && attempt.text.isNotBlank()) {
+                    cookies.putAll(attempt.cookies)
+                    currentUrl = candidate
+                    resCode = attempt.code
+                    resUrl = attempt.url
+                    resText = attempt.text
+                    break
+                }
+            }
+            if (resCode == 0 && client == null) {
                 return@withTimeoutOrNull false
             }
 
