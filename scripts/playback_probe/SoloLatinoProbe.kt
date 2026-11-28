@@ -73,8 +73,38 @@ object PlaybackProbe {
                     val voeLink = directHostLinks.firstOrNull { it.name.contains("Voe", ignoreCase = true) || it.url.contains("voe", ignoreCase = true) }
                     val vidhideLink = directHostLinks.firstOrNull { !it.name.contains("Voe", ignoreCase = true) }
                     if (vidhideLink != null) playFirstWorking(context, "host-vidhide", listOf(vidhideLink))
-                    check(voeLink != null) { "Expected live VOE link via caseyseemavoid Altcha fallback, got=${directHostLinks.map { it.name to it.url.take(60) }}" }
-                    playFirstWorking(context, "host-voe-altcha", listOf(voeLink))
+                    if (voeLink != null) {
+                        playFirstWorking(context, "host-voe-altcha", listOf(voeLink))
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            val hdr = mapOf("User-Agent" to SoloLatinoHostHttp.MOBILE_UA)
+                            val ck = linkedMapOf<String, String>()
+                            val r1 = runCatching { com.lagradost.cloudstream3.app.get("https://caseyseemavoid.com/e/84emedzn9bzh", referer = "https://embed69.org/", headers = hdr, cookies = ck, timeout = 8L) }.getOrNull()
+                            r1?.let { ck.putAll(it.cookies) }
+                            val doc = r1?.text?.let { Jsoup.parse(it, r1.url) }
+                            val chAttr = doc?.selectFirst("altcha-widget")?.attr("challenge").orEmpty()
+                            val tok = doc?.selectFirst("input[name=_token]")?.attr("value").orEmpty()
+                            val act = doc?.selectFirst("form.access-form, form[action]")?.attr("abs:action").orEmpty()
+                            val chRes = if (chAttr.isNotBlank()) runCatching { com.lagradost.cloudstream3.app.get(chAttr, referer = r1!!.url, headers = hdr, cookies = ck, timeout = 8L) }.getOrNull() else null
+                            chRes?.let { ck.putAll(it.cookies) }
+                            val t0 = System.currentTimeMillis()
+                            val sol = chRes?.text?.let { SoloLatinoVoeCrypto.solveAltchaSuspend(it) }
+                            val solveMs = System.currentTimeMillis() - t0
+                            val pRes = if (sol != null) runCatching {
+                                com.lagradost.cloudstream3.app.post(
+                                    act,
+                                    referer = r1!!.url,
+                                    headers = hdr + mapOf("Origin" to "https://caseyseemavoid.com"),
+                                    cookies = ck,
+                                    data = mapOf("_token" to tok, "access" to "0", "altcha" to sol),
+                                    timeout = 10L,
+                                )
+                            }.getOrNull() else null
+                            val pSnip = pRes?.text?.replace(Regex("\\s+"), " ")?.take(180).orEmpty()
+                            Log.i("CSPlaybackProbe", "VOE_DIAG r1=${r1?.code}:ck=${ck.keys} ch=${chRes?.code}:${chRes?.text?.take(90)} sol=${sol != null}(${solveMs}ms) post=${pRes?.code}:hasJson=${pRes?.text?.contains("application/json")}:snip=$pSnip")
+                        }
+                        error("VOE failed - inspect VOE_DIAG")
+                    }
 
                     // 2. Verify Coil 3 image loading across TMDB w500 / w1280 / w400 URLs
                     verifyCoilImage(context, "tmdb-poster-w500", "https://image.tmdb.org/t/p/w500/zDE9hd1SG9695YncbZGjSf7Z9Jk.jpg", null)
