@@ -58,7 +58,7 @@ class GnulaHDLiveTest {
         }
 
         val (upUrl, upHtml) = fetchText("${GnulaHDMarkup.MAIN_URL}/proximos-estrenos/")
-        val upPage = GnulaHDMarkup.parseCatalogPage(Jsoup.parse(upUrl, upUrl).let { Jsoup.parse(upHtml, upUrl) })
+        val upPage = GnulaHDMarkup.parseCatalogPage(Jsoup.parse(upHtml, upUrl))
         assertTrue("Upcoming non-empty", upPage.items.isNotEmpty())
         assertFalse("Upcoming single page", upPage.hasNext)
 

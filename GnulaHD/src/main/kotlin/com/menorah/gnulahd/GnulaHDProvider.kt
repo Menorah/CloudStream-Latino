@@ -272,7 +272,7 @@ class GnulaHDProvider : MainAPI() {
             val tvType = if (detail.kind == GnulaMediaKind.ANIME) TvType.Anime else TvType.TvSeries
             val episodeItems = detail.episodes.map { ep ->
                 val dataRef = GnulaHDMarkup.encodePlayerTarget(ep.postId, ep.token, ep.url)
-                newEpisode(dataRef, fix = false) {
+                newEpisode(url = dataRef, fix = false, initializer = {
                     this.name = ep.title
                     this.season = ep.season
                     this.episode = ep.episode
@@ -280,7 +280,7 @@ class GnulaHDProvider : MainAPI() {
                     this.description = ep.overview
                     ep.durationMinutes?.let { this.runTime = it }
                     ep.isoDate?.let { this.addDate(it) }
-                }
+                })
             }
             val seasonsList = detail.episodes.asSequence()
                 .map { it.season }

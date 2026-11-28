@@ -341,11 +341,13 @@ internal object GnulaHDMarkup {
             ?: el.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() }
             ?: return null
 
-        val img = el.selectFirst("img")
-        val rawPoster = img?.let { node ->
-            node.attr("data-src").trim()
-                .ifEmpty { node.attr("data-lazy-src").trim() }
-                .ifEmpty { node.attr("src").trim() }
+        val img: Element? = el.selectFirst("img")
+        val rawPoster = if (img != null) {
+            img.attr("data-src").trim()
+                .ifEmpty { img.attr("data-lazy-src").trim() }
+                .ifEmpty { img.attr("src").trim() }
+        } else {
+            null
         }
         val posterUrl = resolveUrl(mainUrl, rawPoster)
 
@@ -505,13 +507,13 @@ internal object GnulaHDMarkup {
                 root.isObject -> {
                     val graph = root.get("@graph")
                     if (graph != null && graph.isArray) {
-                        for (g in graph) if (g.isObject) nodes += g
+                        for (g in graph) if (g.isObject) nodes.add(g)
                     } else {
-                        nodes += root
+                        nodes.add(root)
                     }
                 }
                 root.isArray -> {
-                    for (item in root) if (item.isObject) nodes += item
+                    for (item in root) if (item.isObject) nodes.add(item)
                 }
             }
         }
@@ -600,10 +602,14 @@ internal object GnulaHDMarkup {
         val eyebrowRaw = doc.selectFirst(".gnrd-eyebrow, .gnest-eyebrow, .gnest-badge")?.text()?.trim().orEmpty()
         val eyebrowNorm = normalizeAscii(eyebrowRaw)
 
+        val posterImg: Element? = doc.selectFirst(".gnrd-fi-poster img, .gnest-poster img")
+        val posterImgAttr = if (posterImg != null) {
+            posterImg.attr("data-src").ifBlank { posterImg.attr("src") }
+        } else {
+            null
+        }
         val posterUrl = resolveUrl(mainUrl, doc.selectFirst("meta[itemprop=image]")?.attr("content"))
-            ?: resolveUrl(mainUrl, doc.selectFirst(".gnrd-fi-poster img, .gnest-poster img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("src") }
-            })
+            ?: resolveUrl(mainUrl, posterImgAttr)
             ?: resolveUrl(mainUrl, doc.selectFirst("meta[property=og:image]")?.attr("content"))
             ?: resolveUrl(mainUrl, primaryLd?.get("image")?.asText())
 
@@ -612,10 +618,15 @@ internal object GnulaHDMarkup {
             mainUrl,
         ) ?: posterUrl
 
-        val synEl = doc.selectFirst("#gnrd-syn, .gnest-synopsis")
-        val plot = synEl?.clone()?.apply {
-            select("button, .gnrd-fi-more, .gnest-synopsis-toggle").remove()
-        }?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        val synEl: Element? = doc.selectFirst("#gnrd-syn, .gnest-synopsis")
+        val synText = if (synEl != null) {
+            val cloned: Element = synEl.clone()
+            cloned.select("button, .gnrd-fi-more, .gnest-synopsis-toggle").remove()
+            cloned.text().trim().takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
+        val plot = synText
             ?: doc.selectFirst("meta[name=description]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
 
         val qfMap = linkedMapOf<String, String>()
@@ -664,8 +675,11 @@ internal object GnulaHDMarkup {
         val actors = doc.select(".gnrd-castc").mapNotNull { c ->
             val actorName = c.selectFirst(".gnrd-castc-name")?.text()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             val role = c.selectFirst(".gnrd-castc-char")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-            val photo = c.selectFirst(".gnrd-castc-ph img")?.let { img ->
-                resolveUrl(mainUrl, img.attr("data-src").ifBlank { img.attr("src") })
+            val photoImg: Element? = c.selectFirst(".gnrd-castc-ph img")
+            val photo = if (photoImg != null) {
+                resolveUrl(mainUrl, photoImg.attr("data-src").ifBlank { photoImg.attr("src") })
+            } else {
+                null
             }
             GnulaActor(name = actorName, role = role, photoUrl = photo)
         }
