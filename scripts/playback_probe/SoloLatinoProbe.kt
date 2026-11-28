@@ -72,74 +72,91 @@ object PlaybackProbe {
                     }
                     Log.i("CSPlaybackProbe", "PRECHECK ua=[${sysUa.take(90)}] okhttp=[$preOkHttp] webview=[$preWebView] cfk=[$preCfKiller]")
 
-                    // Direct PSH & Embed69 Android probe (runs regardless of Azure Turnstile on sololatino.net)
-                    val directPshLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                    val pshOk = withContext(Dispatchers.IO) {
-                        SoloLatinoPelisSeriesHoyExtractor.extractWithClient(
-                            provider.client,
-                            "https://player.pelisserieshoy.com/f/tt1190634-5x08",
-                            "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-                            "Latino",
-                            {},
-                            { directPshLinks.add(it) },
-                        )
+                    // Inspect raw responses from Embed69 & PelisSeriesHoy & test host extractors + ExoPlayer + Coil
+                    val e69RawHttp = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val r = com.lagradost.cloudstream3.app.get(
+                                "https://embed69.org/f/tt45368240",
+                                referer = "https://sololatino.net/pelicula/street-fighter",
+                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, "https://sololatino.net/"),
+                                timeout = 15L,
+                            )
+                            "code=${r.code} url=${r.url} len=${r.text.length} body=${r.text.replace(Regex("\\s+"), " ").take(450)}"
+                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
                     }
-                    val pshDiag = if (directPshLinks.isEmpty()) {
-                        val rawHttp = withContext(Dispatchers.IO) {
-                            runCatching {
-                                val r = com.lagradost.cloudstream3.app.get(
-                                    "https://player.pelisserieshoy.com/f/tt1190634-5x08",
-                                    referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-                                    headers = SoloLatinoSessionHelper.buildBrowserHeaders(sysUa, "https://sololatino.net/"),
-                                    timeout = 15L,
-                                )
-                                "http=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} hasT=${r.text.contains("_t")}"
-                            }.getOrElse { e -> "err=${e.javaClass.simpleName}:${e.message}" }
-                        }
-                        " empty($rawHttp)"
-                    } else ""
-                    Log.i("CSPlaybackProbe", "DIRECT_PSH ok=$pshOk count=${directPshLinks.size} names=${directPshLinks.take(4).map { it.name }}$pshDiag")
-
-                    val directE69Links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
-                    val e69Ok = withContext(Dispatchers.IO) {
-                        SoloLatinoEmbed69Resolver.extract(
-                            "https://embed69.org/f/tt45368240",
-                            "https://sololatino.net/pelicula/street-fighter",
-                            "Latino",
-                            {},
-                            { directE69Links.add(it) },
-                            client = provider.client,
-                        )
+                    val e69BoyHttp = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val r = com.lagradost.cloudstream3.app.get(
+                                "https://embed69.org/f/tt1190634-5x08",
+                                referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, "https://sololatino.net/"),
+                                timeout = 15L,
+                            )
+                            "code=${r.code} len=${r.text.length} dl=${r.text.contains("dataLink")} body=${r.text.replace(Regex("\\s+"), " ").take(300)}"
+                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
                     }
-                    val e69Diag = if (directE69Links.isEmpty()) {
-                        val rawE69 = withContext(Dispatchers.IO) {
-                            runCatching {
-                                val r = provider.client.fetchExternalHtml("https://embed69.org/f/tt45368240", "https://sololatino.net/") { t ->
-                                    val h = SoloLatinoMarkup.hostOf(t)
-                                    h == "embed69.org" || h.endsWith(".embed69.org")
-                                }
-                                "code=${r.code} len=${r.text.length} cf=${SoloLatinoSessionHelper.looksLikeCloudflareChallenge(r.code, r.text)} dl=${r.text.contains("dataLink")}"
-                            }.getOrElse { e -> "err=${e.javaClass.simpleName}:${e.message}" }
-                        }
-                        " empty($rawE69)"
-                    } else ""
-                    Log.i("CSPlaybackProbe", "DIRECT_E69 ok=$e69Ok count=${directE69Links.size} names=${directE69Links.take(5).map { it.name }}$e69Diag")
+                    val pshRawHttp = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val r = com.lagradost.cloudstream3.app.get(
+                                "https://player.pelisserieshoy.com/f/tt1190634-5x08",
+                                referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                                headers = SoloLatinoSessionHelper.buildBrowserHeaders(SoloLatinoSessionHelper.DEFAULT_USER_AGENT, "https://sololatino.net/"),
+                                timeout = 15L,
+                            )
+                            "code=${r.code} len=${r.text.length} body=${r.text.replace(Regex("\\s+"), " ").take(450)}"
+                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
+                    }
+                    val pshWebView = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val w = SoloLatinoWebTransport.getHtml(
+                                context = context,
+                                url = "https://player.pelisserieshoy.com/f/tt1190634-5x08",
+                                referer = "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
+                                allowedHost = { SoloLatinoMarkup.isPelisSeriesHoyUrl(it) },
+                                userAgent = sysUa,
+                            )
+                            "code=${w.code} len=${w.text.length} body=${w.text.replace(Regex("\\s+"), " ").take(350)}"
+                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
+                    }
+                    val e69WebView = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val w = SoloLatinoWebTransport.getHtml(
+                                context = context,
+                                url = "https://embed69.org/f/tt45368240",
+                                referer = "https://sololatino.net/pelicula/street-fighter",
+                                allowedHost = { u -> SoloLatinoMarkup.hostOf(u).contains("embed69") },
+                                userAgent = sysUa,
+                            )
+                            "code=${w.code} len=${w.text.length} dl=${w.text.contains("dataLink")} body=${w.text.replace(Regex("\\s+"), " ").take(350)}"
+                        }.getOrElse { e -> "ERR ${e.javaClass.simpleName}:${e.message}" }
+                    }
+                    Log.i("CSPlaybackProbe", "RAW_E69_SF [$e69RawHttp]")
+                    Log.i("CSPlaybackProbe", "RAW_E69_BOYS [$e69BoyHttp]")
+                    Log.i("CSPlaybackProbe", "RAW_PSH [$pshRawHttp]")
+                    Log.i("CSPlaybackProbe", "WV_PSH [$pshWebView]")
+                    Log.i("CSPlaybackProbe", "WV_E69 [$e69WebView]")
 
-                    for ((kind, list) in listOf("direct-psh" to directPshLinks.toList(), "direct-e69" to directE69Links.toList())) {
-                        if (list.isEmpty()) continue
-                        var okPlay = false
-                        val errs = mutableListOf<String>()
-                        for (lnk in list.take(5)) {
-                            try {
-                                play(context, lnk)
-                                okPlay = true
-                                Log.i("CSPlaybackProbe", "PASS playback $kind via ${lnk.name}")
-                                break
-                            } catch (t: Throwable) {
-                                errs.add("${lnk.name}:${t.javaClass.simpleName}:${t.message?.take(80)}")
-                            }
+                    // Also test direct host extraction + ExoPlayer + Coil directly
+                    val hostLinks = Collections.synchronizedList(mutableListOf<ExtractorLink>())
+                    withContext(Dispatchers.IO) {
+                        SoloLatinoExtractorDispatcher.extract("https://morencius.com/embed/1ywkwa2abeeu", "https://embed69.org/", "SoloLatino · Latino", {}, { hostLinks.add(it) }, "vidhide")
+                        SoloLatinoExtractorDispatcher.extract("https://voe.sx/e/basmjvog9k1o", "https://embed69.org/", "SoloLatino · Latino", {}, { hostLinks.add(it) }, "voe")
+                    }
+                    Log.i("CSPlaybackProbe", "HOST_DIRECT count=${hostLinks.size} names=${hostLinks.map { it.name }}")
+                    for (lnk in hostLinks.take(4)) {
+                        try {
+                            play(context, lnk)
+                            Log.i("CSPlaybackProbe", "PASS playback host-direct via ${lnk.name}")
+                            break
+                        } catch (t: Throwable) {
+                            Log.i("CSPlaybackProbe", "HOST_PLAY_ERR ${lnk.name}: ${t.javaClass.simpleName}:${t.message?.take(100)}")
                         }
-                        if (!okPlay) Log.i("CSPlaybackProbe", "DIRECT_PLAY_FAIL $kind errs=$errs")
+                    }
+                    runCatching {
+                        verifyCoilImage(context, "tmdb-w500", "https://image.tmdb.org/t/p/w500/zDE9hd1SG9695YncbZGjSf7Z9Jk.jpg", null)
+                        Log.i("CSPlaybackProbe", "PASS coil tmdb-w500")
+                    }.onFailure {
+                        Log.i("CSPlaybackProbe", "FAIL_COIL ${it.message}")
                     }
 
                     val started = android.os.SystemClock.elapsedRealtime()
