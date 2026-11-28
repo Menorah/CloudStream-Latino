@@ -1,4 +1,4 @@
-name: Probe Pelis182 Streams & Hosts
+name: Probe Pelis182 Final Details
 on:
   workflow_dispatch:
   push:
@@ -16,92 +16,12 @@ jobs:
         shell: bash
         run: python3 -m pip install -q beautifulsoup4
 
-      - name: Check juicycodes.js, deep catalog pages, anime, and old movies
+      - name: Verify 9bg.net sub-playlist, segments, juicycodes, and multi-season search
         shell: bash
         run: |
           python3 - <<'PY'
-          import urllib.request, re
+          import urllib.request, urllib.parse, re
           from bs4 import BeautifulSoup
-
-          def notice(tag, msg):
-              s = f"[{tag}] " + msg
-              s = s.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print("::notice::" + s[:3800])
-
-          def fetch(url, headers=None):
-              hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
-              if headers:
-                  hdrs.update(headers)
-              req = urllib.request.Request(url, headers=hdrs)
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  return r.status, r.geturl(), dict(r.headers), r.read().decode('utf-8', 'replace')
-
-          # 1. Inspect juicycodes.js from paulinito.com
-          _, _, _, jc = fetch("https://paulinito.com/templates/jwplayer/assets/juicycodes.js", {"Referer": "https://paulinito.com/"})
-          notice("JUICYCODES_JS", f"len={len(jc)}\n" + jc[:3500])
-
-          # 2. Sample older pages + anime + series pages to verify ALL hosts, server buttons, languages
-          sample_pages = [
-              "https://pelis182.net/catalogo/page/60/",
-              "https://pelis182.net/catalogo/page/120/",
-              "https://pelis182.net/category/anime/",
-              "https://pelis182.net/category/series/page/5/",
-          ]
-          post_urls = [
-              "https://pelis182.net/solo-necesitas-matar/",
-              "https://pelis182.net/black-mirror-temporada-7/",
-              "https://pelis182.net/la-casa-del-dragon-temporada-3/",
-          ]
-          for sp in sample_pages:
-              try:
-                  _, _, _, h = fetch(sp)
-                  s = BeautifulSoup(h, 'html.parser')
-                  links = [a['href'] for a in s.select('article.p182-card a[href]')]
-                  for u in links[:4]:
-                      if u not in post_urls:
-                          post_urls.append(u)
-              except Exception as e:
-                  notice("LIST_ERR", f"{sp} => {e}")
-
-          hosts = {}
-          non_paulinito = []
-          server_row_variants = []
-          badges_found = set()
-          for u in post_urls:
-              try:
-                  _, _, _, h = fetch(u)
-                  s = BeautifulSoup(h, 'html.parser')
-                  kicker = (s.select_one('.watch-kicker') or {}).get_text(strip=True) if s.select_one('.watch-kicker') else ''
-                  h1 = (s.select_one('h1.watch-title') or {}).get_text(strip=True) if s.select_one('h1.watch-title') else ''
-                  season_p = (s.select_one('.watch-season') or {}).get_text(strip=True) if s.select_one('.watch-season') else ''
-                  genres = [g.get_text(strip=True) for g in s.select('.watch-genres a, .watch-genres span')]
-                  rel = [(a.get('aria-label') or a.get_text(strip=True), a.get('href')) for a in s.select('.related article.p182-card a[href]')]
-                  rows = s.select('.server-row')
-                  btns = s.select('[data-iframe]')
-                  iframes = [f.get('data-uvpi-src') or f.get('src') for f in s.select('.theater iframe') if (f.get('data-uvpi-src') or f.get('src'))]
-                  srcs = list(iframes)
-                  for b in btns:
-                      m = re.search(r'src=["\x27]([^"\x27]+)', b.get('data-iframe', ''))
-                      if m:
-                          srcs.append(m.group(1))
-                  for src in srcs:
-                      dom = re.sub(r'^https?://([^/]+).*', r'\1', src)
-                      hosts[dom] = hosts.get(dom, 0) + 1
-                      if 'paulinito.com' not in dom:
-                          non_paulinito.append(f"{u} -> {src}")
-                  server_row_variants.append(f"{u} | kicker={kicker} | h1={h1} | season={season_p} | genres={genres} | rows={len(rows)} | btns={len(btns)} | srcs={srcs[:2]} | rel={rel[:4]}")
-              except Exception as e:
-                  server_row_variants.append(f"{u} => ERR {e}")
-          notice("HOSTS_OLD_AND_ANIME", f"hosts={hosts}\nnon_paulinito={non_paulinito}\nDETAILS:\n" + "\n".join(server_row_variants)[:3000])
-          if len("\n".join(server_row_variants)) > 3000:
-              notice("HOSTS_DETAILS_2", "\n".join(server_row_variants)[3000:6500])
-          PY
-
-      - name: Verify live stream (m3u8, ts, srt) and paulinito variants
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import urllib.request, urllib.parse, re, json
 
           def notice(tag, msg):
               s = f"[{tag}] " + msg
@@ -119,82 +39,69 @@ jobs:
               except Exception as e:
                   return getattr(e, 'code', -1), {}, str(e).encode()
 
-          # Test 1: paulinito.com with NO referer vs WITH pelis182.net referer
-          for label, hdr in [
-              ("NO_REF", {}),
-              ("WITH_REF", {"Referer": "https://pelis182.net/"}),
-          ]:
-              st, h, b = fetch_raw("https://paulinito.com/player/f2pHbAiudhy6id3/", hdr)
-              notice(f"PAUL_{label}", f"st={st} len={len(b)} has_sources={'sources:' in b.decode('utf-8','replace')}")
-
-          # Test 2: parse m3u8 + srt from Street Fighter and Blade and Blade Runner 2099
-          for name, emp in [
-              ("SF", "https://paulinito.com/player/f2pHbAiudhy6id3/"),
-              ("BLADE", "https://paulinito.com/player/nIO4xQON108ihR0/"),
-              ("BR2099", "https://paulinito.com/player/9kLWLT8pzTnerzx/"),
-          ]:
+          # 1. Inspect Street Fighter & Blade Runner 2099 sub-playlists and segments WITH paulinito referer
+          for name, emp in [("SF", "https://paulinito.com/player/f2pHbAiudhy6id3/"), ("BR2099", "https://paulinito.com/player/9kLWLT8pzTnerzx/")]:
               _, _, b = fetch_raw(emp, {"Referer": "https://pelis182.net/"})
               html = b.decode('utf-8', 'replace')
-              m_src = re.search(r'sources:\s*(\[[^\]]+\])', html)
-              m_trk = re.search(r'tracks:\s*(\[[^\]]+\])', html)
-              notice(f"PLAYER_CONF_{name}", f"sources={m_src.group(1) if m_src else 'NONE'}\ntracks={m_trk.group(1) if m_trk else 'NONE'}")
+              m_src = re.search(r'"file"\s*:\s*"([^"]+\.m3u8[^"]*)"', html)
               if m_src:
-                  srcs = re.findall(r'"file"\s*:\s*"([^"]+)"', m_src.group(1))
-                  for s_url in srcs[:1]:
-                      for rlabel, rh in [("NO_REF", {}), ("PAUL_REF", {"Referer": "https://paulinito.com/"})]:
-                          st, hdrs, m3u8_b = fetch_raw(s_url, rh)
-                          m3u8_t = m3u8_b.decode('utf-8', 'replace')
-                          notice(f"M3U8_{name}_{rlabel}", f"st={st} ct={hdrs.get('Content-Type','')} len={len(m3u8_b)}\n{m3u8_t[:900]}")
-                          # Check first segment / variant playlist
-                          first_line = next((ln.strip() for ln in m3u8_t.splitlines() if ln.strip() and not ln.strip().startswith('#')), None)
-                          if first_line and rlabel == "NO_REF":
-                              seg_u = urllib.parse.urljoin(s_url, first_line)
-                              st2, h2, b2 = fetch_raw(seg_u, rh)
-                              notice(f"SEG_{name}", f"url={seg_u[:120]} st={st2} ct={h2.get('Content-Type','')} len={len(b2)}")
-              if m_trk:
-                  srts = re.findall(r'"file"\s*:\s*"([^"]+\.(?:srt|vtt)[^"]*)"', m_trk.group(1))
-                  for su in srts[:1]:
-                      if 'thumbnail' not in su:
-                          st, _, sb = fetch_raw(su, {"Referer": "https://paulinito.com/"})
-                          notice(f"SRT_{name}", f"st={st} len={len(sb)} sample={sb.decode('utf-8','replace')[:250]}")
-          PY
+                  master_u = m_src.group(1)
+                  st, h, mb = fetch_raw(master_u, {"Referer": "https://paulinito.com/"})
+                  mt = mb.decode('utf-8', 'replace')
+                  variants = [ln.strip() for ln in mt.splitlines() if ln.strip() and not ln.strip().startswith('#')]
+                  notice(f"MASTER_{name}", f"st={st} variants={variants}")
+                  if variants:
+                      sub_u = urllib.parse.urljoin(master_u, variants[-1])
+                      st2, h2, sb = fetch_raw(sub_u, {"Referer": "https://paulinito.com/"})
+                      st2_no, _, _ = fetch_raw(sub_u, {})
+                      st_t = sb.decode('utf-8', 'replace')
+                      seg_lines = [ln.strip() for ln in st_t.splitlines() if ln.strip() and not ln.strip().startswith('#')]
+                      notice(f"SUBM3U8_{name}", f"url={sub_u[:120]} st_paul={st2} st_no={st2_no}\n" + "\n".join(st_t.splitlines()[:18]))
+                      if seg_lines:
+                          seg_u = urllib.parse.urljoin(sub_u, seg_lines[0])
+                          st3, h3, segb = fetch_raw(seg_u, {"Referer": "https://paulinito.com/"})
+                          st3_no, _, _ = fetch_raw(seg_u, {})
+                          notice(f"SEG_{name}", f"url={seg_u[:140]} st_paul={st3} st_no={st3_no} ct={h3.get('Content-Type','')} len={len(segb)} head_hex={segb[:16].hex()}")
 
-      - name: Export full cropped-p182-192x192.png (part 1 & 2)
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import urllib.request, base64
-          raw = urllib.request.urlopen(urllib.request.Request("https://pelis182.net/wp-content/uploads/2026/08/cropped-p182-192x192.png", headers={"User-Agent": "Mozilla/5.0"}), timeout=15).read()
-          b64 = base64.b64encode(raw).decode()
-          # 75444 chars -> split into 24 chunks across 3 steps (8 each) -> here 8 chunks: 0..7
-          for i in range(8):
-              chunk = b64[i*3300:(i+1)*3300]
-              if chunk:
-                  print(f"::notice::[PNG192_{i:02d}] " + chunk)
-          PY
+          # 2. Check juicycodes.js decoded alphabet
+          _, _, jcb = fetch_raw("https://paulinito.com/templates/jwplayer/assets/juicycodes.js", {"Referer": "https://paulinito.com/"})
+          jcs = jcb.decode('utf-8', 'replace')
+          m_p = re.search(r"return a\}\('(.*)',10,166,'(.*)'\.split\('\|'\),0,\{\}\)\)", jcs, re.S)
+          if m_p:
+              p, k = m_p.group(1), m_p.group(2).split('|')
+              for i in range(len(k)-1, -1, -1):
+                  if k[i]:
+                      p = re.sub(r'\b'+str(i)+r'\b', k[i], p)
+              notice("JC_DECODED", p.encode('utf-8').decode('unicode_escape')[:3500])
 
-      - name: Export full cropped-p182-192x192.png (part 2)
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import urllib.request, base64
-          raw = urllib.request.urlopen(urllib.request.Request("https://pelis182.net/wp-content/uploads/2026/08/cropped-p182-192x192.png", headers={"User-Agent": "Mozilla/5.0"}), timeout=15).read()
-          b64 = base64.b64encode(raw).decode()
-          for i in range(8, 16):
-              chunk = b64[i*3300:(i+1)*3300]
-              if chunk:
-                  print(f"::notice::[PNG192_{i:02d}] " + chunk)
-          PY
+          # 3. Check search results for Black Mirror, The Boys, Blade Runner, and anime page badges
+          for q in ["Black Mirror", "The Boys", "Street Fighter"]:
+              su = "https://pelis182.net/?s=" + urllib.parse.quote_plus(q)
+              st, _, hb = fetch_raw(su)
+              s = BeautifulSoup(hb.decode('utf-8', 'replace'), 'html.parser')
+              cards = [(c.select_one('h3').get_text(strip=True) if c.select_one('h3') else '', (c.select_one('.p182-card__badge') or {}).get_text(strip=True) if c.select_one('.p182-card__badge') else '', c.select_one('a[href]')['href'] if c.select_one('a[href]') else '') for c in s.select('article.p182-card')]
+              notice(f"SEARCH_{q}", f"st={st} count={len(cards)} cards={cards[:15]}")
 
-      - name: Export full cropped-p182-192x192.png (part 3)
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import urllib.request, base64
-          raw = urllib.request.urlopen(urllib.request.Request("https://pelis182.net/wp-content/uploads/2026/08/cropped-p182-192x192.png", headers={"User-Agent": "Mozilla/5.0"}), timeout=15).read()
-          b64 = base64.b64encode(raw).decode()
-          for i in range(16, 28):
-              chunk = b64[i*3300:(i+1)*3300]
-              if chunk:
-                  print(f"::notice::[PNG192_{i:02d}] " + chunk)
+          # 4. Inspect hero section, anime cards, and detail facts/cast/json-ld on Street Fighter & Blade Runner 2099 & Black Mirror T7
+          _, _, hb_home = fetch_raw("https://pelis182.net/")
+          sh = BeautifulSoup(hb_home.decode('utf-8', 'replace'), 'html.parser')
+          hero = sh.select('.p182-stage [data-hero-slide], .p182-stage a[href]')
+          notice("HERO_HTML", "\n".join(str(x)[:350] for x in hero[:6]))
+
+          _, _, hb_an = fetch_raw("https://pelis182.net/category/anime/")
+          sa = BeautifulSoup(hb_an.decode('utf-8', 'replace'), 'html.parser')
+          an_cards = [(c.select_one('h3').get_text(strip=True) if c.select_one('h3') else '', (c.select_one('.p182-card__badge') or {}).get_text(strip=True) if c.select_one('.p182-card__badge') else '', [sp.get_text(strip=True) for sp in c.select('.p182-card__meta span')]) for c in sa.select('article.p182-card')]
+          notice("ANIME_CARDS", f"count={len(an_cards)} cards={an_cards[:15]}")
+
+          for du in ["https://pelis182.net/street-fighter/", "https://pelis182.net/black-mirror-temporada-7/", "https://pelis182.net/el-ultimo-gran-golpe/"]:
+              _, _, db = fetch_raw(du)
+              sd = BeautifulSoup(db.decode('utf-8', 'replace'), 'html.parser')
+              watch = sd.select_one('article.watch-page')
+              lds = [sc.get_text(strip=True) for sc in sd.select('script[type="application/ld+json"]')]
+              facts = str(sd.select_one('.entry-facts'))[:600] if sd.select_one('.entry-facts') else ''
+              wmeta = str(sd.select_one('.watch-meta'))[:500] if sd.select_one('.watch-meta') else ''
+              srv_rows = str(sd.select_one('.server-rows') or sd.select_one('.server-row'))[:700] if (sd.select_one('.server-rows') or sd.select_one('.server-row')) else ''
+              trailer_iframes = [f.get('src') or f.get('data-src') for f in sd.select('iframe') if 'youtube' in (f.get('src') or f.get('data-src') or '').lower()]
+              yt_links = [a['href'] for a in sd.select('a[href*="youtu"]')]
+              notice(f"DETAIL_{du.strip('/').split('/')[-1]}", f"wmeta={wmeta}\nfacts={facts}\nsrv_rows={srv_rows}\ntrailers={trailer_iframes + yt_links}\nlds={lds}")
           PY
