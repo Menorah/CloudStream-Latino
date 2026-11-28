@@ -6,122 +6,40 @@ on:
       - arena/**
 
 jobs:
-  casey_altcha_live:
+  hosts_live_check:
     runs-on: ubuntu-latest
     steps:
       - name: Install curl_cffi
         run: python3 -m pip install -q curl_cffi
 
-      - name: Probe caseyseemavoid Altcha challenge & full VOE flow
+      - name: Probe morencius + voe.sx + mirrors
         run: |
           python3 - <<'PY'
-          import re, json, time, hashlib, base64, hmac
+          import re
           from curl_cffi import requests as creq
-
           s = creq.Session(impersonate="chrome131")
-          r = s.get("https://caseyseemavoid.com/e/84emedzn9bzh", headers={"Referer": "https://embed69.org/"}, timeout=15)
-          m_ch = re.search(r'<altcha-widget[^>]+(?:challenge|challengeurl)=["\']([^"\']+)', r.text)
-          m_tok = re.search(r'name=["\']_token["\']\s+value=["\']([^"\']+)', r.text)
-          m_act = re.search(r'action=["\']([^"\']+)', r.text)
-          ch_url = m_ch.group(1) if m_ch else ""
-          ch_res = s.get(ch_url, headers={"Referer": r.url, "Accept": "application/json, */*"}, timeout=15)
-          out = [f"init_status={r.status_code}", f"ch_url={ch_url}", f"ch_status={ch_res.status_code}", f"ch_body={ch_res.text}"]
-
-          try:
-              root = ch_res.json()
-              params = root.get("parameters") or {}
-              if params:
-                  cost = int(params.get("cost", 10000))
-                  key_len = int(params.get("keyLength", 32))
-                  kp = params.get("keyPrefix", "")
-                  nonce = bytes.fromhex(params["nonce"])
-                  salt = bytes.fromhex(params["salt"])
-                  t0 = time.time()
-                  sol = None
-                  for c in range(25000):
-                      dk = hashlib.pbkdf2_hmac("sha256", nonce + c.to_bytes(4, "big"), salt, cost, dklen=key_len).hex()
-                      if dk.startswith(kp):
-                          sol = (c, dk, int((time.time() - t0) * 1000))
-                          break
-                      if time.time() - t0 > 20:
-                          out.append(f"stopped_at_counter={c}")
-                          break
-                  out.append(f"solved={sol is not None} sol={sol}")
-                  if sol:
-                      payload = base64.b64encode(json.dumps({
-                          "challenge": root,
-                          "solution": {"counter": sol[0], "derivedKey": sol[1], "time": max(1, sol[2])}
-                      }).encode()).decode()
-                      pr = s.post(m_act.group(1), headers={"Referer": r.url, "Origin": "https://caseyseemavoid.com"}, data={
-                          "_token": m_tok.group(1),
-                          "access": "0",
-                          "altcha": payload,
-                      }, timeout=15)
-                      out.append(f"post_status={pr.status_code} post_url={pr.url} post_len={len(pr.text)}")
-                      m_json = re.search(r'<script[^>]+application/json[^>]*>(.*?)</script>', pr.text, re.S)
-                      out.append(f"has_app_json={bool(m_json)} snippet={pr.text[:1500]}")
-              else:
-                  # v1 SHA-256
-                  algo = root.get("algorithm", "SHA-256")
-                  chal = root.get("challenge", "")
-                  salt = root.get("salt", "")
-                  t0 = time.time()
-                  sol_n = None
-                  for n in range(int(root.get("maxnumber", 200000)) + 1):
-                      h = hashlib.sha256((salt + str(n)).encode()).hexdigest()
-                      if h == chal:
-                          sol_n = n
-                          break
-                  out.append(f"v1_sol={sol_n} ms={int((time.time()-t0)*1000)}")
-          except Exception as e:
-              out.append(f"err={e}")
-
+          urls = [
+              ("morencius_embed", "https://morencius.com/embed/gd8e0adu6pbg", "https://embed69.org/"),
+              ("morencius_v", "https://morencius.com/v/gd8e0adu6pbg", "https://embed69.org/"),
+              ("callistanise_embed", "https://callistanise.com/embed/gd8e0adu6pbg", "https://embed69.org/"),
+              ("voe_sx", "https://voe.sx/e/84emedzn9bzh", "https://embed69.org/"),
+          ]
+          out = []
+          for name, u, ref in urls:
+              try:
+                  r = s.get(u, headers={"Referer": ref}, timeout=15)
+                  has_eval = "eval(function(p,a,c,k,e,d)" in r.text
+                  has_altcha = "altcha-widget" in r.text
+                  has_appjson = "application/json" in r.text
+                  m_redir = re.findall(r"location\.href\s*=\s*['\"]([^'\"]+)", r.text)
+                  title = re.findall(r"<title[^>]*>(.*?)</title>", r.text, re.S)
+                  out.append(f"[{name}] code={r.status_code} final={r.url} len={len(r.text)} eval={has_eval} altcha={has_altcha} json={has_appjson} redir={m_redir} title={title}")
+                  if name == "morencius_embed":
+                      out.append("MORENCIUS_SNIP:\n" + r.text[:2500])
+              except Exception as e:
+                  out.append(f"[{name}] ERR={e}")
           msg = "\n".join(out)
           for idx in range(0, len(msg), 3400):
               safe = msg[idx:idx+3400].replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-              print(f"::notice title=CASEY_FLOW#{idx//3400 + 1}::{safe}")
-          PY
-
-  zip_check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Try downloading ZIP again and inspect
-        run: |
-          set +e
-          curl -f -L -A "Mozilla/5.0" -o /tmp/site.zip "https://tmpfiles.org/dl/wLAXvg4SCnBj/sololatino.net.zip"
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::notice title=ZIP_ERR::download rc=$rc"
-            exit 0
-          fi
-          unzip -q /tmp/site.zip -d /tmp/site_extract
-          python3 - <<'PY'
-          import os, re
-          root = '/tmp/site_extract'
-          htmls = []
-          for r, _, fs in os.walk(root):
-              for f in fs:
-                  if f.lower().endswith(('.html', '.htm')):
-                      p = os.path.join(r, f)
-                      htmls.append((os.path.getsize(p), os.path.relpath(p, root), p))
-          htmls.sort()
-          def emit(tag, text):
-              if not text: return
-              for idx in range(0, len(text), 3400):
-                  safe = text[idx:idx+3400].replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print(f"::notice title={tag}#{idx//3400+1}::{safe}")
-          emit("HTML_INV", "\n".join(f"{sz:>8} {rel}" for sz, rel, _ in htmls))
-          psh_path = next((p for _, rel, p in htmls if 'tt1190634-5x08' in rel and 'pelisserieshoy' in rel), None)
-          if psh_path:
-              s = open(psh_path, errors='ignore').read()
-              idx = s.find('_noClickTries')
-              if idx >= 0:
-                  emit("PSH_END", s[idx:idx+6800])
-          e69_path = next((p for _, rel, p in htmls if 'tt45368240' in rel and 'embed69' in rel), None)
-          if e69_path:
-              s = open(e69_path, errors='ignore').read()
-              m_dl = re.search(r'dataLink\s*=\s*(\[.*?\]);', s, re.S)
-              m_ch = re.search(r'LINK_CHALLENGE\s*=\s*[\'"]([^\'"]+)', s)
-              m_sa = re.search(r'LINK_SALT\s*=\s*[\'"]([^\'"]+)', s)
-              emit("E69_DATA", f"ch={m_ch and m_ch.group(1)}\nsalt={m_sa and m_sa.group(1)}\ndl={(m_dl and m_dl.group(1))[:3400]}")
+              print(f"::notice title=HOSTS_LIVE#{idx//3400+1}::{safe}")
           PY
