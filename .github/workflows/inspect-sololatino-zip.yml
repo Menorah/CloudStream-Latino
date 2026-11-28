@@ -1,4 +1,4 @@
-name: Inspect SoloLatino Live & Missing ZIP
+name: Inspect SoloLatino Live & Missing ZIP 2
 on:
   push:
     branches: ['arena/**']
@@ -7,21 +7,14 @@ on:
 permissions:
   contents: read
 jobs:
-  zip_missing_slices:
+  zip_details:
     runs-on: ubuntu-latest
     steps:
-      - name: Download ZIP and dump remaining snippets
+      - name: Download ZIP
         shell: bash
         run: |
           python3 - <<'PY'
-          import pathlib, re, urllib.request, zipfile
-
-          def emit(tag, text, max_ann=10, chunk=5500):
-              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
-              for idx, p in enumerate(parts[:max_ann], 1):
-                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
-                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
-
+          import re, urllib.request, zipfile
           req = urllib.request.Request("https://tmpfiles.org/wLAXvg4SCnBj/sololatino.net.zip", headers={"User-Agent": "Mozilla/5.0 Chrome/131.0.0.0"})
           page = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
           m = re.search(r'https?://tmpfiles\.org/dl/[^"\'\s<>]+', page)
@@ -35,164 +28,121 @@ jobs:
                   f.write(buf)
           with zipfile.ZipFile("/tmp/sl.zip") as zf:
               zf.extractall("/tmp/sl_zip")
-
-          root = pathlib.Path("/tmp/sl_zip")
-
-          # 1. PSH boundary snippets (_qc, _qk, scanAndShow, resolveAndPlay body)
-          psh = next(root.rglob("*tt1190634-5x08.html")).read_text(errors="replace")
-          psh = re.sub(r'<style[^>]*class="darkreader[^"]*"[^>]*>[\s\S]*?</style>', '', psh)
-          snippets = []
-          for kw in ("_qc", "async function scanAndShow", "async function resolveAndPlay"):
-              pos = psh.find(kw)
-              snippets.append(f"=== KW {kw} at {pos} ===\n" + (psh[max(0, pos-200):pos+3500] if pos >= 0 else "NOT FOUND"))
-          emit("PSH_MISSING", "\n".join(snippets), max_ann=4)
-
-          # 2. 84emedzn9bzh.html
-          casey = next(root.rglob("*84emedzn9bzh.html")).read_text(errors="replace")
-          casey = re.sub(r'<style[^>]*class="darkreader[^"]*"[^>]*>[\s\S]*?</style>', '', casey)
-          emit("CASEY_84E", casey, max_ann=6)
-
-          # 3. Movie page & Series page player/episode sections + loader.js preview
-          mov = next(root.rglob("*Ver Puedes verlo todo (2026)*.html")).read_text(errors="replace")
-          p1 = mov.find('id="player-section"')
-          emit("MOVIE_PLAYER", mov[max(0, p1-200):p1+8000] if p1 >= 0 else "NO PLAYER", max_ann=3)
-
-          ser = next(root.rglob("*Ver The Boys (2019)*.html")).read_text(errors="replace")
-          s_eps = [m.group(0) for m in re.finditer(r'<a[^>]+href="[^"]*temporada[^"]*"[^>]*>', ser)][:15]
-          s_btns = [m.group(0) for m in re.finditer(r'<button[^>]*data-player-token[^>]*>', ser)][:10]
-          emit("SERIES_MAIN", f"player_idx={ser.find('id=\"player-section\"')}\nep_links={s_eps}\nbtns={s_btns}", max_ann=2)
-
-          ldr = next(root.rglob("*loader.a40897e.js*")).read_text(errors="replace")
-          emit("LOADER_JS", ldr[:4000], max_ann=2)
           PY
 
-  live_site_and_players:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install Playwright & curl_cffi
-        shell: bash
-        run: |
-          pip install -q curl_cffi playwright
-          playwright install chromium
-
-      - name: Probe live sololatino.net + PSH + embed69 via HTTP and Chromium
+      - name: Emit PSH scanAndShow & resolveAndPlay tail
         shell: bash
         run: |
           python3 - <<'PY'
-          import asyncio, hashlib, json, math, re, time, urllib.parse
-          from curl_cffi import requests as creq
-          from playwright.async_api import async_playwright
+          import pathlib, re
+          def emit(tag, text, max_ann=8, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+          root = pathlib.Path("/tmp/sl_zip")
+          psh = next(root.rglob("*tt1190634-5x08.html")).read_text(errors="replace")
+          psh = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', psh)
+          p1 = psh.find("async function resolveAndPlay")
+          p2 = psh.find("var _al=false;")
+          emit("PSH_SCAN_TAIL", psh[p1:p2+500], max_ann=6)
+          PY
 
-          def emit(tag, text, max_ann=10, chunk=5500):
+      - name: Emit Casey & Series & Movie & Loader
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+          def emit(tag, text, max_ann=8, chunk=5500):
+              parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+              for idx, p in enumerate(parts[:max_ann], 1):
+                  safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+                  print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
+          root = pathlib.Path("/tmp/sl_zip")
+          casey = next(root.rglob("*84emedzn9bzh.html")).read_text(errors="replace")
+          casey = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', casey)
+          emit("CASEY_NO_CSS", casey, max_ann=5)
+
+          ser = next(root.rglob("*Ver The Boys (2019)*.html")).read_text(errors="replace")
+          s_eps = [m.group(0) for m in re.finditer(r'<a[^>]+href="[^"]*temporada[^"]*"[^>]*>', ser)][:12]
+          s_btns = [m.group(0) for m in re.finditer(r'<button[^>]*data-player-token[^>]*>', ser)][:10]
+          ep_area_idx = ser.find("data-season-panel")
+          emit("SERIES_HTML", f"player_idx={ser.find('id=\"player-section\"')}\nep_links={s_eps}\nbtns={s_btns}\nseason_panel={ser[max(0, ep_area_idx-300):ep_area_idx+3000]}", max_ann=2)
+
+          ldr = next(root.rglob("*loader.a40897e.js*")).read_text(errors="replace")
+          emit("LOADER_HEAD", ldr[:2500], max_ann=1)
+          PY
+
+  live_embeds_probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install curl_cffi
+        shell: bash
+        run: pip install -q curl_cffi
+
+      - name: Probe live PSH, Embed69, Casey via curl_cffi
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re
+          from curl_cffi import requests as creq
+
+          def emit(tag, text, max_ann=8, chunk=5500):
               parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
               for idx, p in enumerate(parts[:max_ann], 1):
                   safe = p.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
                   print(f"::notice::[{tag}#{idx}/{min(len(parts), max_ann)}/{len(parts)}] {safe}")
 
-          lines = []
-          # 1. Pure HTTP (curl_cffi chrome131 + okhttp-like)
-          for label, impersonate in [("chrome131", "chrome131"), ("plain", None)]:
-              s = creq.Session(impersonate=impersonate) if impersonate else creq.Session()
-              for u in [
-                  "https://sololatino.net/",
-                  "https://sololatino.net/pelicula/puedes-verlo-todo",
-                  "https://sololatino.net/pelicula/street-fighter",
-                  "https://sololatino.net/serie/the-boys-2019",
-                  "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-              ]:
-                  try:
-                      r = s.get(u, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}, timeout=20)
-                      toks = re.findall(r'data-player-token="([^"]+)"', r.text)
-                      csrf = re.findall(r'name="csrf-token"\s+content="([^"]+)"', r.text)
-                      lines.append(f"[{label}] GET {u} -> {r.status_code} server={r.headers.get('server')} cf_mit={r.headers.get('cf-mitigated')} len={len(r.text)} toks={len(toks)} csrf={len(csrf)} title={re.findall(r'<title>(.*?)</title>', r.text[:4000], re.S)}")
-                      if toks and label == "chrome131" and "puedes-verlo-todo" in u:
-                          c2 = s.get("https://sololatino.net/sanctum/csrf-cookie", timeout=15)
-                          lines.append(f"  csrf-cookie -> {c2.status_code} cookies={dict(s.cookies)} date={c2.headers.get('date')}")
-                          xsrf = urllib.parse.unquote(s.cookies.get("XSRF-TOKEN", ""))
-                          tok0 = toks[0]
-                          bucket = str(int(time.time() // 60))
-                          sl_render = hashlib.sha256(f"{tok0}:{bucket}:sololatino_render_shield_2026".encode()).hexdigest()[:16]
-                          hdrs = {
-                              "Content-Type": "application/json",
-                              "Accept": "application/json",
-                              "Origin": "https://sololatino.net",
-                              "Referer": u,
-                              "X-Requested-With": "XMLHttpRequest",
-                              "X-SL-Render": sl_render,
-                          }
-                          if xsrf:
-                              hdrs["X-XSRF-TOKEN"] = xsrf
-                          elif csrf:
-                              hdrs["X-CSRF-TOKEN"] = csrf[0]
-                          for i_tok, tok in enumerate(toks[:3]):
-                              slr = hashlib.sha256(f"{tok}:{bucket}:sololatino_render_shield_2026".encode()).hexdigest()[:16]
-                              hdrs["X-SL-Render"] = slr
-                              pr = s.post("https://sololatino.net/api/player-url", headers=hdrs, json={"t": tok}, timeout=15)
-                              lines.append(f"  POST /api/player-url tok[{i_tok}] -> {pr.status_code} {pr.text[:350]}")
-                              if pr.status_code == 200 and "pelisserieshoy" in pr.text:
-                                  try:
-                                      purl = pr.json().get("url")
-                                      pr_html = s.get(purl, headers={"Referer": "https://sololatino.net/"}, timeout=15)
-                                      lines.append(f"  GET PSH {purl} -> {pr_html.status_code} cf_mit={pr_html.headers.get('cf-mitigated')} len={len(pr_html.text)} has_t={'const _t' in pr_html.text} has_qc={'_qc' in pr_html.text} title={re.findall(r'<title>(.*?)</title>', pr_html.text[:3000], re.S)}")
-                                  except Exception as ex:
-                                      lines.append(f"  GET PSH err={ex}")
-                              elif pr.status_code == 200 and "embed69" in pr.text:
-                                  try:
-                                      eurl = pr.json().get("url")
-                                      er_html = s.get(eurl, headers={"Referer": "https://sololatino.net/"}, timeout=15)
-                                      lines.append(f"  GET E69 {eurl} -> {er_html.status_code} cf_mit={er_html.headers.get('cf-mitigated')} len={len(er_html.text)} has_dataLink={'dataLink' in er_html.text} title={re.findall(r'<title>(.*?)</title>', er_html.text[:3000], re.S)}")
-                                  except Exception as ex:
-                                      lines.append(f"  GET E69 err={ex}")
-                  except Exception as e:
-                      lines.append(f"[{label}] GET {u} -> EXC {e}")
-          emit("LIVE_HTTP", "\n".join(lines), max_ann=10)
-
-          # 2. Playwright Chromium live test (with & without webdriver spoof)
-          async def run_pw(spoof_wd: bool):
-              out = [f"=== PLAYWRIGHT spoof_webdriver={spoof_wd} ==="]
-              async with async_playwright() as p:
-                  args = ["--disable-blink-features=AutomationControlled"] if spoof_wd else []
-                  browser = await p.chromium.launch(headless=True, args=args)
-                  ctx = await browser.new_context(
-                      user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-                  )
-                  if spoof_wd:
-                      await ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-                  page = await ctx.new_page()
-                  events = []
-                  def on_req(req):
-                      if any(k in req.url for k in ("/api/", "sanctum", "pelisserieshoy", "embed69", "s.php", "p.php", "casey")):
-                          events.append(f"REQ {req.method} {req.url[:140]} hdr_sl={req.headers.get('x-sl-render')} ref={req.headers.get('referer')}")
-                  async def on_resp(resp):
-                      if any(k in resp.url for k in ("/api/", "sanctum", "pelisserieshoy.com/f/", "s.php", "embed69.org/f/")):
-                          try:
-                              body = (await resp.text())[:350]
-                          except Exception as ex:
-                              body = f"<err:{ex}>"
-                          events.append(f"RESP {resp.status} {resp.url[:140]} body={body}")
-                  page.on("request", on_req)
-                  page.on("response", on_resp)
-                  for target in [
-                      "https://sololatino.net/pelicula/puedes-verlo-todo",
-                      "https://sololatino.net/serie/the-boys-2019/temporada-5/episodio-8",
-                  ]:
-                      events.append(f"-- NAV {target} --")
+          s = creq.Session(impersonate="chrome131")
+          targets = [
+              ("PSH_MOVIE_NO_ET", "https://player.pelisserieshoy.com/f/tt45368240", "https://sololatino.net/"),
+              ("PSH_MOVIE_WITH_ET", "https://player.pelisserieshoy.com/f/tt45368240?et=v1.1795827577.b90cf4b0e066.00876d05fb420b1e0d10a8d34dc3b3f9", "https://sololatino.net/"),
+              ("PSH_EP_WITH_ET", "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=v1.1795827861.2901faf003fb.c16b0266335d585b68a63f8ddde1e959", "https://sololatino.net/"),
+              ("PSH_EP_NO_REF", "https://player.pelisserieshoy.com/f/tt1190634-5x08?et=v1.1795827861.2901faf003fb.c16b0266335d585b68a63f8ddde1e959", ""),
+              ("E69_MOVIE", "https://embed69.org/f/tt45368240", "https://sololatino.net/"),
+              ("E69_MOVIE_NOREF", "https://embed69.org/f/tt45368240", ""),
+              ("E69_EP", "https://embed69.org/f/tt1190634-5x08", "https://sololatino.net/"),
+              ("CASEY", "https://caseyseemavoid.com/e/84emedzn9bzh", "https://embed69.org/"),
+          ]
+          out = []
+          for name, url, ref in targets:
+              hdrs = {"User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"}
+              if ref:
+                  hdrs["Referer"] = ref
+              try:
+                  r = s.get(url, headers=hdrs, timeout=20)
+                  t_m = re.search(r"const _t\s*=\s*'([^']+)'", r.text)
+                  qc_m = re.search(r'var _qc="([^"]+)"', r.text)
+                  qk_m = re.search(r'var _qk=(\[[^\]]+\])', r.text)
+                  dl_m = re.search(r'dataLink\s*=\s*(\[[\s\S]{0,600})', r.text)
+                  out.append(f"[{name}] status={r.status_code} server={r.headers.get('server')} cf={r.headers.get('cf-mitigated')} len={len(r.text)} final={r.url} _t={t_m.group(1) if t_m else None} _qc={qc_m.group(1) if qc_m else None} has_dl={bool(dl_m)} title={re.findall(r'<title>(.*?)</title>', r.text[:2500], re.S)} snippet={r.text[:250]!r}")
+                  if t_m and qc_m and qk_m:
+                      import json
+                      tok = t_m.group(1)
+                      qc = qc_m.group(1)
+                      qk = json.loads(qk_m.group(1))
+                      qv = qk[1] + qk[3] + qk[0] + qk[2]
+                      # test FNV1a
+                      h = 2166136261
+                      for ch in f"{qv}|clk|{qc}":
+                          h ^= ord(ch)
+                          h = (h * 16777619) & 0xFFFFFFFF
+                      tk = format(h, "x")
+                      ao = "https://sololatino.net"
+                      s.headers.update({"Referer": url, "Origin": "https://player.pelisserieshoy.com"})
+                      r_clk = s.post("https://player.pelisserieshoy.com/s.php", data={"a": "click", "tok": tok, "ts": "1", "rt": qv, "tk": tk, "ao": ao}, timeout=15)
+                      r_1 = s.post("https://player.pelisserieshoy.com/s.php", data={"a": "1", "tok": tok, "rt": qv, "tk": tk, "ao": ao}, timeout=15)
+                      out.append(f"  PSH s.php click -> {r_clk.status_code} {r_clk.text[:200]}")
+                      out.append(f"  PSH s.php a=1 -> {r_1.status_code} {r_1.text[:500]}")
                       try:
-                          await page.goto(target, wait_until="domcontentloaded", timeout=25000)
-                          await page.wait_for_timeout(5000)
-                          title = await page.title()
-                          btns = await page.eval_on_selector_all("[data-player-token]", "els => els.map(e => ({txt: e.textContent.trim(), resolved: e.dataset.resolvedUrl || '', type: e.dataset.resolvedType || ''}))")
-                          events.append(f"DOM title={title!r} btns={json.dumps(btns, ensure_ascii=False)}")
-                      except Exception as ex:
-                          events.append(f"NAV ERR {ex}")
-                  await browser.close()
-              out.extend(events)
-              return "\n".join(out)
-
-          async def main():
-              r1 = await run_pw(False)
-              r2 = await run_pw(True)
-              emit("LIVE_PW", r1 + "\n\n" + r2, max_ann=10)
-
-          asyncio.run(main())
+                          j1 = r_1.json()
+                          if j1.get("s"):
+                              for lbl, srv_u in j1["s"][:3]:
+                                  r_2 = s.post("https://player.pelisserieshoy.com/s.php", data={"a": "2", "v": srv_u, "tok": tok, "rt": qv, "tk": tk, "ao": ao}, timeout=15)
+                                  out.append(f"  PSH a=2 ({lbl}) -> {r_2.status_code} {r_2.text[:350]}")
+                      except Exception as jex:
+                          out.append(f"  PSH j1 err={jex}")
+              except Exception as e:
+                  out.append(f"[{name}] EXC {e}")
+          emit("LIVE_EMBEDS", "\n".join(out), max_ann=8)
           PY
